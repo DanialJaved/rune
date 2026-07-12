@@ -2,6 +2,7 @@
     x:Class="Folio.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Folio.Controls"
     Title="Folio">
 
     <Window.SystemBackdrop>
@@ -44,39 +45,66 @@
 
             <AppBarSeparator />
 
-            <Button x:Name="PrevButton" Click="PrevButton_Click" IsEnabled="False" ToolTipService.ToolTip="Previous page (Page Up)">
-                <FontIcon Glyph="&#xE76B;" FontSize="14" />
-                <Button.KeyboardAccelerators>
-                    <KeyboardAccelerator Key="PageUp" />
-                </Button.KeyboardAccelerators>
+            <Button x:Name="PrevButton" Click="PrevButton_Click" IsEnabled="False" ToolTipService.ToolTip="Previous page">
+                <FontIcon Glyph="&#xE70E;" FontSize="14" />
             </Button>
-            <Button x:Name="NextButton" Click="NextButton_Click" IsEnabled="False" ToolTipService.ToolTip="Next page (Page Down)">
-                <FontIcon Glyph="&#xE76C;" FontSize="14" />
-                <Button.KeyboardAccelerators>
-                    <KeyboardAccelerator Key="PageDown" />
-                </Button.KeyboardAccelerators>
-            </Button>
-            <TextBlock
-                x:Name="PageLabel"
+            <NumberBox
+                x:Name="PageBox"
+                Minimum="1"
+                SpinButtonPlacementMode="Hidden"
+                IsEnabled="False"
+                MinWidth="64"
                 VerticalAlignment="Center"
-                Margin="8,0,0,0"
+                ValueChanged="PageBox_ValueChanged" />
+            <TextBlock
+                x:Name="PageCountLabel"
+                VerticalAlignment="Center"
+                Margin="4,0,0,0"
                 Style="{StaticResource BodyTextBlockStyle}"
                 Opacity="0.7" />
+            <Button x:Name="NextButton" Click="NextButton_Click" IsEnabled="False" ToolTipService.ToolTip="Next page">
+                <FontIcon Glyph="&#xE70D;" FontSize="14" />
+            </Button>
+
+            <AppBarSeparator />
+
+            <Button x:Name="ZoomOutButton" Click="ZoomOutButton_Click" IsEnabled="False" ToolTipService.ToolTip="Zoom out (Ctrl+-)">
+                <FontIcon Glyph="&#xE71F;" FontSize="14" />
+            </Button>
+            <TextBlock
+                x:Name="ZoomLabel"
+                Text="100%"
+                VerticalAlignment="Center"
+                MinWidth="44"
+                TextAlignment="Center"
+                Style="{StaticResource BodyTextBlockStyle}"
+                Opacity="0.7" />
+            <Button x:Name="ZoomInButton" Click="ZoomInButton_Click" IsEnabled="False" ToolTipService.ToolTip="Zoom in (Ctrl++)">
+                <FontIcon Glyph="&#xE8A3;" FontSize="14" />
+            </Button>
+            <ToggleButton x:Name="FitWidthButton" Click="FitWidthButton_Click" IsEnabled="False" ToolTipService.ToolTip="Fit width (Ctrl+2)">
+                <FontIcon Glyph="&#xE9A6;" FontSize="14" />
+            </ToggleButton>
+            <ToggleButton x:Name="FitPageButton" Click="FitPageButton_Click" IsEnabled="False" ToolTipService.ToolTip="Fit page (Ctrl+0)">
+                <FontIcon Glyph="&#xE9A6;" FontSize="14" RenderTransformOrigin="0.5,0.5">
+                    <FontIcon.RenderTransform>
+                        <RotateTransform Angle="90" />
+                    </FontIcon.RenderTransform>
+                </FontIcon>
+            </ToggleButton>
+
+            <AppBarSeparator />
+
+            <Button x:Name="RotateButton" Click="RotateButton_Click" IsEnabled="False" ToolTipService.ToolTip="Rotate (Ctrl+R)">
+                <FontIcon Glyph="&#xE7AD;" FontSize="14" />
+                <Button.KeyboardAccelerators>
+                    <KeyboardAccelerator Modifiers="Control" Key="R" />
+                </Button.KeyboardAccelerators>
+            </Button>
         </StackPanel>
 
         <Grid Grid.Row="2">
-            <ScrollViewer
-                x:Name="ViewerScroll"
-                ZoomMode="Disabled"
-                HorizontalScrollBarVisibility="Auto"
-                VerticalScrollBarVisibility="Auto"
-                HorizontalContentAlignment="Center">
-                <Image
-                    x:Name="PageImage"
-                    Margin="24"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Top" />
-            </ScrollViewer>
+            <controls:PdfViewer x:Name="Viewer" />
 
             <StackPanel
                 x:Name="EmptyState"

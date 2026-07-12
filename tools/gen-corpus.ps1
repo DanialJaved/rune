@@ -1,4 +1,4 @@
-# Generates the minimal test-PDF corpus in tests/corpus/.
+# Generates the test-PDF corpus in tests/corpus/.
 # Run from the repo root:  powershell -File tools\gen-corpus.ps1
 # Hand-assembles PDFs (tracking xref byte offsets) so no PDF library is needed.
 
@@ -9,47 +9,74 @@ New-Item -ItemType Directory -Force $corpusDir | Out-Null
 function New-SimplePdf {
     param(
         [string]$Path,
-        [string[]]$PageTexts   # one entry per page
+        [string[][]]$Pages   # one string[] of text lines per page
     )
 
-    $objects = @()   # object bodies, index = object number - 1
+    $objects = New-Object System.Collections.Generic.List[string]
 
-    $pageCount = $PageTexts.Count
+    $pageCount = $Pages.Count
     # Object numbering: 1=Catalog, 2=Pages, 3=Font, then per page i: (4+2i)=Page, (5+2i)=Contents
     $kids = (0..($pageCount - 1) | ForEach-Object { "$(4 + 2 * $_) 0 R" }) -join ' '
 
-    $objects += "<< /Type /Catalog /Pages 2 0 R >>"
-    $objects += "<< /Type /Pages /Kids [$kids] /Count $pageCount >>"
-    $objects += "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+    $objects.Add("<< /Type /Catalog /Pages 2 0 R >>")
+    $objects.Add("<< /Type /Pages /Kids [$kids] /Count $pageCount >>")
+    $objects.Add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
 
     for ($i = 0; $i -lt $pageCount; $i++) {
         $contentsRef = 5 + 2 * $i
-        $objects += "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents $contentsRef 0 R >>"
-        $text = $PageTexts[$i] -replace '([\\()])', '\$1'
-        $stream = "BT /F1 36 Tf 72 700 Td ($text) Tj ET"
-        $objects += "<< /Length $($stream.Length) >>`nstream`n$stream`nendstream"
+        $objects.Add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents $contentsRef 0 R >>")
+
+        $lines = $Pages[$i] | ForEach-Object {
+            $escaped = $_ -replace '([\\()])', '\$1'
+            "($escaped) Tj T*"
+        }
+        $stream = "BT /F1 24 Tf 72 720 Td 18 TL " + ($lines -join ' ') + " ET"
+        $objects.Add("<< /Length $($stream.Length) >>`nstream`n$stream`nendstream")
     }
 
-    # Assemble with byte-accurate offsets (everything is ASCII).
-    $out = "%PDF-1.4`n"
-    $offsets = @()
+    # Assemble with byte-accurate offsets (everything is ASCII, so string
+    # length == byte length). Parts are joined once at the end — O(n).
+    $parts = New-Object System.Collections.Generic.List[string]
+    $header = "%PDF-1.4`n"
+    $parts.Add($header)
+    $pos = $header.Length
+    $offsets = New-Object System.Collections.Generic.List[int]
+
     for ($n = 0; $n -lt $objects.Count; $n++) {
-        $offsets += $out.Length
-        $out += "$($n + 1) 0 obj`n$($objects[$n])`nendobj`n"
+        $offsets.Add($pos)
+        $obj = "$($n + 1) 0 obj`n$($objects[$n])`nendobj`n"
+        $parts.Add($obj)
+        $pos += $obj.Length
     }
 
-    $xrefPos = $out.Length
-    $out += "xref`n0 $($objects.Count + 1)`n0000000000 65535 f `n"
+    $xref = "xref`n0 $($objects.Count + 1)`n0000000000 65535 f `n"
     foreach ($off in $offsets) {
-        $out += "{0:d10} 00000 n `n" -f $off
+        $xref += "{0:d10} 00000 n `n" -f $off
     }
-    $out += "trailer`n<< /Size $($objects.Count + 1) /Root 1 0 R >>`nstartxref`n$xrefPos`n%%EOF"
+    $parts.Add($xref)
+    $parts.Add("trailer`n<< /Size $($objects.Count + 1) /Root 1 0 R >>`nstartxref`n$pos`n%%EOF")
 
+    $out = $parts -join ''
     [System.IO.File]::WriteAllBytes($Path, [System.Text.Encoding]::ASCII.GetBytes($out))
-    Write-Host "wrote $Path ($($out.Length) bytes, $pageCount pages)"
+    Write-Host "wrote $Path ($([math]::Round($out.Length / 1KB, 1)) KB, $pageCount pages)"
 }
 
-New-SimplePdf -Path (Join-Path $corpusDir 'hello.pdf') -PageTexts @('Hello from Folio!', 'Page two.')
+# Small two-page smoke-test file.
+New-SimplePdf -Path (Join-Path $corpusDir 'hello.pdf') -Pages @(
+    , @('Hello from Folio!')
+    , @('Page two.')
+)
+
+# 1000-page "book" for performance testing (open time, mid-document render,
+# virtualized scrolling). ~20 text lines per page.
+$book = for ($p = 1; $p -le 1000; $p++) {
+    $pageLines = @("Page $p")
+    for ($l = 1; $l -le 20; $l++) {
+        $pageLines += "This is line $l of page $p in the Folio test book, used to benchmark scrolling."
+    }
+    , $pageLines
+}
+New-SimplePdf -Path (Join-Path $corpusDir 'book-1000.pdf') -Pages $book
 
 # A deliberately corrupt file: must make PdfDocument.Open throw, never crash.
 [System.IO.File]::WriteAllBytes((Join-Path $corpusDir 'corrupt.pdf'), [System.Text.Encoding]::ASCII.GetBytes('%PDF-1.4 this is not really a pdf'))
