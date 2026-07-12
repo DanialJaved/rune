@@ -1,0 +1,4 @@
+# PDFs are byte-exact binaries: line-ending conversion corrupts xref offsets.
+*.pdf binary
+*.png binary
+*.ico binary
