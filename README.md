@@ -39,9 +39,9 @@ The output `Folio.exe` is unpackaged and self-contained — just run it.
 
 ## Roadmap
 
-- **M1** — open a PDF, render pages ✅ *(in progress)*
-- **M2** — viewer core: virtualized scroll, zoom, tile rendering, <300 ms cold open
-- **M3** — tabs, thumbnails, outline, links, session restore
+- **M1** — open a PDF, render pages ✅
+- **M2** — viewer core: virtualized scroll, zoom, tile rendering, fast cold open ✅
+- **M3** — tabs, thumbnails, outline, links, session restore *(next)*
 - **M4** — text selection, copy, search
 - **M5** — night mode, command palette (Ctrl+K), keyboard-first UX, printing
 - **M6** — v1 release: MSIX, file association, portable zip
