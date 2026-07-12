@@ -32,12 +32,12 @@ public class PdfDocumentTests
 
         Assert.Equal(612, bmp.Width);
         Assert.Equal(792, bmp.Height);
-        Assert.Equal(bmp.Stride * bmp.Height, bmp.Pixels.Length);
+        Assert.True(bmp.Pixels.Length >= bmp.Stride * bmp.Height); // pooled buffers may be larger
 
         // Count non-white pixels: the "Hello from Folio!" text must have
         // produced some ink, but most of the page must remain white.
         int nonWhite = 0;
-        for (int i = 0; i < bmp.Pixels.Length; i += 4)
+        for (int i = 0; i < bmp.Stride * bmp.Height; i += 4)
         {
             if (bmp.Pixels[i] != 0xFF || bmp.Pixels[i + 1] != 0xFF || bmp.Pixels[i + 2] != 0xFF)
             {

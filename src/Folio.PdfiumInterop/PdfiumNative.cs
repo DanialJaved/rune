@@ -28,11 +28,30 @@ public static class PdfiumNative
 
     public static float GetPageHeight(IntPtr page) => NativeMethods.FPDF_GetPageHeightF(page);
 
+    /// <summary>Page size in points without loading the page. Returns false for a broken page entry.</summary>
+    public static bool TryGetPageSize(IntPtr document, int pageIndex, out float width, out float height)
+    {
+        if (NativeMethods.FPDF_GetPageSizeByIndexF(document, pageIndex, out var size) != 0)
+        {
+            width = size.Width;
+            height = size.Height;
+            return true;
+        }
+        width = 0;
+        height = 0;
+        return false;
+    }
+
     /// <summary>
-    /// Renders a full page into a caller-owned BGRA pixel buffer.
-    /// The buffer must be at least stride * height bytes and pinned for the call.
+    /// Renders a region of a page into a caller-owned BGRA pixel buffer.
+    /// The page is laid out at (fullWidth × fullHeight) pixels after rotation,
+    /// and the (srcX, srcY, width, height) window of that layout is written to
+    /// the buffer — this is how tiles are rendered (negative start offsets).
     /// </summary>
-    public static unsafe void RenderPageToBuffer(IntPtr page, byte[] pixels, int width, int height, int stride)
+    public static unsafe void RenderRegionToBuffer(
+        IntPtr page, byte[] pixels,
+        int srcX, int srcY, int width, int height,
+        int fullWidth, int fullHeight, int rotation, int stride)
     {
         fixed (byte* p = pixels)
         {
@@ -46,7 +65,7 @@ public static class PdfiumNative
             {
                 // Opaque white page background, then the page content on top.
                 NativeMethods.FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
-                NativeMethods.FPDF_RenderPageBitmap(bitmap, page, 0, 0, width, height, rotate: 0, flags: NativeMethods.FPDF_ANNOT);
+                NativeMethods.FPDF_RenderPageBitmap(bitmap, page, -srcX, -srcY, fullWidth, fullHeight, rotation, NativeMethods.FPDF_ANNOT);
             }
             finally
             {

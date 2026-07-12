@@ -21,20 +21,18 @@ public sealed class PdfDocument : IDisposable
         _fileAccess = fileAccess;
         _handle = handle;
 
-        // Cache page sizes up front: cheap (header-only reads) and needed
-        // constantly for layout. Sizes are in PDF points (1/72 inch).
+        // Page sizes come from the page tree without loading pages, so this
+        // stays fast even for multi-thousand-page documents. Sizes are in
+        // PDF points (1/72 inch) and already account for the page's /Rotate.
         PageCount = PdfiumNative.GetPageCount(handle);
         _pageSizes = new (float, float)[PageCount];
         for (int i = 0; i < PageCount; i++)
         {
-            IntPtr page = PdfiumNative.LoadPage(handle, i);
-            if (page == IntPtr.Zero)
+            if (!PdfiumNative.TryGetPageSize(handle, i, out float w, out float h) || w <= 0 || h <= 0)
             {
-                _pageSizes[i] = (612f, 792f); // corrupt page: pretend US Letter, render will show error later
-                continue;
+                (w, h) = (612f, 792f); // broken page entry: pretend US Letter
             }
-            _pageSizes[i] = (PdfiumNative.GetPageWidth(page), PdfiumNative.GetPageHeight(page));
-            PdfiumNative.ClosePage(page);
+            _pageSizes[i] = (w, h);
         }
     }
 
@@ -66,21 +64,44 @@ public sealed class PdfDocument : IDisposable
     }
 
     /// <summary>
-    /// Renders a page at the given scale (pixels per PDF point; 1.0 ≈ 72 DPI).
-    /// Safe to call from any thread.
+    /// Full page pixel dimensions at a scale (pixels per point), after view rotation.
     /// </summary>
-    public PageBitmap RenderPage(int pageIndex, float scale)
+    public (int Width, int Height) GetPagePixelSize(int pageIndex, float scale, int rotation)
+    {
+        var (ptWidth, ptHeight) = GetPageSize(pageIndex);
+        if (rotation % 2 == 1)
+        {
+            (ptWidth, ptHeight) = (ptHeight, ptWidth);
+        }
+        return (Math.Max(1, (int)MathF.Round(ptWidth * scale)),
+                Math.Max(1, (int)MathF.Round(ptHeight * scale)));
+    }
+
+    /// <summary>Renders a whole page. Convenience over <see cref="RenderRegion"/>.</summary>
+    public PageBitmap RenderPage(int pageIndex, float scale, int rotation = 0)
+    {
+        var (width, height) = GetPagePixelSize(pageIndex, scale, rotation);
+        return RenderRegion(pageIndex, scale, rotation, 0, 0, width, height);
+    }
+
+    /// <summary>
+    /// Renders the (srcX, srcY, width, height) pixel window of a page laid out
+    /// at <paramref name="scale"/> pixels per point with a view rotation
+    /// (0–3 quarter turns clockwise). Safe to call from any thread.
+    /// </summary>
+    public PageBitmap RenderRegion(int pageIndex, float scale, int rotation, int srcX, int srcY, int width, int height)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(scale);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
 
-        var (ptWidth, ptHeight) = _pageSizes[pageIndex];
-        int width = Math.Max(1, (int)MathF.Round(ptWidth * scale));
-        int height = Math.Max(1, (int)MathF.Round(ptHeight * scale));
+        var (fullWidth, fullHeight) = GetPagePixelSize(pageIndex, scale, rotation);
         int stride = width * 4;
-
-        var pixels = new byte[stride * height];
+        // Rented, not allocated: tile renders happen dozens of times per second
+        // while scrolling, and multi-MB garbage arrays would thrash the GC.
+        var pixels = System.Buffers.ArrayPool<byte>.Shared.Rent(stride * height);
 
         lock (PdfiumLibrary.Lock)
         {
@@ -94,7 +115,7 @@ public sealed class PdfDocument : IDisposable
 
             try
             {
-                PdfiumNative.RenderPageToBuffer(page, pixels, width, height, stride);
+                PdfiumNative.RenderRegionToBuffer(page, pixels, srcX, srcY, width, height, fullWidth, fullHeight, rotation % 4, stride);
             }
             finally
             {

@@ -1,16 +1,18 @@
-using System.Runtime.InteropServices.WindowsRuntime;
+using Folio.Controls;
 using Folio.Engine;
 using Folio.PdfiumInterop;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Media.Imaging;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Windows.Storage.Pickers;
+using Windows.System;
 
 namespace Folio;
 
 public sealed partial class MainWindow : Window
 {
     private PdfDocument? _document;
-    private int _pageIndex;
+    private bool _suppressPageBox;
 
     public MainWindow()
     {
@@ -19,7 +21,46 @@ public sealed partial class MainWindow : Window
         // Draw our own title bar so the window chrome matches the app (Preview/Papers style).
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
+
+        Viewer.CurrentPageChanged += Viewer_CurrentPageChanged;
+        Viewer.ZoomChanged += Viewer_ZoomChanged;
+        Closed += (_, _) =>
+        {
+            Viewer.SetDocument(null);
+            _document?.Dispose();
+        };
+
+        RegisterZoomAccelerators();
     }
+
+    private void RegisterZoomAccelerators()
+    {
+        // Keys with no clean XAML name: +/- (both main row and numpad),
+        // and the Ctrl+0/1/2 view presets (Sumatra's shortcuts).
+        AddAccelerator(VirtualKey.Add, () => Viewer.ZoomIn());
+        AddAccelerator((VirtualKey)0xBB /* OemPlus */, () => Viewer.ZoomIn());
+        AddAccelerator(VirtualKey.Subtract, () => Viewer.ZoomOut());
+        AddAccelerator((VirtualKey)0xBD /* OemMinus */, () => Viewer.ZoomOut());
+        AddAccelerator(VirtualKey.Number0, () => SetFitMode(FitMode.FitPage));
+        AddAccelerator(VirtualKey.Number1, () => Viewer.SetZoom(1.0));
+        AddAccelerator(VirtualKey.Number2, () => SetFitMode(FitMode.FitWidth));
+    }
+
+    private void AddAccelerator(VirtualKey key, Action action)
+    {
+        var accelerator = new KeyboardAccelerator { Key = key, Modifiers = VirtualKeyModifiers.Control };
+        accelerator.Invoked += (_, e) =>
+        {
+            if (_document is not null)
+            {
+                action();
+                e.Handled = true;
+            }
+        };
+        ((UIElement)Content).KeyboardAccelerators.Add(accelerator);
+    }
+
+    // ---------------------------------------------------------------- commands
 
     private async void OpenButton_Click(object sender, RoutedEventArgs e)
     {
@@ -37,25 +78,54 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void PrevButton_Click(object sender, RoutedEventArgs e)
+    private void PrevButton_Click(object sender, RoutedEventArgs e) => Viewer.GoToPage(Viewer.CurrentPage - 1);
+    private void NextButton_Click(object sender, RoutedEventArgs e) => Viewer.GoToPage(Viewer.CurrentPage + 1);
+    private void ZoomInButton_Click(object sender, RoutedEventArgs e) => Viewer.ZoomIn();
+    private void ZoomOutButton_Click(object sender, RoutedEventArgs e) => Viewer.ZoomOut();
+    private void RotateButton_Click(object sender, RoutedEventArgs e) => Viewer.RotateClockwise();
+    private void FitWidthButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitWidth);
+    private void FitPageButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitPage);
+
+    private void SetFitMode(FitMode mode)
     {
-        if (_document is not null && _pageIndex > 0)
+        Viewer.FitMode = mode;
+        UpdateFitToggles();
+    }
+
+    private void UpdateFitToggles()
+    {
+        FitWidthButton.IsChecked = Viewer.FitMode == FitMode.FitWidth;
+        FitPageButton.IsChecked = Viewer.FitMode == FitMode.FitPage;
+    }
+
+    private void PageBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (!_suppressPageBox && _document is not null && !double.IsNaN(args.NewValue))
         {
-            _pageIndex--;
-            await RenderCurrentPageAsync();
+            Viewer.GoToPage((int)args.NewValue - 1);
         }
     }
 
-    private async void NextButton_Click(object sender, RoutedEventArgs e)
+    // ---------------------------------------------------------------- viewer events
+
+    private void Viewer_CurrentPageChanged(object? sender, int pageIndex)
     {
-        if (_document is not null && _pageIndex < _document.PageCount - 1)
-        {
-            _pageIndex++;
-            await RenderCurrentPageAsync();
-        }
+        _suppressPageBox = true;
+        PageBox.Value = pageIndex + 1;
+        _suppressPageBox = false;
+        PrevButton.IsEnabled = _document is not null && pageIndex > 0;
+        NextButton.IsEnabled = _document is not null && pageIndex < Viewer.PageCount - 1;
     }
 
-    internal async Task LoadDocumentAsync(string path)
+    private void Viewer_ZoomChanged(object? sender, double zoom)
+    {
+        ZoomLabel.Text = $"{Math.Round(zoom * 100)}%";
+        UpdateFitToggles();
+    }
+
+    // ---------------------------------------------------------------- loading
+
+    internal async Task LoadDocumentAsync(string path, int? initialPage = null, double? initialZoom = null)
     {
         try
         {
@@ -63,7 +133,6 @@ public sealed partial class MainWindow : Window
 
             _document?.Dispose();
             _document = newDocument;
-            _pageIndex = 0;
 
             string name = System.IO.Path.GetFileName(path);
             Title = $"{name} — Folio";
@@ -71,54 +140,32 @@ public sealed partial class MainWindow : Window
             EmptyState.Visibility = Visibility.Collapsed;
             ErrorBar.IsOpen = false;
 
-            await RenderCurrentPageAsync();
+            Viewer.SetDocument(newDocument);
+
+            _suppressPageBox = true;
+            PageBox.Maximum = newDocument.PageCount;
+            PageBox.Value = 1;
+            _suppressPageBox = false;
+            PageCountLabel.Text = $"of {newDocument.PageCount}";
+
+            foreach (var control in new Control[] { PageBox, ZoomInButton, ZoomOutButton, FitWidthButton, FitPageButton, RotateButton })
+            {
+                control.IsEnabled = true;
+            }
+            NextButton.IsEnabled = newDocument.PageCount > 1;
+            UpdateFitToggles();
+            ZoomLabel.Text = $"{Math.Round(Viewer.Zoom * 100)}%";
+
+            if (initialZoom is double zoom)
+            {
+                Viewer.SetZoom(zoom);
+            }
+            if (initialPage is int page)
+            {
+                Viewer.GoToPage(page - 1);
+            }
         }
         catch (Exception ex) when (ex is PdfiumException or IOException)
-        {
-            ShowError(ex.Message);
-        }
-    }
-
-    private async Task RenderCurrentPageAsync()
-    {
-        if (_document is not PdfDocument document)
-        {
-            return;
-        }
-
-        int pageIndex = _pageIndex;
-        var (pointWidth, _) = document.GetPageSize(pageIndex);
-
-        // Fit the page to the viewport width, and render at the monitor's
-        // physical pixel density so text is crisp on scaled displays.
-        double viewportWidth = ViewerScroll.ActualWidth;
-        if (viewportWidth < 100)
-        {
-            viewportWidth = 800;
-        }
-        double xamlScale = (viewportWidth - 48) / pointWidth;
-        double rasterizationScale = Content.XamlRoot?.RasterizationScale ?? 1.0;
-
-        try
-        {
-            var page = await Task.Run(() => document.RenderPage(pageIndex, (float)(xamlScale * rasterizationScale)));
-
-            var bitmap = new WriteableBitmap(page.Width, page.Height);
-            using (var stream = bitmap.PixelBuffer.AsStream())
-            {
-                stream.Write(page.Pixels, 0, page.Pixels.Length);
-            }
-            bitmap.Invalidate();
-
-            PageImage.Source = bitmap;
-            PageImage.Width = page.Width / rasterizationScale;
-            PageImage.Height = page.Height / rasterizationScale;
-
-            PageLabel.Text = $"Page {pageIndex + 1} of {document.PageCount}";
-            PrevButton.IsEnabled = pageIndex > 0;
-            NextButton.IsEnabled = pageIndex < document.PageCount - 1;
-        }
-        catch (Exception ex) when (ex is PdfiumException or ObjectDisposedException)
         {
             ShowError(ex.Message);
         }

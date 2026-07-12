@@ -47,6 +47,17 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern float FPDF_GetPageHeightF(IntPtr page);
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FS_SIZEF
+    {
+        public float Width;
+        public float Height;
+    }
+
+    /// <summary>Reads a page's size from the page tree WITHOUT loading the page — much cheaper than FPDF_LoadPage.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_GetPageSizeByIndexF(IntPtr document, int pageIndex, out FS_SIZEF size);
+
     // ---- Bitmap / rendering ----
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
