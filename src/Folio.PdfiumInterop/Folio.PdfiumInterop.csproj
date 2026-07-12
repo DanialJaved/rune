@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Prebuilt pdfium.dll (x64/x86/arm64) from https://github.com/bblanchon/pdfium-binaries -->
+    <PackageReference Include="bblanchon.PDFium.Win32" Version="152.0.7934" />
+  </ItemGroup>
+
+</Project>

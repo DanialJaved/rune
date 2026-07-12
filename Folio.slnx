@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Folio.App/Folio.App.csproj" />
+    <Project Path="src/Folio.Engine/Folio.Engine.csproj" />
+    <Project Path="src/Folio.PdfiumInterop/Folio.PdfiumInterop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Folio.Tests/Folio.Tests.csproj" />
+  </Folder>
+</Solution>
