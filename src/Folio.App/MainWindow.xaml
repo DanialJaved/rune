@@ -12,12 +12,15 @@
         <Grid.RowDefinitions>
             <!-- Custom title bar -->
             <RowDefinition Height="36" />
+            <!-- Toolbar -->
+            <RowDefinition Height="Auto" />
             <!-- Content -->
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
         <Grid x:Name="AppTitleBar" Grid.Row="0">
             <TextBlock
+                x:Name="TitleText"
                 Text="Folio"
                 VerticalAlignment="Center"
                 Margin="16,0,0,0"
@@ -26,18 +29,83 @@
 
         <StackPanel
             Grid.Row="1"
-            VerticalAlignment="Center"
-            HorizontalAlignment="Center"
-            Spacing="8">
+            Orientation="Horizontal"
+            Spacing="4"
+            Padding="12,4">
+            <Button x:Name="OpenButton" Click="OpenButton_Click" ToolTipService.ToolTip="Open a PDF (Ctrl+O)">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <FontIcon Glyph="&#xE8E5;" FontSize="14" />
+                    <TextBlock Text="Open" />
+                </StackPanel>
+                <Button.KeyboardAccelerators>
+                    <KeyboardAccelerator Modifiers="Control" Key="O" />
+                </Button.KeyboardAccelerators>
+            </Button>
+
+            <AppBarSeparator />
+
+            <Button x:Name="PrevButton" Click="PrevButton_Click" IsEnabled="False" ToolTipService.ToolTip="Previous page (Page Up)">
+                <FontIcon Glyph="&#xE76B;" FontSize="14" />
+                <Button.KeyboardAccelerators>
+                    <KeyboardAccelerator Key="PageUp" />
+                </Button.KeyboardAccelerators>
+            </Button>
+            <Button x:Name="NextButton" Click="NextButton_Click" IsEnabled="False" ToolTipService.ToolTip="Next page (Page Down)">
+                <FontIcon Glyph="&#xE76C;" FontSize="14" />
+                <Button.KeyboardAccelerators>
+                    <KeyboardAccelerator Key="PageDown" />
+                </Button.KeyboardAccelerators>
+            </Button>
             <TextBlock
-                Text="Folio"
-                HorizontalAlignment="Center"
-                Style="{StaticResource TitleLargeTextBlockStyle}" />
-            <TextBlock
-                Text="A fast, free PDF reader for Windows"
-                HorizontalAlignment="Center"
+                x:Name="PageLabel"
+                VerticalAlignment="Center"
+                Margin="8,0,0,0"
                 Style="{StaticResource BodyTextBlockStyle}"
                 Opacity="0.7" />
         </StackPanel>
+
+        <Grid Grid.Row="2">
+            <ScrollViewer
+                x:Name="ViewerScroll"
+                ZoomMode="Disabled"
+                HorizontalScrollBarVisibility="Auto"
+                VerticalScrollBarVisibility="Auto"
+                HorizontalContentAlignment="Center">
+                <Image
+                    x:Name="PageImage"
+                    Margin="24"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top" />
+            </ScrollViewer>
+
+            <StackPanel
+                x:Name="EmptyState"
+                VerticalAlignment="Center"
+                HorizontalAlignment="Center"
+                Spacing="8">
+                <TextBlock
+                    Text="Folio"
+                    HorizontalAlignment="Center"
+                    Style="{StaticResource TitleLargeTextBlockStyle}" />
+                <TextBlock
+                    Text="A fast, free PDF reader for Windows"
+                    HorizontalAlignment="Center"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Opacity="0.7" />
+                <TextBlock
+                    Text="Press Ctrl+O to open a PDF"
+                    HorizontalAlignment="Center"
+                    Style="{StaticResource CaptionTextBlockStyle}"
+                    Opacity="0.5"
+                    Margin="0,8,0,0" />
+            </StackPanel>
+
+            <InfoBar
+                x:Name="ErrorBar"
+                Severity="Error"
+                VerticalAlignment="Bottom"
+                Margin="24"
+                IsOpen="False" />
+        </Grid>
     </Grid>
 </Window>

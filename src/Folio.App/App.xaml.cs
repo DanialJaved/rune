@@ -11,9 +11,18 @@ public partial class App : Application
         InitializeComponent();
     }
 
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        MainWindow = new MainWindow();
-        MainWindow.Activate();
+        var window = new MainWindow();
+        MainWindow = window;
+        window.Activate();
+
+        // Support "Folio.exe <file.pdf>" — how Explorer launches the default
+        // handler once file association lands (M6).
+        string[] commandLine = Environment.GetCommandLineArgs();
+        if (commandLine.Length > 1 && File.Exists(commandLine[1]))
+        {
+            await window.LoadDocumentAsync(commandLine[1]);
+        }
     }
 }
