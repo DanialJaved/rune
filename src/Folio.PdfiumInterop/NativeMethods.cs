@@ -72,7 +72,79 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFBitmap_Destroy(IntPtr bitmap);
 
+    // ---- Outline / bookmarks (fpdf_doc.h) ----
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFBookmark_GetFirstChild(IntPtr document, IntPtr bookmark);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFBookmark_GetNextSibling(IntPtr document, IntPtr bookmark);
+
+    /// <summary>Writes the title as UTF-16LE (incl. terminator) into buffer; returns byte length needed.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFBookmark_GetTitle(IntPtr bookmark, byte[]? buffer, uint buflen);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFBookmark_GetDest(IntPtr document, IntPtr bookmark);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFBookmark_GetAction(IntPtr bookmark);
+
+    // ---- Actions & destinations ----
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAction_GetType(IntPtr action);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFAction_GetDest(IntPtr document, IntPtr action);
+
+    /// <summary>Writes the URI as ASCII (incl. terminator) into buffer; returns byte length needed.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAction_GetURIPath(IntPtr document, IntPtr action, byte[]? buffer, uint buflength);
+
+    /// <summary>Zero-based target page of a destination, or -1.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFDest_GetDestPageIndex(IntPtr document, IntPtr dest);
+
+    // ---- Links on a page (fpdf_doc.h) ----
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FS_RECTF
+    {
+        public float Left;
+        public float Top;
+        public float Right;
+        public float Bottom;
+    }
+
+    /// <summary>Iterates link annotations. Pass startPos=0 initially; it is advanced each call.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFLink_Enumerate(IntPtr page, ref int startPos, out IntPtr linkAnnot);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFLink_GetAnnotRect(IntPtr linkAnnot, out FS_RECTF rect);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFLink_GetDest(IntPtr document, IntPtr link);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFLink_GetAction(IntPtr link);
+
+    /// <summary>Maps a page-space point to device (bitmap) pixels, honoring rotation.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_PageToDevice(
+        IntPtr page, int startX, int startY, int sizeX, int sizeY, int rotate,
+        double pageX, double pageY, out int deviceX, out int deviceY);
+
     // ---- Constants ----
+
+    // Action types (FPDFAction_GetType)
+    internal const uint PDFACTION_UNSUPPORTED = 0;
+    internal const uint PDFACTION_GOTO = 1;
+    internal const uint PDFACTION_REMOTEGOTO = 2;
+    internal const uint PDFACTION_URI = 3;
+    internal const uint PDFACTION_LAUNCH = 4;
+
 
     internal const int FPDFBitmap_BGRA = 4;
 

@@ -59,12 +59,34 @@ public sealed partial class PdfViewer : UserControl
     private FitMode _fitMode = FitMode.FitWidth;
     private int _currentPage;
 
+    // Link hit-testing: per-page links, extracted lazily off the UI thread.
+    private readonly Dictionary<int, IReadOnlyList<PdfLink>> _links = [];
+    private readonly HashSet<int> _linksRequested = [];
+    private bool _pointerOverLink;
+
+    // Back/forward: vertical offsets we jumped away from (outline/link/page jumps).
+    private readonly Stack<double> _back = new();
+    private readonly Stack<double> _forward = new();
+
     public event EventHandler<int>? CurrentPageChanged;
     public event EventHandler<double>? ZoomChanged;
+    public event EventHandler? HistoryChanged;
+
+    /// <summary>Raised when the user clicks an external (URI) link. The shell decides whether to open it.</summary>
+    public event EventHandler<string>? LinkActivated;
 
     public int CurrentPage => _currentPage;
     public double Zoom => _zoom;
+    public int Rotation => _rotation;
     public int PageCount => _document?.PageCount ?? 0;
+    public PdfDocument? Document => _document;
+
+    public bool CanGoBack => _back.Count > 0;
+    public bool CanGoForward => _forward.Count > 0;
+
+    /// <summary>Current scroll position as a 0–1 fraction of total document height (for session restore).</summary>
+    public double ScrollFraction =>
+        _layout is { TotalHeight: > 0 } ? Scroller.VerticalOffset / _layout.TotalHeight : 0;
 
     public FitMode FitMode
     {
@@ -84,6 +106,9 @@ public sealed partial class PdfViewer : UserControl
 
         // Catch Ctrl+wheel even after the ScrollViewer has marked it handled.
         AddHandler(PointerWheelChangedEvent, new PointerEventHandler(OnPointerWheelChanged), handledEventsToo: true);
+        Canvas.PointerMoved += Canvas_PointerMoved;
+        Canvas.PointerPressed += Canvas_PointerPressed;
+        Canvas.PointerExited += (_, _) => SetLinkCursor(false);
         ActualThemeChanged += (_, _) => Canvas.Invalidate();
         Unloaded += (_, _) => _scheduler.Dispose();
     }
@@ -104,6 +129,11 @@ public sealed partial class PdfViewer : UserControl
         _currentPage = 0;
         _fitMode = FitMode.FitWidth;
 
+        _back.Clear();
+        _forward.Clear();
+        _links.Clear();
+        _linksRequested.Clear();
+
         _scheduler.SetDocument(document);
         ClearCaches();
         ApplyFitMode();
@@ -111,6 +141,19 @@ public sealed partial class PdfViewer : UserControl
         Canvas.Invalidate();
         UpdateDesiredTiles();
         CurrentPageChanged?.Invoke(this, 0);
+        HistoryChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Restores a saved reading position after the layout is ready.</summary>
+    public void RestoreView(double zoom, int rotation, double scrollFraction)
+    {
+        _rotation = ((rotation % 4) + 4) % 4;
+        _fitMode = FitMode.None;
+        SetZoom(zoom <= 0 ? 1.0 : zoom);
+        if (_layout is not null)
+        {
+            Scroller.ChangeView(null, scrollFraction * _layout.TotalHeight, null, disableAnimation: true);
+        }
     }
 
     private void ClearCaches()
@@ -218,15 +261,49 @@ public sealed partial class PdfViewer : UserControl
 
     // ---------------------------------------------------------------- navigation
 
-    public void GoToPage(int pageIndex)
+    /// <summary>Scrolls to a page. Prev/next paging passes recordHistory:false; jumps pass true.</summary>
+    public void GoToPage(int pageIndex, bool recordHistory = false)
     {
         if (_layout is null || _document is null)
         {
             return;
         }
+        if (recordHistory)
+        {
+            PushHistory();
+        }
         pageIndex = Math.Clamp(pageIndex, 0, _document.PageCount - 1);
         var rect = _layout.GetPageRect(pageIndex);
         Scroller.ChangeView(null, Math.Max(0, rect.Y - PageLayout.PageGap / 2), null, disableAnimation: true);
+    }
+
+    private void PushHistory()
+    {
+        _back.Push(Scroller.VerticalOffset);
+        _forward.Clear();
+        HistoryChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void GoBack()
+    {
+        if (_back.Count == 0)
+        {
+            return;
+        }
+        _forward.Push(Scroller.VerticalOffset);
+        Scroller.ChangeView(null, _back.Pop(), null, disableAnimation: true);
+        HistoryChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void GoForward()
+    {
+        if (_forward.Count == 0)
+        {
+            return;
+        }
+        _back.Push(Scroller.VerticalOffset);
+        Scroller.ChangeView(null, _forward.Pop(), null, disableAnimation: true);
+        HistoryChanged?.Invoke(this, EventArgs.Empty);
     }
 
     // ---------------------------------------------------------------- layout
@@ -292,6 +369,111 @@ public sealed partial class PdfViewer : UserControl
         double factor = Math.Pow(1.1, delta / 120.0);
         SetZoom(_zoom * factor, e.GetCurrentPoint(Scroller).Position);
         e.Handled = true;
+    }
+
+    private void Canvas_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        var doc = DocumentPointFromPointer(e);
+        SetLinkCursor(HitTestLink(doc) is not null);
+    }
+
+    private void Canvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(Canvas).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        var link = HitTestLink(DocumentPointFromPointer(e));
+        if (link is null)
+        {
+            return;
+        }
+
+        if (link.IsInternal)
+        {
+            GoToPage(link.TargetPageIndex, recordHistory: true);
+        }
+        else if (link.Uri is { } uri)
+        {
+            LinkActivated?.Invoke(this, uri);
+        }
+        e.Handled = true;
+    }
+
+    /// <summary>Pointer position translated into document (layout) space, in DIPs.</summary>
+    private Point DocumentPointFromPointer(PointerRoutedEventArgs e)
+    {
+        var p = e.GetCurrentPoint(Canvas).Position;
+        return new Point(p.X, p.Y);
+    }
+
+    private PdfLink? HitTestLink(Point documentPoint)
+    {
+        if (_layout is null || _document is null || _rotation != 0)
+        {
+            return null; // link geometry is only tracked for the unrotated view
+        }
+
+        int page = _layout.PageAt(documentPoint.Y);
+        EnsureLinks(page);
+        if (!_links.TryGetValue(page, out var links) || links.Count == 0)
+        {
+            return null;
+        }
+
+        var rect = _layout.GetPageRect(page);
+        // Document point → page-local points (undo centering offset and zoom).
+        double localX = (documentPoint.X - rect.X) / _zoom;
+        double localY = (documentPoint.Y - rect.Y) / _zoom;
+        foreach (var link in links)
+        {
+            if (localX >= link.X && localX <= link.X + link.Width &&
+                localY >= link.Y && localY <= link.Y + link.Height)
+            {
+                return link;
+            }
+        }
+        return null;
+    }
+
+    private void EnsureLinks(int pageIndex)
+    {
+        if (_document is null || !_linksRequested.Add(pageIndex))
+        {
+            return;
+        }
+        var document = _document;
+        Task.Run(() =>
+        {
+            try
+            {
+                var links = document.GetLinks(pageIndex);
+                _dispatcher.TryEnqueue(() =>
+                {
+                    if (_document == document)
+                    {
+                        _links[pageIndex] = links;
+                    }
+                });
+            }
+            catch
+            {
+                // Link extraction is best-effort; ignore failures.
+            }
+        });
+    }
+
+    private void SetLinkCursor(bool overLink)
+    {
+        if (overLink == _pointerOverLink)
+        {
+            return;
+        }
+        _pointerOverLink = overLink;
+        ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(
+            overLink ? Microsoft.UI.Input.InputSystemCursorShape.Hand
+                     : Microsoft.UI.Input.InputSystemCursorShape.Arrow);
     }
 
     // ---------------------------------------------------------------- drawing
