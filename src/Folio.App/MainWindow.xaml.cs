@@ -463,12 +463,13 @@ public sealed partial class MainWindow : Window
             return;
         }
         FindBar.Visibility = Visibility.Visible;
-        FindBox.Focus(FocusState.Programmatic);
-        FindBox.SelectAll();
+        // Prefill from the selection BEFORE SelectAll, so typing replaces it.
         if (_activeViewer?.HasSelection == true)
         {
             FindBox.Text = _activeViewer.SelectedText.Split('\n')[0].Trim();
         }
+        FindBox.Focus(FocusState.Programmatic);
+        FindBox.SelectAll();
         if (!string.IsNullOrEmpty(FindBox.Text))
         {
             RunSearch();
