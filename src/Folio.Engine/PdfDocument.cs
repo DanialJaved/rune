@@ -126,6 +126,145 @@ public sealed class PdfDocument : IDisposable
         return new PageBitmap(pixels, width, height, stride);
     }
 
+    /// <summary>
+    /// The document's table of contents, or an empty list if it has none.
+    /// Guards against the cyclic/oversized bookmark trees malformed PDFs carry.
+    /// </summary>
+    public IReadOnlyList<OutlineItem> GetOutline()
+    {
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            var visited = new HashSet<IntPtr>();
+            int budget = 5000; // cap total nodes so a malicious file can't hang us
+            return ReadSiblings(PdfiumNative.BookmarkGetFirstChild(_handle, IntPtr.Zero), visited, ref budget);
+        }
+    }
+
+    private List<OutlineItem> ReadSiblings(IntPtr bookmark, HashSet<IntPtr> visited, ref int budget)
+    {
+        var items = new List<OutlineItem>();
+        while (bookmark != IntPtr.Zero && budget > 0)
+        {
+            if (!visited.Add(bookmark))
+            {
+                break; // cycle
+            }
+            budget--;
+
+            string title = PdfiumNative.BookmarkGetTitle(bookmark);
+            int pageIndex = ResolveBookmarkPage(bookmark);
+            var children = ReadSiblings(PdfiumNative.BookmarkGetFirstChild(_handle, bookmark), visited, ref budget);
+
+            items.Add(new OutlineItem { Title = title, PageIndex = pageIndex, Children = children });
+            bookmark = PdfiumNative.BookmarkGetNextSibling(_handle, bookmark);
+        }
+        return items;
+    }
+
+    private int ResolveBookmarkPage(IntPtr bookmark)
+    {
+        IntPtr dest = PdfiumNative.BookmarkGetDest(_handle, bookmark);
+        if (dest == IntPtr.Zero)
+        {
+            IntPtr action = PdfiumNative.BookmarkGetAction(bookmark);
+            if (action != IntPtr.Zero && PdfiumNative.ActionGetType(action) == PdfiumNative.ActionGoto)
+            {
+                dest = PdfiumNative.ActionGetDest(_handle, action);
+            }
+        }
+        return dest == IntPtr.Zero ? -1 : PdfiumNative.DestGetPageIndex(_handle, dest);
+    }
+
+    /// <summary>
+    /// Clickable links on a page, with rectangles in page points and a
+    /// top-left origin (multiply by zoom to get layout-space rectangles).
+    /// </summary>
+    public IReadOnlyList<PdfLink> GetLinks(int pageIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+
+        var links = new List<PdfLink>();
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+
+            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return links;
+            }
+
+            try
+            {
+                var (ptWidth, ptHeight) = _pageSizes[pageIndex];
+                int sizeX = Math.Max(1, (int)MathF.Round(ptWidth));
+                int sizeY = Math.Max(1, (int)MathF.Round(ptHeight));
+
+                int startPos = 0;
+                while (PdfiumNative.LinkEnumerate(page, ref startPos, out IntPtr linkAnnot))
+                {
+                    if (linkAnnot == IntPtr.Zero || !PdfiumNative.LinkGetRect(linkAnnot, out float l, out float t, out float r, out float b))
+                    {
+                        continue;
+                    }
+
+                    // Map both page-space corners (bottom-left origin) to
+                    // device pixels (top-left origin), letting PDFium handle
+                    // the page's own /Rotate. 1 device px == 1 point here.
+                    var (x1, y1) = PdfiumNative.PageToDevice(page, sizeX, sizeY, 0, l, t);
+                    var (x2, y2) = PdfiumNative.PageToDevice(page, sizeX, sizeY, 0, r, b);
+                    double x = Math.Min(x1, x2), y = Math.Min(y1, y2);
+                    double w = Math.Abs(x2 - x1), h = Math.Abs(y2 - y1);
+                    if (w < 1 || h < 1)
+                    {
+                        continue;
+                    }
+
+                    var (target, uri) = ResolveLinkTarget(linkAnnot);
+                    if (target >= 0 || uri is not null)
+                    {
+                        links.Add(new PdfLink(x, y, w, h, target, uri));
+                    }
+                }
+            }
+            finally
+            {
+                PdfiumNative.ClosePage(page);
+            }
+        }
+        return links;
+    }
+
+    private (int TargetPage, string? Uri) ResolveLinkTarget(IntPtr linkAnnot)
+    {
+        IntPtr dest = PdfiumNative.LinkGetDest(_handle, linkAnnot);
+        if (dest != IntPtr.Zero)
+        {
+            return (PdfiumNative.DestGetPageIndex(_handle, dest), null);
+        }
+
+        IntPtr action = PdfiumNative.LinkGetAction(linkAnnot);
+        if (action == IntPtr.Zero)
+        {
+            return (-1, null);
+        }
+
+        uint type = PdfiumNative.ActionGetType(action);
+        if (type == PdfiumNative.ActionGoto)
+        {
+            IntPtr actionDest = PdfiumNative.ActionGetDest(_handle, action);
+            return (actionDest == IntPtr.Zero ? -1 : PdfiumNative.DestGetPageIndex(_handle, actionDest), null);
+        }
+        if (type == PdfiumNative.ActionUri)
+        {
+            string uri = PdfiumNative.ActionGetUri(_handle, action);
+            return (-1, string.IsNullOrEmpty(uri) ? null : uri);
+        }
+        return (-1, null);
+    }
+
     public void Dispose()
     {
         lock (PdfiumLibrary.Lock)

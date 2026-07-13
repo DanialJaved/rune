@@ -78,6 +78,55 @@ $book = for ($p = 1; $p -le 1000; $p++) {
 }
 New-SimplePdf -Path (Join-Path $corpusDir 'book-1000.pdf') -Pages $book
 
+# A file with a table of contents (outline) and two links on page 0:
+# one internal (GoTo page 2) and one external (URI). Hand-numbered objects.
+function New-LinkedPdf {
+    param([string]$Path)
+
+    function ContentObj([string]$text) {
+        $s = "BT /F1 24 Tf 72 700 Td ($text) Tj ET"
+        return "<< /Length $($s.Length) >>`nstream`n$s`nendstream"
+    }
+
+    $objects = @(
+        '<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>',                                                    # 1
+        '<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>',                                                 # 2
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 10 0 R /Annots [7 0 R 8 0 R] >>',  # 3
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 11 0 R >>',  # 4
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R >> >> /Contents 12 0 R >>',  # 5
+        '<< /Type /Outlines /First 13 0 R /Last 14 0 R /Count 2 >>',                                             # 6
+        '<< /Type /Annot /Subtype /Link /Rect [72 680 300 720] /Border [0 0 0] /Dest [5 0 R /Fit] >>',          # 7 internal -> page 2
+        '<< /Type /Annot /Subtype /Link /Rect [72 620 300 660] /Border [0 0 0] /A << /S /URI /URI (https://example.com/) >> >>',  # 8 URI
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',                                               # 9
+        (ContentObj 'Page one with links'),                                                                     # 10
+        (ContentObj 'Page two'),                                                                                 # 11
+        (ContentObj 'Page three'),                                                                               # 12
+        '<< /Title (Chapter 1) /Parent 6 0 R /Next 14 0 R /Dest [3 0 R /Fit] >>',                               # 13 -> page 0
+        '<< /Title (Chapter 2) /Parent 6 0 R /Prev 13 0 R /Dest [5 0 R /Fit] >>'                                # 14 -> page 2
+    )
+
+    $parts = New-Object System.Collections.Generic.List[string]
+    $header = "%PDF-1.4`n"
+    $parts.Add($header)
+    $pos = $header.Length
+    $offsets = New-Object System.Collections.Generic.List[int]
+    for ($n = 0; $n -lt $objects.Count; $n++) {
+        $offsets.Add($pos)
+        $obj = "$($n + 1) 0 obj`n$($objects[$n])`nendobj`n"
+        $parts.Add($obj)
+        $pos += $obj.Length
+    }
+    $xref = "xref`n0 $($objects.Count + 1)`n0000000000 65535 f `n"
+    foreach ($off in $offsets) { $xref += "{0:d10} 00000 n `n" -f $off }
+    $parts.Add($xref)
+    $parts.Add("trailer`n<< /Size $($objects.Count + 1) /Root 1 0 R >>`nstartxref`n$pos`n%%EOF")
+
+    $out = $parts -join ''
+    [System.IO.File]::WriteAllBytes($Path, [System.Text.Encoding]::ASCII.GetBytes($out))
+    Write-Host "wrote $Path ($($out.Length) bytes, outline + links)"
+}
+New-LinkedPdf -Path (Join-Path $corpusDir 'linked.pdf')
+
 # A deliberately corrupt file: must make PdfDocument.Open throw, never crash.
 [System.IO.File]::WriteAllBytes((Join-Path $corpusDir 'corrupt.pdf'), [System.Text.Encoding]::ASCII.GetBytes('%PDF-1.4 this is not really a pdf'))
 Write-Host 'wrote corrupt.pdf'

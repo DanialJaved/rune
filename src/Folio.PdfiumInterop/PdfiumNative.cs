@@ -73,4 +73,90 @@ public static class PdfiumNative
             }
         }
     }
+
+    // ---- Outline / bookmarks ----
+
+    public static IntPtr BookmarkGetFirstChild(IntPtr document, IntPtr bookmark)
+        => NativeMethods.FPDFBookmark_GetFirstChild(document, bookmark);
+
+    public static IntPtr BookmarkGetNextSibling(IntPtr document, IntPtr bookmark)
+        => NativeMethods.FPDFBookmark_GetNextSibling(document, bookmark);
+
+    public static string BookmarkGetTitle(IntPtr bookmark)
+    {
+        uint bytes = NativeMethods.FPDFBookmark_GetTitle(bookmark, null, 0);
+        return ReadUtf16(bytes, buf => NativeMethods.FPDFBookmark_GetTitle(bookmark, buf, (uint)buf.Length));
+    }
+
+    public static IntPtr BookmarkGetAction(IntPtr bookmark) => NativeMethods.FPDFBookmark_GetAction(bookmark);
+
+    public static IntPtr BookmarkGetDest(IntPtr document, IntPtr bookmark)
+        => NativeMethods.FPDFBookmark_GetDest(document, bookmark);
+
+    // ---- Actions & destinations ----
+
+    public static uint ActionGetType(IntPtr action) => NativeMethods.FPDFAction_GetType(action);
+
+    public static IntPtr ActionGetDest(IntPtr document, IntPtr action) => NativeMethods.FPDFAction_GetDest(document, action);
+
+    public static string ActionGetUri(IntPtr document, IntPtr action)
+    {
+        uint bytes = NativeMethods.FPDFAction_GetURIPath(document, action, null, 0);
+        if (bytes <= 1)
+        {
+            return string.Empty;
+        }
+        var buffer = new byte[bytes];
+        NativeMethods.FPDFAction_GetURIPath(document, action, buffer, bytes);
+        // ASCII bytes, minus the trailing NUL.
+        return System.Text.Encoding.ASCII.GetString(buffer, 0, (int)bytes - 1);
+    }
+
+    public static int DestGetPageIndex(IntPtr document, IntPtr dest) => NativeMethods.FPDFDest_GetDestPageIndex(document, dest);
+
+    public const uint ActionGoto = NativeMethods.PDFACTION_GOTO;
+    public const uint ActionUri = NativeMethods.PDFACTION_URI;
+
+    // ---- Links ----
+
+    /// <summary>Enumerates link annotations on a loaded page. Returns false when exhausted.</summary>
+    public static bool LinkEnumerate(IntPtr page, ref int startPos, out IntPtr linkAnnot)
+        => NativeMethods.FPDFLink_Enumerate(page, ref startPos, out linkAnnot) != 0;
+
+    public static bool LinkGetRect(IntPtr linkAnnot, out float left, out float top, out float right, out float bottom)
+    {
+        if (NativeMethods.FPDFLink_GetAnnotRect(linkAnnot, out var rect) != 0)
+        {
+            left = rect.Left;
+            top = rect.Top;
+            right = rect.Right;
+            bottom = rect.Bottom;
+            return true;
+        }
+        left = top = right = bottom = 0;
+        return false;
+    }
+
+    public static IntPtr LinkGetDest(IntPtr document, IntPtr link) => NativeMethods.FPDFLink_GetDest(document, link);
+
+    public static IntPtr LinkGetAction(IntPtr link) => NativeMethods.FPDFLink_GetAction(link);
+
+    /// <summary>Maps a page-space point to pixels within a (sizeX × sizeY) render at the given rotation.</summary>
+    public static (int X, int Y) PageToDevice(IntPtr page, int sizeX, int sizeY, int rotation, double pageX, double pageY)
+    {
+        NativeMethods.FPDF_PageToDevice(page, 0, 0, sizeX, sizeY, rotation, pageX, pageY, out int dx, out int dy);
+        return (dx, dy);
+    }
+
+    private static string ReadUtf16(uint bytes, Func<byte[], uint> fill)
+    {
+        if (bytes <= 2)
+        {
+            return string.Empty; // just the UTF-16 terminator, or nothing
+        }
+        var buffer = new byte[bytes];
+        fill(buffer);
+        // Strip the trailing UTF-16LE NUL.
+        return System.Text.Encoding.Unicode.GetString(buffer, 0, (int)bytes - 2);
+    }
 }

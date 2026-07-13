@@ -1,6 +1,5 @@
 using Folio.Controls;
-using Folio.Engine;
-using Folio.PdfiumInterop;
+using Folio.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -11,53 +10,284 @@ namespace Folio;
 
 public sealed partial class MainWindow : Window
 {
-    private PdfDocument? _document;
+    private readonly AppStateStore _store = new();
+    private readonly AppState _state;
+    private readonly Dictionary<DocumentView, RecentFile?> _pendingRestore = [];
+
+    private PdfViewer? _activeViewer;
     private bool _suppressPageBox;
+    private bool _restoringSession;
 
     public MainWindow()
     {
         InitializeComponent();
 
-        // Draw our own title bar so the window chrome matches the app (Preview/Papers style).
+        // Draw our own title bar so the window chrome matches the app.
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
 
-        Viewer.CurrentPageChanged += Viewer_CurrentPageChanged;
-        Viewer.ZoomChanged += Viewer_ZoomChanged;
-        Closed += (_, _) =>
-        {
-            Viewer.SetDocument(null);
-            _document?.Dispose();
-        };
+        _state = _store.Load();
+        RegisterAccelerators();
+        PopulateRecents();
 
-        RegisterZoomAccelerators();
+        Activated += MainWindow_FirstActivated;
+        Closed += MainWindow_Closed;
     }
 
-    private void RegisterZoomAccelerators()
+    // ---------------------------------------------------------------- lifecycle
+
+    private bool _sessionRestored;
+
+    private async void MainWindow_FirstActivated(object sender, WindowActivatedEventArgs e)
     {
-        // Keys with no clean XAML name: +/- (both main row and numpad),
-        // and the Ctrl+0/1/2 view presets (Sumatra's shortcuts).
-        AddAccelerator(VirtualKey.Add, () => Viewer.ZoomIn());
-        AddAccelerator((VirtualKey)0xBB /* OemPlus */, () => Viewer.ZoomIn());
-        AddAccelerator(VirtualKey.Subtract, () => Viewer.ZoomOut());
-        AddAccelerator((VirtualKey)0xBD /* OemMinus */, () => Viewer.ZoomOut());
-        AddAccelerator(VirtualKey.Number0, () => SetFitMode(FitMode.FitPage));
-        AddAccelerator(VirtualKey.Number1, () => Viewer.SetZoom(1.0));
-        AddAccelerator(VirtualKey.Number2, () => SetFitMode(FitMode.FitWidth));
+        if (_sessionRestored)
+        {
+            return;
+        }
+        _sessionRestored = true;
+        await RestoreSessionAsync();
     }
 
-    private void AddAccelerator(VirtualKey key, Action action)
+    private async Task RestoreSessionAsync()
     {
-        var accelerator = new KeyboardAccelerator { Key = key, Modifiers = VirtualKeyModifiers.Control };
-        accelerator.Invoked += (_, e) =>
+        _restoringSession = true;
+        var paths = _state.Session.OpenPaths.Where(File.Exists).ToList();
+        foreach (var path in paths)
         {
-            if (_document is not null)
+            AddTab(path, _state.FindRecent(path), select: false);
+        }
+
+        if (Tabs.TabItems.Count > 0)
+        {
+            int active = Math.Clamp(_state.Session.ActiveIndex, 0, Tabs.TabItems.Count - 1);
+            Tabs.SelectedIndex = active;
+        }
+        _restoringSession = false;
+
+        UpdateStartPageVisibility();
+        if (Tabs.SelectedItem is TabViewItem item && item.Content is DocumentView view)
+        {
+            await LoadTabAsync(view);
+        }
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs e)
+    {
+        // Persist each open document's position, then the session itself.
+        var openPaths = new List<string>();
+        foreach (var obj in Tabs.TabItems)
+        {
+            if (obj is TabViewItem { Content: DocumentView view })
             {
-                action();
-                e.Handled = true;
+                openPaths.Add(view.FilePath);
+                CaptureState(view);
+                view.Close();
             }
+        }
+        _state.Session = new SessionState
+        {
+            OpenPaths = openPaths,
+            ActiveIndex = Math.Max(0, Tabs.SelectedIndex),
         };
-        ((UIElement)Content).KeyboardAccelerators.Add(accelerator);
+        _store.Save(_state);
+    }
+
+    private void CaptureState(DocumentView view)
+    {
+        if (!view.IsLoaded || view.LoadError is not null)
+        {
+            return;
+        }
+        var viewer = view.Viewer;
+        _state.Remember(view.FilePath, view.DisplayName,
+            viewer.CurrentPage, viewer.Zoom, viewer.Rotation, viewer.ScrollFraction);
+    }
+
+    // ---------------------------------------------------------------- tabs
+
+    private void AddTab(string path, RecentFile? restore, bool select)
+    {
+        var view = new DocumentView(path);
+        _pendingRestore[view] = restore;
+        view.Viewer.LinkActivated += Viewer_LinkActivated;
+        view.Loaded2 += (_, _) => { if (view == CurrentView) { UpdateToolbarForActive(); } };
+
+        var tab = new TabViewItem
+        {
+            Header = view.DisplayName,
+            Content = view,
+            IconSource = new SymbolIconSource { Symbol = Symbol.Document },
+        };
+        Tabs.TabItems.Add(tab);
+        if (select)
+        {
+            Tabs.SelectedItem = tab;
+        }
+    }
+
+    /// <summary>Opens a path in a new tab, or activates the existing tab if already open.</summary>
+    private async void OpenOrActivate(string path)
+    {
+        foreach (var obj in Tabs.TabItems)
+        {
+            if (obj is TabViewItem { Content: DocumentView v } tabItem &&
+                string.Equals(v.FilePath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                Tabs.SelectedItem = tabItem;
+                return;
+            }
+        }
+
+        AddTab(path, _state.FindRecent(path), select: true);
+        UpdateStartPageVisibility();
+        if (CurrentView is { } view)
+        {
+            await LoadTabAsync(view);
+        }
+    }
+
+    private async void Tabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        HookActiveViewer();
+        UpdateStartPageVisibility();
+
+        if (!_restoringSession && CurrentView is { } view)
+        {
+            await LoadTabAsync(view);
+        }
+    }
+
+    private async Task LoadTabAsync(DocumentView view)
+    {
+        _pendingRestore.Remove(view, out var restore);
+        await view.EnsureLoadedAsync(restore);
+
+        if (view.LoadError is { } error && view == CurrentView)
+        {
+            ShowError(error);
+        }
+        if (view == CurrentView)
+        {
+            UpdateToolbarForActive();
+        }
+    }
+
+    private void Tabs_AddTabButtonClick(TabView sender, object args) => OpenButton_Click(sender, null!);
+
+    private void Tabs_TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args) => CloseTab(args.Tab);
+
+    private void CloseTab(TabViewItem tab)
+    {
+        if (tab.Content is DocumentView view)
+        {
+            CaptureState(view);
+            view.Viewer.LinkActivated -= Viewer_LinkActivated;
+            view.Close();
+            _pendingRestore.Remove(view);
+        }
+        Tabs.TabItems.Remove(tab);
+        UpdateStartPageVisibility();
+    }
+
+    private DocumentView? CurrentView =>
+        (Tabs.SelectedItem as TabViewItem)?.Content as DocumentView;
+
+    private void UpdateStartPageVisibility()
+    {
+        bool hasTabs = Tabs.TabItems.Count > 0;
+        StartPage.Visibility = hasTabs ? Visibility.Collapsed : Visibility.Visible;
+        Tabs.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
+        if (!hasTabs)
+        {
+            Title = "Folio";
+            TitleText.Text = "Folio";
+            PopulateRecents();
+        }
+    }
+
+    // ---------------------------------------------------------------- active viewer wiring
+
+    private void HookActiveViewer()
+    {
+        if (_activeViewer is not null)
+        {
+            _activeViewer.CurrentPageChanged -= Viewer_CurrentPageChanged;
+            _activeViewer.ZoomChanged -= Viewer_ZoomChanged;
+            _activeViewer.HistoryChanged -= Viewer_HistoryChanged;
+        }
+
+        _activeViewer = CurrentView?.Viewer;
+
+        if (_activeViewer is not null)
+        {
+            _activeViewer.CurrentPageChanged += Viewer_CurrentPageChanged;
+            _activeViewer.ZoomChanged += Viewer_ZoomChanged;
+            _activeViewer.HistoryChanged += Viewer_HistoryChanged;
+        }
+
+        if (CurrentView is { } view)
+        {
+            string name = view.DisplayName;
+            Title = $"{name} — Folio";
+            TitleText.Text = $"{name} — Folio";
+        }
+    }
+
+    private void Viewer_CurrentPageChanged(object? sender, int pageIndex)
+    {
+        _suppressPageBox = true;
+        PageBox.Value = pageIndex + 1;
+        _suppressPageBox = false;
+        int count = _activeViewer?.PageCount ?? 0;
+        PrevButton.IsEnabled = pageIndex > 0;
+        NextButton.IsEnabled = pageIndex < count - 1;
+    }
+
+    private void Viewer_ZoomChanged(object? sender, double zoom)
+    {
+        ZoomLabel.Text = $"{Math.Round(zoom * 100)}%";
+        UpdateFitToggles();
+    }
+
+    private void Viewer_HistoryChanged(object? sender, EventArgs e)
+    {
+        BackButton.IsEnabled = _activeViewer?.CanGoBack ?? false;
+        ForwardButton.IsEnabled = _activeViewer?.CanGoForward ?? false;
+    }
+
+    private void UpdateToolbarForActive()
+    {
+        var view = CurrentView;
+        bool ready = view is { IsLoaded: true, LoadError: null };
+        var viewer = ready ? view!.Viewer : null;
+
+        foreach (var control in new Control[]
+                 {
+                     SidebarButton, PageBox, ZoomInButton, ZoomOutButton,
+                     FitWidthButton, FitPageButton, RotateButton,
+                 })
+        {
+            control.IsEnabled = ready;
+        }
+
+        if (viewer is null)
+        {
+            PageCountLabel.Text = "";
+            return;
+        }
+
+        _suppressPageBox = true;
+        PageBox.Maximum = viewer.PageCount;
+        PageBox.Value = viewer.CurrentPage + 1;
+        _suppressPageBox = false;
+        PageCountLabel.Text = $"of {viewer.PageCount}";
+        PrevButton.IsEnabled = viewer.CurrentPage > 0;
+        NextButton.IsEnabled = viewer.CurrentPage < viewer.PageCount - 1;
+        ZoomLabel.Text = $"{Math.Round(viewer.Zoom * 100)}%";
+        SidebarButton.IsChecked = view!.IsPaneOpen;
+        BackButton.IsEnabled = viewer.CanGoBack;
+        ForwardButton.IsEnabled = viewer.CanGoForward;
+        UpdateFitToggles();
     }
 
     // ---------------------------------------------------------------- commands
@@ -67,107 +297,170 @@ public sealed partial class MainWindow : Window
         var picker = new FileOpenPicker();
         picker.FileTypeFilter.Add(".pdf");
 
-        // Unpackaged apps must associate the picker with our window handle.
         nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
 
         var file = await picker.PickSingleFileAsync();
         if (file is not null)
         {
-            await LoadDocumentAsync(file.Path);
+            OpenOrActivate(file.Path);
         }
     }
 
-    private void PrevButton_Click(object sender, RoutedEventArgs e) => Viewer.GoToPage(Viewer.CurrentPage - 1);
-    private void NextButton_Click(object sender, RoutedEventArgs e) => Viewer.GoToPage(Viewer.CurrentPage + 1);
-    private void ZoomInButton_Click(object sender, RoutedEventArgs e) => Viewer.ZoomIn();
-    private void ZoomOutButton_Click(object sender, RoutedEventArgs e) => Viewer.ZoomOut();
-    private void RotateButton_Click(object sender, RoutedEventArgs e) => Viewer.RotateClockwise();
+    private void Recent_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string path })
+        {
+            if (File.Exists(path))
+            {
+                OpenOrActivate(path);
+            }
+            else
+            {
+                ShowError($"File not found: {path}");
+                _state.Recents.RemoveAll(r => r.Path == path);
+                PopulateRecents();
+            }
+        }
+    }
+
+    private void SidebarButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentView is { IsLoaded: true } view)
+        {
+            view.IsPaneOpen = !view.IsPaneOpen;
+            SidebarButton.IsChecked = view.IsPaneOpen;
+        }
+    }
+
+    private void PrevButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoToPage((_activeViewer?.CurrentPage ?? 1) - 1);
+    private void NextButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoToPage((_activeViewer?.CurrentPage ?? -1) + 1);
+    private void ZoomInButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomIn();
+    private void ZoomOutButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomOut();
+    private void RotateButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.RotateClockwise();
+    private void BackButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoBack();
+    private void ForwardButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoForward();
     private void FitWidthButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitWidth);
     private void FitPageButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitPage);
 
     private void SetFitMode(FitMode mode)
     {
-        Viewer.FitMode = mode;
-        UpdateFitToggles();
+        if (_activeViewer is not null)
+        {
+            _activeViewer.FitMode = mode;
+            UpdateFitToggles();
+        }
     }
 
     private void UpdateFitToggles()
     {
-        FitWidthButton.IsChecked = Viewer.FitMode == FitMode.FitWidth;
-        FitPageButton.IsChecked = Viewer.FitMode == FitMode.FitPage;
+        FitWidthButton.IsChecked = _activeViewer?.FitMode == FitMode.FitWidth;
+        FitPageButton.IsChecked = _activeViewer?.FitMode == FitMode.FitPage;
     }
 
     private void PageBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
-        if (!_suppressPageBox && _document is not null && !double.IsNaN(args.NewValue))
+        if (!_suppressPageBox && _activeViewer is not null && !double.IsNaN(args.NewValue))
         {
-            Viewer.GoToPage((int)args.NewValue - 1);
+            _activeViewer.GoToPage((int)args.NewValue - 1, recordHistory: true);
         }
     }
 
-    // ---------------------------------------------------------------- viewer events
-
-    private void Viewer_CurrentPageChanged(object? sender, int pageIndex)
+    private async void Viewer_LinkActivated(object? sender, string uri)
     {
-        _suppressPageBox = true;
-        PageBox.Value = pageIndex + 1;
-        _suppressPageBox = false;
-        PrevButton.IsEnabled = _document is not null && pageIndex > 0;
-        NextButton.IsEnabled = _document is not null && pageIndex < Viewer.PageCount - 1;
+        // Opening a URL leaves the app — confirm the destination first, since
+        // a PDF link's target isn't visible before clicking.
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) ||
+            (parsed.Scheme != "http" && parsed.Scheme != "https"))
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "Open link?",
+            Content = parsed.ToString(),
+            PrimaryButtonText = "Open in browser",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            await Launcher.LaunchUriAsync(parsed);
+        }
     }
 
-    private void Viewer_ZoomChanged(object? sender, double zoom)
+    // ---------------------------------------------------------------- recents
+
+    private void PopulateRecents()
     {
-        ZoomLabel.Text = $"{Math.Round(zoom * 100)}%";
-        UpdateFitToggles();
+        var recents = _state.Recents.Take(AppState.MaxRecents).ToList();
+        RecentsList.ItemsSource = recents;
+        RecentsHeader.Visibility = recents.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    // ---------------------------------------------------------------- loading
+    // ---------------------------------------------------------------- accelerators
+
+    private void RegisterAccelerators()
+    {
+        AddAccelerator(VirtualKey.Add, VirtualKeyModifiers.Control, () => _activeViewer?.ZoomIn());
+        AddAccelerator((VirtualKey)0xBB, VirtualKeyModifiers.Control, () => _activeViewer?.ZoomIn());
+        AddAccelerator(VirtualKey.Subtract, VirtualKeyModifiers.Control, () => _activeViewer?.ZoomOut());
+        AddAccelerator((VirtualKey)0xBD, VirtualKeyModifiers.Control, () => _activeViewer?.ZoomOut());
+        AddAccelerator(VirtualKey.Number0, VirtualKeyModifiers.Control, () => SetFitMode(FitMode.FitPage));
+        AddAccelerator(VirtualKey.Number1, VirtualKeyModifiers.Control, () => _activeViewer?.SetZoom(1.0));
+        AddAccelerator(VirtualKey.Number2, VirtualKeyModifiers.Control, () => SetFitMode(FitMode.FitWidth));
+        AddAccelerator(VirtualKey.Left, VirtualKeyModifiers.Menu, () => _activeViewer?.GoBack());
+        AddAccelerator(VirtualKey.Right, VirtualKeyModifiers.Menu, () => _activeViewer?.GoForward());
+        AddAccelerator(VirtualKey.W, VirtualKeyModifiers.Control, CloseCurrentTab);
+    }
+
+    private void AddAccelerator(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
+    {
+        var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
+        accelerator.Invoked += (_, args) =>
+        {
+            if (_activeViewer is not null)
+            {
+                action();
+                args.Handled = true;
+            }
+        };
+        ((UIElement)Content).KeyboardAccelerators.Add(accelerator);
+    }
+
+    private void CloseCurrentTab()
+    {
+        if (Tabs.SelectedItem is TabViewItem tab)
+        {
+            CloseTab(tab);
+        }
+    }
+
+    // ---------------------------------------------------------------- errors + external open
 
     internal async Task LoadDocumentAsync(string path, int? initialPage = null, double? initialZoom = null)
     {
-        try
+        if (!File.Exists(path))
         {
-            var newDocument = await Task.Run(() => PdfDocument.Open(path));
-
-            _document?.Dispose();
-            _document = newDocument;
-
-            string name = System.IO.Path.GetFileName(path);
-            Title = $"{name} — Folio";
-            TitleText.Text = $"{name} — Folio";
-            EmptyState.Visibility = Visibility.Collapsed;
-            ErrorBar.IsOpen = false;
-
-            Viewer.SetDocument(newDocument);
-
-            _suppressPageBox = true;
-            PageBox.Maximum = newDocument.PageCount;
-            PageBox.Value = 1;
-            _suppressPageBox = false;
-            PageCountLabel.Text = $"of {newDocument.PageCount}";
-
-            foreach (var control in new Control[] { PageBox, ZoomInButton, ZoomOutButton, FitWidthButton, FitPageButton, RotateButton })
-            {
-                control.IsEnabled = true;
-            }
-            NextButton.IsEnabled = newDocument.PageCount > 1;
-            UpdateFitToggles();
-            ZoomLabel.Text = $"{Math.Round(Viewer.Zoom * 100)}%";
-
-            if (initialZoom is double zoom)
-            {
-                Viewer.SetZoom(zoom);
-            }
-            if (initialPage is int page)
-            {
-                Viewer.GoToPage(page - 1);
-            }
+            ShowError($"File not found: {path}");
+            return;
         }
-        catch (Exception ex) when (ex is PdfiumException or IOException)
+        OpenOrActivate(path);
+
+        // Command-line overrides for scripted testing.
+        if ((initialPage ?? initialZoom) is not null && CurrentView is { } view)
         {
-            ShowError(ex.Message);
+            await view.EnsureLoadedAsync(null);
+            if (initialZoom is double z)
+            {
+                view.Viewer.SetZoom(z);
+            }
+            if (initialPage is int p)
+            {
+                view.Viewer.GoToPage(p - 1);
+            }
         }
     }
 
