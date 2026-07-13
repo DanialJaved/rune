@@ -1,48 +1,101 @@
-# Rune
+<div align="center">
 
-*A fast, free, modern PDF reader for Windows.* (Working title — final name TBD before v1.)
+# ᚱ Rune
 
-Windows has never had a PDF reader that is fast **and** lightweight **and** modern-looking at the same time. SumatraPDF is legendary for speed but wears a 2009 UI; Edge and Acrobat are heavy; Okular's Windows port doesn't feel native. Rune aims to combine:
+**A fast, free, modern PDF reader for Windows.**
 
-- the **speed** of SumatraPDF / Zathura — instant startup, 60 fps scrolling, tiny footprint
-- the **clean modern UI** of macOS Preview / GNOME Papers — Fluent design, Mica, dark mode
-- (eventually) the **feature depth** of Okular — annotations, forms, signatures
+[![CI](https://github.com/DanialJaved/rune/actions/workflows/ci.yml/badge.svg)](https://github.com/DanialJaved/rune/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/DanialJaved/rune)](https://github.com/DanialJaved/rune/releases)
 
-Free and open source, in the spirit of SumatraPDF and Flow Launcher.
+</div>
+
+Windows never had a PDF reader that is fast **and** lightweight **and** modern-looking at the same time. SumatraPDF is legendary for speed but wears a 2009 UI; Edge and Acrobat are heavy; Okular's Windows port doesn't feel native. Rune combines:
+
+- the **speed** of SumatraPDF / Zathura — instant open, smooth scrolling through 1,000-page documents, strict memory budget
+- the **clean Windows 11 UI** of macOS Preview / GNOME Papers — Mica, dark mode, tabs in the title bar
+- a **keyboard-first** workflow — command palette, vim-style navigation, every action reachable without the mouse
+
+| Dark | Night mode (inverted pages) |
+|---|---|
+| ![Rune in dark mode](docs/screenshot-dark.png) | ![Rune night mode](docs/screenshot-night.png) |
+
+## Features
+
+- Tabs in the title bar (Chrome-style), lazy-loaded — background tabs cost nothing until shown
+- Continuous virtualized scrolling with tile-based progressive rendering (blurry-fast → crisp)
+- Zoom 10–640% at the cursor, fit-width / fit-page, rotation
+- Thumbnails + table-of-contents sidebar, internal & web links, back/forward history
+- Text selection & copy, find-in-document with highlight-all and hit stepping
+- **Night mode**: GPU-inverted page colors for dark-room reading (`Ctrl+I`)
+- Command palette (`Ctrl+K`) with fuzzy filtering and go-to-page
+- Session restore: reopens your tabs at the exact scroll position
+- Printing with live preview and page ranges
+- Opens damaged PDFs gracefully; 4 GB-file streaming without loading into memory
+
+## Keyboard shortcuts
+
+| Action | Keys |
+|---|---|
+| Open / close tab | `Ctrl+O` / `Ctrl+W` |
+| Find / next / previous | `Ctrl+F` / `F3` or `n` / `Shift+F3` or `N` |
+| Command palette | `Ctrl+K` |
+| Zoom in / out / 100% / fit page / fit width | `Ctrl++` / `Ctrl+-` / `Ctrl+1` / `Ctrl+0` / `Ctrl+2` |
+| Scroll / page | `j` `k` `h` `l` / `Space`, `Shift+Space` |
+| First / last page | `gg` / `G` |
+| Back / forward | `Alt+←` / `Alt+→` |
+| Night mode / sidebar / rotate | `Ctrl+I` / `F9` / `Ctrl+R` |
+| Print / properties | `Ctrl+P` / `Ctrl+D` |
+
+Vim-style keys can be disabled in Settings.
+
+## Install
+
+**Portable (recommended):** grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract anywhere, run `Rune.exe`. No installation, no registry.
+
+**MSIX (for "default PDF app" integration):** download the `.msix` and `rune-signing.cer` from Releases, then trust the certificate once (admin PowerShell):
+
+```powershell
+Import-Certificate -FilePath rune-signing.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+Add-AppxPackage -Path Rune.App_x.y.z.0_x64.msix
+```
+
+Then set Rune as your default PDF handler in Settings → Apps → Default apps. (A store-signed package is planned so this step disappears.)
+
+> v0.1 packages are not yet size-optimized — the zip carries the full self-contained .NET + Windows App SDK runtimes.
 
 ## Tech
 
 | Layer | Choice |
 |---|---|
 | UI | WinUI 3 (Windows App SDK 2.x), C# / .NET 10 |
-| PDF engine | [PDFium](https://pdfium.googlesource.com/pdfium/) (Chrome's renderer, Apache 2.0) via [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) |
-| Architecture | Thin P/Invoke interop → single-threaded render queue + LRU tile cache → virtualized canvas |
+| PDF engine | [PDFium](https://pdfium.googlesource.com/pdfium/) (Chrome's renderer, Apache-2.0) via [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) |
+| Rendering | Win2D virtualized canvas ← LRU tile cache ← single render thread (PDFium is not thread-safe) ← thin P/Invoke |
 
 ```
 src/
-  Rune.App/            WinUI 3 shell (views, view-models)
-  Rune.Engine/         document services, render scheduler, cache, search
+  Rune.App/            WinUI 3 shell: tabs, viewer control, palette, print
+  Rune.Engine/         document services, render scheduler, layout, search, state
   Rune.PdfiumInterop/  P/Invoke bindings over pdfium.dll
 tests/
-  Rune.Tests/          xUnit tests against a corpus of sample PDFs
+  Rune.Tests/          xUnit suite against a generated PDF corpus
 ```
 
 ## Building
 
-Requires the .NET 10 SDK on Windows. No Visual Studio needed:
+.NET 10 SDK on Windows — no Visual Studio required:
 
 ```
 dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
+dotnet test tests/Rune.Tests/Rune.Tests.csproj
 ```
 
-The output `Rune.exe` is unpackaged and self-contained — just run it.
+The debug build is an unpackaged self-contained exe — just run it.
 
 ## Roadmap
 
-- **M1** — open a PDF, render pages ✅
-- **M2** — viewer core: virtualized scroll, zoom, tile rendering, fast cold open ✅
-- **M3** — tabs, thumbnails, outline, links, back/forward, session restore ✅
-- **M4** — text selection, copy, find-in-document with highlights ✅
-- **M5** — night mode, command palette (Ctrl+K), keyboard-first UX, printing ✅
-- **M6** — v1 release: MSIX, file association, portable zip *(next)*
-- **v2** — annotations, form filling, signatures, page organizing, more formats
+**v2:** annotations (highlight, notes, ink — saved as standard PDF annotations), form filling, digital signature verification, page organizing (rotate/reorder/extract), more formats (ePub, CBZ), smaller packages.
+
+## License
+
+[GPLv3](LICENSE) — free forever, and derivatives stay free. Built on PDFium (Apache-2.0), Win2D (MIT), Windows App SDK (MIT).

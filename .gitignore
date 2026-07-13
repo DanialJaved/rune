@@ -480,3 +480,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Release artifacts (zips, MSIX, certs)
+artifacts/
