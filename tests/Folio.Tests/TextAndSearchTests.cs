@@ -40,9 +40,11 @@ public class TextExtractionTests
     {
         using var doc = PdfDocument.Open(CorpusPath("hello.pdf"));
 
-        // Point inside the first line of text (top-left points).
-        int index = doc.CharIndexAt(0, localX: 80, localY: 100, tolerance: 20);
-        Assert.True(index >= 0, "expected to hit a character near the first line");
+        // Point inside the first line of text. The corpus draws 24pt text at
+        // baseline y=720 (bottom-left origin) → glyphs span roughly y=52–72
+        // in top-left points; x=80 is inside the leading 'H'.
+        int index = doc.CharIndexAt(0, localX: 80, localY: 62, tolerance: 15);
+        Assert.True(index >= 0, "expected to hit a character in the first line");
     }
 }
 

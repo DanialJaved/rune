@@ -173,6 +173,8 @@ public sealed partial class DocumentView : UserControl
 
     // ---------------------------------------------------------------- outline
 
+    private bool _hasOutline;
+
     private async Task PopulateOutlineAsync(PdfDocument document)
     {
         IReadOnlyList<OutlineItem> outline;
@@ -190,32 +192,19 @@ public sealed partial class DocumentView : UserControl
             return;
         }
 
-        OutlineTree.RootNodes.Clear();
-        if (outline.Count == 0)
-        {
-            OutlineTab.IsEnabled = false;
-            return;
-        }
-
-        foreach (var item in outline)
-        {
-            OutlineTree.RootNodes.Add(BuildNode(item));
-        }
-    }
-
-    private static TreeViewNode BuildNode(OutlineItem item)
-    {
-        var node = new TreeViewNode { Content = new OutlineNode(item) };
-        foreach (var child in item.Children)
-        {
-            node.Children.Add(BuildNode(child));
-        }
-        return node;
+        // Bind data objects directly: the DataTemplate's x:DataType is
+        // OutlineNode, and its TreeViewItem.ItemsSource="{x:Bind Children}"
+        // supplies the hierarchy. (Populating RootNodes with TreeViewNode
+        // wrappers instead crashes template realization with a type mismatch.)
+        var nodes = outline.Select(item => new OutlineNode(item)).ToList();
+        _hasOutline = nodes.Count > 0;
+        OutlineTree.ItemsSource = nodes;
+        OutlineTab.IsEnabled = _hasOutline;
     }
 
     private void OutlineTree_ItemInvoked(TreeView sender, TreeViewItemInvokedEventArgs args)
     {
-        if (args.InvokedItem is TreeViewNode { Content: OutlineNode node } && node.PageIndex >= 0)
+        if (args.InvokedItem is OutlineNode node && node.PageIndex >= 0)
         {
             Viewer.GoToPage(node.PageIndex, recordHistory: true);
         }
@@ -232,8 +221,7 @@ public sealed partial class DocumentView : UserControl
         OutlineTab.IsChecked = !thumbnails;
         ThumbList.Visibility = thumbnails ? Visibility.Visible : Visibility.Collapsed;
 
-        bool hasOutline = OutlineTree.RootNodes.Count > 0;
-        OutlineTree.Visibility = !thumbnails && hasOutline ? Visibility.Visible : Visibility.Collapsed;
-        NoOutlineLabel.Visibility = !thumbnails && !hasOutline ? Visibility.Visible : Visibility.Collapsed;
+        OutlineTree.Visibility = !thumbnails && _hasOutline ? Visibility.Visible : Visibility.Collapsed;
+        NoOutlineLabel.Visibility = !thumbnails && !_hasOutline ? Visibility.Visible : Visibility.Collapsed;
     }
 }

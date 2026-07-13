@@ -161,6 +161,7 @@ public sealed partial class PdfViewer : UserControl
         Scroller.ChangeView(0, 0, null, disableAnimation: true);
         Canvas.Invalidate();
         UpdateDesiredTiles();
+        PrefetchVisibleLinks(); // ChangeView(0,0) on a fresh doc fires no ViewChanged
         CurrentPageChanged?.Invoke(this, 0);
         HistoryChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -361,6 +362,26 @@ public sealed partial class PdfViewer : UserControl
     {
         UpdateDesiredTiles();
         UpdateCurrentPage();
+        PrefetchVisibleLinks();
+    }
+
+    /// <summary>
+    /// Kick off link extraction for pages entering the viewport so the FIRST
+    /// click on a link works — extracting lazily on pointer contact loses the
+    /// race against the click itself.
+    /// </summary>
+    private void PrefetchVisibleLinks()
+    {
+        if (_layout is null || _document is null || _rotation != 0)
+        {
+            return;
+        }
+        var (first, last) = _layout.PagesInVerticalRange(
+            Scroller.VerticalOffset, Scroller.VerticalOffset + Scroller.ViewportHeight);
+        for (int i = first; i <= last; i++)
+        {
+            EnsureLinks(i);
+        }
     }
 
     private void UpdateCurrentPage()
