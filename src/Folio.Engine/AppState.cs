@@ -22,11 +22,28 @@ public sealed class SessionState
     public int ActiveIndex { get; set; }
 }
 
+/// <summary>User preferences, persisted with the rest of the app state.</summary>
+public sealed class AppSettings
+{
+    /// <summary>"System", "Light", or "Dark".</summary>
+    public string Theme { get; set; } = "System";
+
+    /// <summary>Invert page colors (night reading mode).</summary>
+    public bool NightMode { get; set; }
+
+    /// <summary>Reopen last session's tabs on launch.</summary>
+    public bool RestoreSession { get; set; } = true;
+
+    /// <summary>Enable j/k/g/G-style navigation keys.</summary>
+    public bool VimKeys { get; set; } = true;
+}
+
 /// <summary>The whole persisted app state (one JSON file).</summary>
 public sealed class AppState
 {
     public List<RecentFile> Recents { get; set; } = [];
     public SessionState Session { get; set; } = new();
+    public AppSettings Settings { get; set; } = new();
 
     public const int MaxRecents = 30;
 

@@ -1,4 +1,4 @@
-﻿using Folio.Engine;
+using Folio.Engine;
 using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
@@ -58,6 +58,7 @@ public sealed partial class PdfViewer : UserControl
     private int _rotation;
     private FitMode _fitMode = FitMode.FitWidth;
     private int _currentPage;
+    private bool _nightMode;
 
     // Link hit-testing: per-page links, extracted lazily off the UI thread.
     private readonly Dictionary<int, IReadOnlyList<PdfLink>> _links = [];
@@ -87,7 +88,7 @@ public sealed partial class PdfViewer : UserControl
 
     public int CurrentPage => _currentPage;
     public double Zoom => _zoom;
-    public int Rotation => _rotation;
+    public int ViewRotation => _rotation;
     public int PageCount => _document?.PageCount ?? 0;
     public PdfDocument? Document => _document;
 
@@ -101,6 +102,20 @@ public sealed partial class PdfViewer : UserControl
     /// <summary>The currently selected text, or empty if nothing is selected.</summary>
     public string SelectedText => _selection?.Text ?? string.Empty;
     public bool HasSelection => (_selection?.Count ?? 0) > 0;
+
+    /// <summary>Invert page colors for night reading. Draw-time effect; cheap to toggle.</summary>
+    public bool NightMode
+    {
+        get => _nightMode;
+        set
+        {
+            if (_nightMode != value)
+            {
+                _nightMode = value;
+                Canvas.Invalidate();
+            }
+        }
+    }
 
     public FitMode FitMode
     {
@@ -298,6 +313,17 @@ public sealed partial class PdfViewer : UserControl
         var rect = _layout.GetPageRect(pageIndex);
         Scroller.ChangeView(null, Math.Max(0, rect.Y - PageLayout.PageGap / 2), null, disableAnimation: true);
     }
+
+    /// <summary>Smooth line-scroll for keyboard navigation (vim j/k).</summary>
+    public void ScrollByLines(int lines)
+        => Scroller.ChangeView(null, Scroller.VerticalOffset + lines * 60, null);
+
+    /// <summary>Scroll by a fraction of the viewport height (Space / Shift+Space).</summary>
+    public void ScrollByViewport(double fraction)
+        => Scroller.ChangeView(null, Scroller.VerticalOffset + Scroller.ViewportHeight * fraction, null);
+
+    public void ScrollHorizontally(int steps)
+        => Scroller.ChangeView(Scroller.HorizontalOffset + steps * 60, null, null);
 
     private void PushHistory()
     {
@@ -708,11 +734,11 @@ public sealed partial class PdfViewer : UserControl
             var pageRect = _layout.GetPageRect(i);
             var pageXamlRect = new Rect(pageRect.X, pageRect.Y, pageRect.Width, pageRect.Height);
 
-            session.FillRectangle(pageXamlRect, Colors.White);
+            session.FillRectangle(pageXamlRect, _nightMode ? Colors.Black : Colors.White);
 
             if (_previews.TryGetValue(i, out var preview))
             {
-                session.DrawImage(preview, pageXamlRect);
+                DrawPageImage(session, preview, pageXamlRect);
             }
 
             var (pagePxW, pagePxH) = _document.GetPagePixelSize(i, scale, _rotation);
@@ -730,7 +756,7 @@ public sealed partial class PdfViewer : UserControl
                             pageRect.Y + srcY / rasterScale,
                             w / rasterScale,
                             h / rasterScale);
-                        session.DrawImage(entry.Bitmap, dest);
+                        DrawPageImage(session, entry.Bitmap, dest);
                         TouchTile(key);
                     }
                 }
@@ -738,6 +764,24 @@ public sealed partial class PdfViewer : UserControl
 
             DrawHighlights(session, i, pageRect);
             session.DrawRectangle(pageXamlRect, borderColor, 1);
+        }
+    }
+
+    /// <summary>
+    /// Draws page content, inverting colors on the GPU in night mode. Cached
+    /// tiles stay in normal colors, so toggling costs nothing but a repaint.
+    /// </summary>
+    private void DrawPageImage(CanvasDrawingSession session, CanvasBitmap bitmap, Rect dest)
+    {
+        if (_nightMode)
+        {
+            session.DrawImage(
+                new Microsoft.Graphics.Canvas.Effects.InvertEffect { Source = bitmap },
+                dest, bitmap.Bounds);
+        }
+        else
+        {
+            session.DrawImage(bitmap, dest);
         }
     }
 

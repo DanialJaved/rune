@@ -74,6 +74,18 @@ public static class PdfiumNative
         }
     }
 
+    // ---- Metadata ----
+
+    public static string GetMetaText(IntPtr document, string tag)
+    {
+        uint bytes = NativeMethods.FPDF_GetMetaText(document, tag, null, 0);
+        return ReadUtf16(bytes, buf => NativeMethods.FPDF_GetMetaText(document, tag, buf, (uint)buf.Length));
+    }
+
+    /// <summary>PDF version ×10 (17 = PDF 1.7), or 0 if unknown.</summary>
+    public static int GetFileVersion(IntPtr document)
+        => NativeMethods.FPDF_GetFileVersion(document, out int version) != 0 ? version : 0;
+
     // ---- Outline / bookmarks ----
 
     public static IntPtr BookmarkGetFirstChild(IntPtr document, IntPtr bookmark)
