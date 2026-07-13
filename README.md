@@ -69,7 +69,7 @@ Then set Rune as your default PDF handler in Settings → Apps → Default apps.
 | Layer | Choice |
 |---|---|
 | UI | WinUI 3 (Windows App SDK 2.x), C# / .NET 10 |
-| PDF engine | [PDFium](https://pdfium.googlesource.com/pdfium/) (Chrome's renderer, Apache-2.0) via [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) |
+| PDF engine | [PDFium](https://pdfium.googlesource.com/pdfium/) (Chrome's renderer, BSD-3-Clause/Apache-2.0) via [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) |
 | Rendering | Win2D virtualized canvas ← LRU tile cache ← single render thread (PDFium is not thread-safe) ← thin P/Invoke |
 
 ```
@@ -98,4 +98,4 @@ The debug build is an unpackaged self-contained exe — just run it.
 
 ## License
 
-[GPLv3](LICENSE) — free forever, and derivatives stay free. Built on PDFium (Apache-2.0), Win2D (MIT), Windows App SDK (MIT).
+[GPLv3](LICENSE) — free forever, and derivatives stay free. Built on PDFium (BSD-3-Clause/Apache-2.0), Win2D (MIT), the Windows App SDK, and .NET (MIT); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
