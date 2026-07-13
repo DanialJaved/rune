@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Rune.App/Rune.App.csproj" />
+    <Project Path="src/Rune.Engine/Rune.Engine.csproj" />
+    <Project Path="src/Rune.PdfiumInterop/Rune.PdfiumInterop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Rune.Tests/Rune.Tests.csproj" />
+  </Folder>
+</Solution>
