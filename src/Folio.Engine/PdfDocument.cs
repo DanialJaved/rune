@@ -265,6 +265,136 @@ public sealed class PdfDocument : IDisposable
         return (-1, null);
     }
 
+    // ---------------------------------------------------------------- text & search
+
+    /// <summary>Full extracted text of a page (reading order), or empty for image-only pages.</summary>
+    public string ExtractText(int pageIndex) =>
+        WithTextPage(pageIndex, (_, textPage) =>
+        {
+            int count = PdfiumNative.TextCountChars(textPage);
+            return count <= 0 ? string.Empty : PdfiumNative.TextGetText(textPage, 0, count);
+        }, string.Empty);
+
+    /// <summary>
+    /// Char index at a page-local point (top-left origin points), or -1.
+    /// <paramref name="tolerance"/> is in points.
+    /// </summary>
+    public int CharIndexAt(int pageIndex, double localX, double localY, double tolerance = 6) =>
+        WithPageAndText(pageIndex, (page, textPage, w, h) =>
+        {
+            var (px, py) = PdfiumNative.DeviceToPage(page, w, h, (int)Math.Round(localX), (int)Math.Round(localY));
+            return PdfiumNative.TextCharIndexAtPos(textPage, px, py, tolerance);
+        }, -1);
+
+    /// <summary>Builds a selection over a char range, with text and highlight rects (top-left points).</summary>
+    public TextSelection GetSelection(int pageIndex, int anchorChar, int focusChar)
+    {
+        int start = Math.Min(anchorChar, focusChar);
+        int count = Math.Abs(focusChar - anchorChar) + 1;
+        return WithPageAndText(pageIndex, (page, textPage, w, h) =>
+        {
+            int total = PdfiumNative.TextCountChars(textPage);
+            start = Math.Clamp(start, 0, Math.Max(0, total - 1));
+            count = Math.Clamp(count, 0, total - start);
+            string text = count > 0 ? PdfiumNative.TextGetText(textPage, start, count) : string.Empty;
+            var rects = CollectRangeRects(textPage, page, w, h, start, count);
+            return new TextSelection(pageIndex, start, count, text, rects);
+        }, new TextSelection(pageIndex, 0, 0, string.Empty, []));
+    }
+
+    /// <summary>All occurrences of <paramref name="query"/> on a page, with highlight rects.</summary>
+    public IReadOnlyList<SearchHit> SearchPage(int pageIndex, string query, bool matchCase, bool wholeWord)
+    {
+        if (string.IsNullOrEmpty(query))
+        {
+            return [];
+        }
+        return WithPageAndText(pageIndex, (page, textPage, w, h) =>
+        {
+            var hits = new List<SearchHit>();
+            IntPtr handle = PdfiumNative.TextFindStart(textPage, query, matchCase, wholeWord, 0);
+            if (handle == IntPtr.Zero)
+            {
+                return (IReadOnlyList<SearchHit>)hits;
+            }
+            try
+            {
+                const int MaxHitsPerPage = 5000;
+                while (hits.Count < MaxHitsPerPage && PdfiumNative.TextFindNext(handle))
+                {
+                    int idx = PdfiumNative.TextSchResultIndex(handle);
+                    int len = PdfiumNative.TextSchCount(handle);
+                    var rects = CollectRangeRects(textPage, page, w, h, idx, len);
+                    hits.Add(new SearchHit(pageIndex, idx, len, rects));
+                }
+            }
+            finally
+            {
+                PdfiumNative.TextFindClose(handle);
+            }
+            return (IReadOnlyList<SearchHit>)hits;
+        }, []);
+    }
+
+    private static List<TextRect> CollectRangeRects(IntPtr textPage, IntPtr page, int w, int h, int start, int count)
+    {
+        var rects = new List<TextRect>();
+        if (count <= 0)
+        {
+            return rects;
+        }
+        int rectCount = PdfiumNative.TextCountRects(textPage, start, count);
+        for (int i = 0; i < rectCount; i++)
+        {
+            if (!PdfiumNative.TextGetRect(textPage, i, out double left, out double top, out double right, out double bottom))
+            {
+                continue;
+            }
+            // Page space (bottom-left origin, top>bottom) → device pixels (top-left).
+            var (x1, y1) = PdfiumNative.PageToDevice(page, w, h, 0, left, top);
+            var (x2, y2) = PdfiumNative.PageToDevice(page, w, h, 0, right, bottom);
+            double x = Math.Min(x1, x2), y = Math.Min(y1, y2);
+            rects.Add(new TextRect(x, y, Math.Abs(x2 - x1), Math.Abs(y2 - y1)));
+        }
+        return rects;
+    }
+
+    private T WithTextPage<T>(int pageIndex, Func<IntPtr, IntPtr, T> fn, T fallback) =>
+        WithPageAndText(pageIndex, (page, textPage, _, _) => fn(page, textPage), fallback);
+
+    /// <summary>Loads page + text page under the lock, runs fn, and cleans up. Returns fallback on failure.</summary>
+    private T WithPageAndText<T>(int pageIndex, Func<IntPtr, IntPtr, int, int, T> fn, T fallback)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return fallback;
+            }
+            IntPtr textPage = PdfiumNative.TextLoadPage(page);
+            if (textPage == IntPtr.Zero)
+            {
+                PdfiumNative.ClosePage(page);
+                return fallback;
+            }
+            try
+            {
+                var (ptW, ptH) = _pageSizes[pageIndex];
+                return fn(page, textPage, Math.Max(1, (int)MathF.Round(ptW)), Math.Max(1, (int)MathF.Round(ptH)));
+            }
+            finally
+            {
+                PdfiumNative.TextClosePage(textPage);
+                PdfiumNative.ClosePage(page);
+            }
+        }
+    }
+
     public void Dispose()
     {
         lock (PdfiumLibrary.Lock)

@@ -136,6 +136,57 @@ internal static partial class NativeMethods
         IntPtr page, int startX, int startY, int sizeX, int sizeY, int rotate,
         double pageX, double pageY, out int deviceX, out int deviceY);
 
+    // ---- Text extraction & search (fpdf_text.h) ----
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFText_LoadPage(IntPtr page);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFText_ClosePage(IntPtr textPage);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_CountChars(IntPtr textPage);
+
+    /// <summary>Writes up to count chars (UTF-16LE, plus terminator) into result; returns chars written.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_GetText(IntPtr textPage, int startIndex, int count, [Out] ushort[] result);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_GetCharIndexAtPos(IntPtr textPage, double x, double y, double xTolerance, double yTolerance);
+
+    /// <summary>Number of distinct rectangles covering the given char range (multi-line selections span several).</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_CountRects(IntPtr textPage, int startIndex, int count);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_GetRect(IntPtr textPage, int rectIndex, out double left, out double top, out double right, out double bottom);
+
+    // Search
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFText_FindStart(IntPtr textPage, ushort[] findWhat, uint flags, int startIndex);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_FindNext(IntPtr handle);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_GetSchResultIndex(IntPtr handle);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_GetSchCount(IntPtr handle);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFText_FindClose(IntPtr handle);
+
+    /// <summary>Maps device (bitmap) pixels back to a page-space point, honoring rotation.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_DeviceToPage(
+        IntPtr page, int startX, int startY, int sizeX, int sizeY, int rotate,
+        int deviceX, int deviceY, out double pageX, out double pageY);
+
+    // Search flags
+    internal const uint FPDF_MATCHCASE = 0x00000001;
+    internal const uint FPDF_MATCHWHOLEWORD = 0x00000002;
+
     // ---- Constants ----
 
     // Action types (FPDFAction_GetType)

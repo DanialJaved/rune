@@ -148,6 +148,66 @@ public static class PdfiumNative
         return (dx, dy);
     }
 
+    // ---- Text extraction & search ----
+
+    public static IntPtr TextLoadPage(IntPtr page) => NativeMethods.FPDFText_LoadPage(page);
+    public static void TextClosePage(IntPtr textPage) => NativeMethods.FPDFText_ClosePage(textPage);
+    public static int TextCountChars(IntPtr textPage) => NativeMethods.FPDFText_CountChars(textPage);
+
+    /// <summary>Extracts a run of characters as a string.</summary>
+    public static string TextGetText(IntPtr textPage, int startIndex, int count)
+    {
+        if (count <= 0)
+        {
+            return string.Empty;
+        }
+        var buffer = new ushort[count + 1]; // room for the NUL terminator
+        int written = NativeMethods.FPDFText_GetText(textPage, startIndex, count, buffer);
+        int chars = Math.Max(0, Math.Min(written - 1, count)); // drop terminator
+        if (chars == 0)
+        {
+            return string.Empty;
+        }
+        return new string(MemoryMarshal.Cast<ushort, char>(buffer.AsSpan(0, chars)));
+    }
+
+    public static int TextCharIndexAtPos(IntPtr textPage, double x, double y, double tolerance)
+        => NativeMethods.FPDFText_GetCharIndexAtPos(textPage, x, y, tolerance, tolerance);
+
+    public static int TextCountRects(IntPtr textPage, int startIndex, int count)
+        => NativeMethods.FPDFText_CountRects(textPage, startIndex, count);
+
+    public static bool TextGetRect(IntPtr textPage, int rectIndex, out double left, out double top, out double right, out double bottom)
+        => NativeMethods.FPDFText_GetRect(textPage, rectIndex, out left, out top, out right, out bottom) != 0;
+
+    public static IntPtr TextFindStart(IntPtr textPage, string query, bool matchCase, bool wholeWord, int startIndex)
+    {
+        uint flags = 0;
+        if (matchCase) flags |= NativeMethods.FPDF_MATCHCASE;
+        if (wholeWord) flags |= NativeMethods.FPDF_MATCHWHOLEWORD;
+
+        // UTF-16LE, NUL-terminated.
+        var chars = query.ToCharArray();
+        var findWhat = new ushort[chars.Length + 1];
+        for (int i = 0; i < chars.Length; i++)
+        {
+            findWhat[i] = chars[i];
+        }
+        return NativeMethods.FPDFText_FindStart(textPage, findWhat, flags, startIndex);
+    }
+
+    public static bool TextFindNext(IntPtr handle) => NativeMethods.FPDFText_FindNext(handle) != 0;
+    public static int TextSchResultIndex(IntPtr handle) => NativeMethods.FPDFText_GetSchResultIndex(handle);
+    public static int TextSchCount(IntPtr handle) => NativeMethods.FPDFText_GetSchCount(handle);
+    public static void TextFindClose(IntPtr handle) => NativeMethods.FPDFText_FindClose(handle);
+
+    /// <summary>Maps a top-left-origin page-point (1 unit = 1 pt) to page space (bottom-left origin).</summary>
+    public static (double X, double Y) DeviceToPage(IntPtr page, int sizeX, int sizeY, int deviceX, int deviceY)
+    {
+        NativeMethods.FPDF_DeviceToPage(page, 0, 0, sizeX, sizeY, 0, deviceX, deviceY, out double px, out double py);
+        return (px, py);
+    }
+
     private static string ReadUtf16(uint bytes, Func<byte[], uint> fill)
     {
         if (bytes <= 2)
