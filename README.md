@@ -41,8 +41,8 @@ The output `Folio.exe` is unpackaged and self-contained — just run it.
 
 - **M1** — open a PDF, render pages ✅
 - **M2** — viewer core: virtualized scroll, zoom, tile rendering, fast cold open ✅
-- **M3** — tabs, thumbnails, outline, links, session restore *(next)*
-- **M4** — text selection, copy, search
-- **M5** — night mode, command palette (Ctrl+K), keyboard-first UX, printing
+- **M3** — tabs, thumbnails, outline, links, back/forward, session restore ✅
+- **M4** — text selection, copy, find-in-document with highlights ✅
+- **M5** — night mode, command palette (Ctrl+K), keyboard-first UX, printing *(next)*
 - **M6** — v1 release: MSIX, file association, portable zip
 - **v2** — annotations, form filling, signatures, page organizing, more formats
