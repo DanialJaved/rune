@@ -68,6 +68,16 @@ public sealed partial class PdfViewer : UserControl
     private readonly Stack<double> _back = new();
     private readonly Stack<double> _forward = new();
 
+    // Text selection (single-page for v1).
+    private TextSelection? _selection;
+    private int _selectionPage = -1;
+    private int _selectionAnchorChar = -1;
+    private bool _isSelecting;
+
+    // Search highlights, grouped by page, plus the active hit.
+    private readonly Dictionary<int, List<SearchHit>> _searchByPage = [];
+    private SearchHit? _activeHit;
+
     public event EventHandler<int>? CurrentPageChanged;
     public event EventHandler<double>? ZoomChanged;
     public event EventHandler? HistoryChanged;
@@ -87,6 +97,10 @@ public sealed partial class PdfViewer : UserControl
     /// <summary>Current scroll position as a 0–1 fraction of total document height (for session restore).</summary>
     public double ScrollFraction =>
         _layout is { TotalHeight: > 0 } ? Scroller.VerticalOffset / _layout.TotalHeight : 0;
+
+    /// <summary>The currently selected text, or empty if nothing is selected.</summary>
+    public string SelectedText => _selection?.Text ?? string.Empty;
+    public bool HasSelection => (_selection?.Count ?? 0) > 0;
 
     public FitMode FitMode
     {
@@ -108,6 +122,7 @@ public sealed partial class PdfViewer : UserControl
         AddHandler(PointerWheelChangedEvent, new PointerEventHandler(OnPointerWheelChanged), handledEventsToo: true);
         Canvas.PointerMoved += Canvas_PointerMoved;
         Canvas.PointerPressed += Canvas_PointerPressed;
+        Canvas.PointerReleased += Canvas_PointerReleased;
         Canvas.PointerExited += (_, _) => SetLinkCursor(false);
         ActualThemeChanged += (_, _) => Canvas.Invalidate();
         Unloaded += (_, _) => _scheduler.Dispose();
@@ -133,6 +148,12 @@ public sealed partial class PdfViewer : UserControl
         _forward.Clear();
         _links.Clear();
         _linksRequested.Clear();
+        _selection = null;
+        _selectionPage = -1;
+        _selectionAnchorChar = -1;
+        _isSelecting = false;
+        _searchByPage.Clear();
+        _activeHit = null;
 
         _scheduler.SetDocument(document);
         ClearCaches();
@@ -374,6 +395,14 @@ public sealed partial class PdfViewer : UserControl
     private void Canvas_PointerMoved(object sender, PointerRoutedEventArgs e)
     {
         var doc = DocumentPointFromPointer(e);
+
+        if (_isSelecting)
+        {
+            UpdateSelection(doc);
+            e.Handled = true;
+            return;
+        }
+
         SetLinkCursor(HitTestLink(doc) is not null);
     }
 
@@ -384,21 +413,154 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        var link = HitTestLink(DocumentPointFromPointer(e));
-        if (link is null)
+        var docPoint = DocumentPointFromPointer(e);
+
+        // Links take precedence over starting a selection.
+        var link = HitTestLink(docPoint);
+        if (link is not null)
+        {
+            if (link.IsInternal)
+            {
+                GoToPage(link.TargetPageIndex, recordHistory: true);
+            }
+            else if (link.Uri is { } uri)
+            {
+                LinkActivated?.Invoke(this, uri);
+            }
+            e.Handled = true;
+            return;
+        }
+
+        BeginSelection(docPoint, e.Pointer);
+    }
+
+    private void Canvas_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (_isSelecting)
+        {
+            _isSelecting = false;
+            Canvas.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+        }
+    }
+
+    // ---------------------------------------------------------------- selection
+
+    private void BeginSelection(Point docPoint, Pointer pointer)
+    {
+        if (_layout is null || _document is null || _rotation != 0)
+        {
+            return; // selection geometry only tracked for the unrotated view
+        }
+
+        int page = _layout.PageAt(docPoint.Y);
+        var (localX, localY) = ToPageLocal(page, docPoint);
+        int charIndex = _document.CharIndexAt(page, localX, localY);
+
+        // Clear any previous selection regardless of whether we hit a glyph.
+        bool hadSelection = HasSelection;
+        _selection = null;
+        _selectionPage = page;
+        _selectionAnchorChar = charIndex;
+
+        if (charIndex >= 0)
+        {
+            _isSelecting = true;
+            Canvas.CapturePointer(pointer);
+        }
+        if (hadSelection)
+        {
+            Canvas.Invalidate();
+        }
+    }
+
+    private void UpdateSelection(Point docPoint)
+    {
+        if (_document is null || _selectionPage < 0 || _selectionAnchorChar < 0)
         {
             return;
         }
 
-        if (link.IsInternal)
+        // Selection stays on the page it started on (single-page selection).
+        var (localX, localY) = ToPageLocal(_selectionPage, docPoint);
+        int focusChar = _document.CharIndexAt(_selectionPage, localX, localY);
+        if (focusChar < 0)
         {
-            GoToPage(link.TargetPageIndex, recordHistory: true);
+            return;
         }
-        else if (link.Uri is { } uri)
+
+        var document = _document;
+        int page = _selectionPage;
+        int anchor = _selectionAnchorChar;
+        Task.Run(() =>
         {
-            LinkActivated?.Invoke(this, uri);
+            var selection = document.GetSelection(page, anchor, focusChar);
+            _dispatcher.TryEnqueue(() =>
+            {
+                if (_document == document && _isSelecting)
+                {
+                    _selection = selection;
+                    Canvas.Invalidate();
+                }
+            });
+        });
+    }
+
+    /// <summary>Document (layout) point → page-local points (top-left origin, unscaled).</summary>
+    private (double X, double Y) ToPageLocal(int page, Point docPoint)
+    {
+        var rect = _layout!.GetPageRect(page);
+        return ((docPoint.X - rect.X) / _zoom, (docPoint.Y - rect.Y) / _zoom);
+    }
+
+    public void ClearSelection()
+    {
+        if (HasSelection)
+        {
+            _selection = null;
+            _selectionPage = -1;
+            _selectionAnchorChar = -1;
+            Canvas.Invalidate();
         }
-        e.Handled = true;
+    }
+
+    // ---------------------------------------------------------------- search
+
+    /// <summary>Shows all hits as highlights (grouped by page). Does not scroll.</summary>
+    public void SetSearchResults(IReadOnlyList<SearchHit> hits)
+    {
+        _searchByPage.Clear();
+        foreach (var hit in hits)
+        {
+            if (!_searchByPage.TryGetValue(hit.PageIndex, out var list))
+            {
+                _searchByPage[hit.PageIndex] = list = [];
+            }
+            list.Add(hit);
+        }
+        Canvas.Invalidate();
+    }
+
+    /// <summary>Emphasizes one hit and scrolls it into view.</summary>
+    public void HighlightHit(SearchHit hit)
+    {
+        _activeHit = hit;
+        if (_layout is not null && hit.Rects.Count > 0)
+        {
+            var pageRect = _layout.GetPageRect(hit.PageIndex);
+            double hitTop = pageRect.Y + hit.Rects[0].Y * _zoom;
+            // Center the hit in the viewport where possible.
+            double target = Math.Max(0, hitTop - Scroller.ViewportHeight / 2);
+            Scroller.ChangeView(null, target, null, disableAnimation: true);
+        }
+        Canvas.Invalidate();
+    }
+
+    public void ClearSearch()
+    {
+        _searchByPage.Clear();
+        _activeHit = null;
+        Canvas.Invalidate();
     }
 
     /// <summary>Pointer position translated into document (layout) space, in DIPs.</summary>
@@ -553,9 +715,44 @@ public sealed partial class PdfViewer : UserControl
                 }
             }
 
+            DrawHighlights(session, i, pageRect);
             session.DrawRectangle(pageXamlRect, borderColor, 1);
         }
     }
+
+    private static readonly Color SelectionColor = Color.FromArgb(90, 0, 120, 215);   // translucent blue
+    private static readonly Color SearchColor = Color.FromArgb(110, 255, 210, 0);      // translucent yellow
+    private static readonly Color ActiveSearchColor = Color.FromArgb(150, 255, 140, 0); // orange
+
+    private void DrawHighlights(CanvasDrawingSession session, int pageIndex, DipRect pageRect)
+    {
+        // Search hits (only visible pages carry entries).
+        if (_searchByPage.TryGetValue(pageIndex, out var hits))
+        {
+            foreach (var hit in hits)
+            {
+                bool active = ReferenceEquals(hit, _activeHit) ||
+                              (_activeHit is not null && hit.PageIndex == _activeHit.PageIndex && hit.CharIndex == _activeHit.CharIndex);
+                var color = active ? ActiveSearchColor : SearchColor;
+                foreach (var r in hit.Rects)
+                {
+                    session.FillRectangle(HighlightRect(pageRect, r), color);
+                }
+            }
+        }
+
+        // Text selection (single page).
+        if (_selection is { Count: > 0 } selection && selection.PageIndex == pageIndex)
+        {
+            foreach (var r in selection.Rects)
+            {
+                session.FillRectangle(HighlightRect(pageRect, r), SelectionColor);
+            }
+        }
+    }
+
+    private Rect HighlightRect(DipRect pageRect, TextRect r) =>
+        new(pageRect.X + r.X * _zoom, pageRect.Y + r.Y * _zoom, r.Width * _zoom, r.Height * _zoom);
 
     // ---------------------------------------------------------------- tile pipeline
 

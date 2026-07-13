@@ -173,6 +173,47 @@
                 </StackPanel>
             </ScrollViewer>
 
+            <!-- Find bar -->
+            <Border
+                x:Name="FindBar"
+                Visibility="Collapsed"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Right"
+                Margin="0,8,16,0"
+                Padding="6"
+                Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                    <TextBox
+                        x:Name="FindBox"
+                        Width="220"
+                        PlaceholderText="Find in document"
+                        TextChanged="FindBox_TextChanged"
+                        KeyDown="FindBox_KeyDown" />
+                    <TextBlock
+                        x:Name="FindCount"
+                        VerticalAlignment="Center"
+                        MinWidth="64"
+                        Margin="4,0"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Opacity="0.7" />
+                    <ToggleButton x:Name="MatchCaseButton" Click="MatchCase_Click" ToolTipService.ToolTip="Match case" Padding="8,4">
+                        <TextBlock Text="Aa" FontSize="13" />
+                    </ToggleButton>
+                    <Button x:Name="FindPrev" Click="FindPrev_Click" ToolTipService.ToolTip="Previous (Shift+Enter)" Padding="8,4">
+                        <FontIcon Glyph="&#xE70E;" FontSize="12" />
+                    </Button>
+                    <Button x:Name="FindNext" Click="FindNext_Click" ToolTipService.ToolTip="Next (Enter)" Padding="8,4">
+                        <FontIcon Glyph="&#xE70D;" FontSize="12" />
+                    </Button>
+                    <Button x:Name="FindClose" Click="FindClose_Click" ToolTipService.ToolTip="Close (Esc)" Padding="8,4">
+                        <FontIcon Glyph="&#xE711;" FontSize="12" />
+                    </Button>
+                </StackPanel>
+            </Border>
+
             <InfoBar
                 x:Name="ErrorBar"
                 Severity="Error"

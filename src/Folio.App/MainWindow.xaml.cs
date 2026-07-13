@@ -1,8 +1,10 @@
 using Folio.Controls;
+using Folio.Engine;
 using Folio.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
 using Windows.System;
 
@@ -17,6 +19,11 @@ public sealed partial class MainWindow : Window
     private PdfViewer? _activeViewer;
     private bool _suppressPageBox;
     private bool _restoringSession;
+
+    // Find-in-document state.
+    private CancellationTokenSource? _searchCts;
+    private List<SearchHit> _searchHits = [];
+    private int _activeHitIndex = -1;
 
     public MainWindow()
     {
@@ -231,6 +238,12 @@ public sealed partial class MainWindow : Window
             Title = $"{name} — Folio";
             TitleText.Text = $"{name} — Folio";
         }
+
+        // Re-run any active search against the newly-focused document.
+        if (FindBar.Visibility == Visibility.Visible)
+        {
+            RunSearch();
+        }
     }
 
     private void Viewer_CurrentPageChanged(object? sender, int pageIndex)
@@ -414,6 +427,9 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.Left, VirtualKeyModifiers.Menu, () => _activeViewer?.GoBack());
         AddAccelerator(VirtualKey.Right, VirtualKeyModifiers.Menu, () => _activeViewer?.GoForward());
         AddAccelerator(VirtualKey.W, VirtualKeyModifiers.Control, CloseCurrentTab);
+        AddAccelerator(VirtualKey.F, VirtualKeyModifiers.Control, ShowFindBar);
+        AddAccelerator(VirtualKey.C, VirtualKeyModifiers.Control, CopySelection);
+        AddAccelerator(VirtualKey.Escape, VirtualKeyModifiers.None, HideFindBar);
     }
 
     private void AddAccelerator(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
@@ -435,6 +451,147 @@ public sealed partial class MainWindow : Window
         if (Tabs.SelectedItem is TabViewItem tab)
         {
             CloseTab(tab);
+        }
+    }
+
+    // ---------------------------------------------------------------- find in document
+
+    private void ShowFindBar()
+    {
+        if (CurrentView is not { IsLoaded: true })
+        {
+            return;
+        }
+        FindBar.Visibility = Visibility.Visible;
+        FindBox.Focus(FocusState.Programmatic);
+        FindBox.SelectAll();
+        if (_activeViewer?.HasSelection == true)
+        {
+            FindBox.Text = _activeViewer.SelectedText.Split('\n')[0].Trim();
+        }
+        if (!string.IsNullOrEmpty(FindBox.Text))
+        {
+            RunSearch();
+        }
+    }
+
+    private void HideFindBar()
+    {
+        if (FindBar.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+        FindBar.Visibility = Visibility.Collapsed;
+        _searchCts?.Cancel();
+        _activeViewer?.ClearSearch();
+        _searchHits = [];
+        _activeHitIndex = -1;
+        FindCount.Text = "";
+    }
+
+    private void FindClose_Click(object sender, RoutedEventArgs e) => HideFindBar();
+    private void FindBox_TextChanged(object sender, TextChangedEventArgs e) => RunSearch();
+    private void MatchCase_Click(object sender, RoutedEventArgs e) => RunSearch();
+    private void FindNext_Click(object sender, RoutedEventArgs e) => StepHit(+1);
+    private void FindPrev_Click(object sender, RoutedEventArgs e) => StepHit(-1);
+
+    private void FindBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == VirtualKey.Enter)
+        {
+            bool shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+            StepHit(shift ? -1 : +1);
+            e.Handled = true;
+        }
+    }
+
+    private async void RunSearch()
+    {
+        _searchCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+
+        string query = FindBox.Text;
+        var viewer = _activeViewer;
+        var document = CurrentView?.Viewer.Document;
+
+        viewer?.ClearSearch();
+        var collected = new List<SearchHit>();
+        _searchHits = collected;
+        _activeHitIndex = -1;
+        FindCount.Text = "";
+
+        if (string.IsNullOrEmpty(query) || viewer is null || document is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.Delay(200, cts.Token); // debounce rapid typing
+            bool matchCase = MatchCaseButton.IsChecked == true;
+            var search = new DocumentSearch(document, query, matchCase, wholeWord: false);
+
+            await search.RunAsync(
+                onPageHits: hits => DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (_searchCts != cts)
+                    {
+                        return; // superseded by a newer query
+                    }
+                    collected.AddRange(hits);
+                    viewer.SetSearchResults(collected);
+                    if (_activeHitIndex < 0 && collected.Count > 0)
+                    {
+                        _activeHitIndex = 0;
+                        viewer.HighlightHit(collected[0]);
+                    }
+                    UpdateFindCount();
+                }),
+                onProgress: null,
+                cts.Token);
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (_searchCts == cts && collected.Count == 0)
+                {
+                    FindCount.Text = "No results";
+                }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded query; ignore.
+        }
+    }
+
+    private void StepHit(int delta)
+    {
+        int n = _searchHits.Count;
+        if (n == 0)
+        {
+            return;
+        }
+        _activeHitIndex = ((_activeHitIndex + delta) % n + n) % n;
+        _activeViewer?.HighlightHit(_searchHits[_activeHitIndex]);
+        UpdateFindCount();
+    }
+
+    private void UpdateFindCount()
+    {
+        int n = _searchHits.Count;
+        FindCount.Text = n == 0 ? "" : $"{_activeHitIndex + 1} of {n}";
+    }
+
+    private void CopySelection()
+    {
+        string text = _activeViewer?.SelectedText ?? "";
+        if (!string.IsNullOrEmpty(text))
+        {
+            var package = new DataPackage();
+            package.SetText(text);
+            Clipboard.SetContent(package);
         }
     }
 
