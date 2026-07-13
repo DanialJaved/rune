@@ -1,0 +1,21 @@
+<UserControl
+    x:Class="Rune.Controls.PdfViewer"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:win2d="using:Microsoft.Graphics.Canvas.UI.Xaml">
+
+    <ScrollViewer
+        x:Name="Scroller"
+        ZoomMode="Disabled"
+        HorizontalScrollBarVisibility="Auto"
+        VerticalScrollBarVisibility="Auto"
+        HorizontalScrollMode="Enabled"
+        VerticalScrollMode="Enabled"
+        ViewChanged="Scroller_ViewChanged"
+        SizeChanged="Scroller_SizeChanged">
+        <win2d:CanvasVirtualControl
+            x:Name="Canvas"
+            RegionsInvalidated="Canvas_RegionsInvalidated"
+            CreateResources="Canvas_CreateResources" />
+    </ScrollViewer>
+</UserControl>

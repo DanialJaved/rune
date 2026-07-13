@@ -63,7 +63,7 @@ function New-SimplePdf {
 
 # Small two-page smoke-test file.
 New-SimplePdf -Path (Join-Path $corpusDir 'hello.pdf') -Pages @(
-    , @('Hello from Folio!')
+    , @('Hello from Rune!')
     , @('Page two.')
 )
 
@@ -72,7 +72,7 @@ New-SimplePdf -Path (Join-Path $corpusDir 'hello.pdf') -Pages @(
 $book = for ($p = 1; $p -le 1000; $p++) {
     $pageLines = @("Page $p")
     for ($l = 1; $l -le 20; $l++) {
-        $pageLines += "This is line $l of page $p in the Folio test book, used to benchmark scrolling."
+        $pageLines += "This is line $l of page $p in the Rune test book, used to benchmark scrolling."
     }
     , $pageLines
 }

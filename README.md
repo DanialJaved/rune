@@ -1,8 +1,8 @@
-# Folio
+# Rune
 
 *A fast, free, modern PDF reader for Windows.* (Working title — final name TBD before v1.)
 
-Windows has never had a PDF reader that is fast **and** lightweight **and** modern-looking at the same time. SumatraPDF is legendary for speed but wears a 2009 UI; Edge and Acrobat are heavy; Okular's Windows port doesn't feel native. Folio aims to combine:
+Windows has never had a PDF reader that is fast **and** lightweight **and** modern-looking at the same time. SumatraPDF is legendary for speed but wears a 2009 UI; Edge and Acrobat are heavy; Okular's Windows port doesn't feel native. Rune aims to combine:
 
 - the **speed** of SumatraPDF / Zathura — instant startup, 60 fps scrolling, tiny footprint
 - the **clean modern UI** of macOS Preview / GNOME Papers — Fluent design, Mica, dark mode
@@ -20,11 +20,11 @@ Free and open source, in the spirit of SumatraPDF and Flow Launcher.
 
 ```
 src/
-  Folio.App/            WinUI 3 shell (views, view-models)
-  Folio.Engine/         document services, render scheduler, cache, search
-  Folio.PdfiumInterop/  P/Invoke bindings over pdfium.dll
+  Rune.App/            WinUI 3 shell (views, view-models)
+  Rune.Engine/         document services, render scheduler, cache, search
+  Rune.PdfiumInterop/  P/Invoke bindings over pdfium.dll
 tests/
-  Folio.Tests/          xUnit tests against a corpus of sample PDFs
+  Rune.Tests/          xUnit tests against a corpus of sample PDFs
 ```
 
 ## Building
@@ -32,10 +32,10 @@ tests/
 Requires the .NET 10 SDK on Windows. No Visual Studio needed:
 
 ```
-dotnet build src/Folio.App/Folio.App.csproj -p:Platform=x64
+dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
 ```
 
-The output `Folio.exe` is unpackaged and self-contained — just run it.
+The output `Rune.exe` is unpackaged and self-contained — just run it.
 
 ## Roadmap
 
