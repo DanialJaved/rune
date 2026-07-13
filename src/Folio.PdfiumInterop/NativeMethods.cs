@@ -72,6 +72,16 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFBitmap_Destroy(IntPtr bitmap);
 
+    // ---- Metadata (fpdf_doc.h) ----
+
+    /// <summary>Writes the metadata value as UTF-16LE (incl. terminator); returns byte length needed. Tags: Title, Author, Subject, Keywords, Creator, Producer, CreationDate, ModDate.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDF_GetMetaText(IntPtr document, [MarshalAs(UnmanagedType.LPStr)] string tag, byte[]? buffer, uint buflen);
+
+    /// <summary>PDF version ×10 (e.g. 17 for 1.7). Returns 0 on failure.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_GetFileVersion(IntPtr document, out int fileVersion);
+
     // ---- Outline / bookmarks (fpdf_doc.h) ----
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]

@@ -127,6 +127,51 @@ public sealed class PdfDocument : IDisposable
     }
 
     /// <summary>
+    /// Document information for the properties dialog: standard metadata
+    /// fields (empty entries omitted), PDF version, page count, file size.
+    /// </summary>
+    public IReadOnlyList<(string Name, string Value)> GetProperties()
+    {
+        var properties = new List<(string, string)>();
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+
+            foreach (string tag in (string[])["Title", "Author", "Subject", "Keywords", "Creator", "Producer", "CreationDate", "ModDate"])
+            {
+                string value = PdfiumNative.GetMetaText(_handle, tag);
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    properties.Add((tag, value));
+                }
+            }
+
+            int version = PdfiumNative.GetFileVersion(_handle);
+            if (version > 0)
+            {
+                properties.Add(("PDF version", $"{version / 10}.{version % 10}"));
+            }
+        }
+
+        properties.Add(("Pages", PageCount.ToString()));
+        try
+        {
+            long bytes = new FileInfo(FilePath).Length;
+            properties.Add(("File size", bytes switch
+            {
+                < 1024 => $"{bytes} B",
+                < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+                _ => $"{bytes / (1024.0 * 1024.0):0.#} MB",
+            }));
+        }
+        catch (IOException)
+        {
+            // File may have been moved since opening; size is optional.
+        }
+        return properties;
+    }
+
+    /// <summary>
     /// The document's table of contents, or an empty list if it has none.
     /// Guards against the cyclic/oversized bookmark trees malformed PDFs carry.
     /// </summary>

@@ -1,0 +1,63 @@
+<UserControl
+    x:Class="Folio.Controls.CommandPalette"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Folio.Controls"
+    Visibility="Collapsed">
+
+    <Border
+        MaxWidth="560"
+        MaxHeight="420"
+        Margin="0,8,0,0"
+        VerticalAlignment="Top"
+        HorizontalAlignment="Center"
+        CornerRadius="8"
+        BorderThickness="1"
+        BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"
+        Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+        Translation="0,0,32">
+        <Border.Shadow>
+            <ThemeShadow />
+        </Border.Shadow>
+        <Grid MinWidth="480">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <TextBox
+                x:Name="Input"
+                Grid.Row="0"
+                Margin="8"
+                PlaceholderText="Type a command or page number…"
+                TextChanged="Input_TextChanged"
+                KeyDown="Input_KeyDown" />
+
+            <ListView
+                x:Name="Results"
+                Grid.Row="1"
+                Margin="4,0,4,8"
+                SelectionMode="Single"
+                IsItemClickEnabled="True"
+                ItemClick="Results_ItemClick">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="controls:PaletteCommand">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{x:Bind Label}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Grid.Column="1"
+                                Text="{x:Bind Shortcut}"
+                                Style="{StaticResource CaptionTextBlockStyle}"
+                                Opacity="0.6"
+                                VerticalAlignment="Center" />
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+    </Border>
+</UserControl>

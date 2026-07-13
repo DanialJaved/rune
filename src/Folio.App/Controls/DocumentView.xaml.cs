@@ -28,7 +28,7 @@ public sealed partial class DocumentView : UserControl
     public string FilePath { get; }
     public string DisplayName => Path.GetFileName(FilePath);
     public PdfViewer Viewer => ViewerControl;
-    public bool IsLoaded => _loaded;
+    public bool IsDocumentLoaded => _loaded;
     public string? LoadError { get; private set; }
 
     public event EventHandler? Loaded2;

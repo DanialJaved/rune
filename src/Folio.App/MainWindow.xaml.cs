@@ -25,6 +25,9 @@ public sealed partial class MainWindow : Window
     private List<SearchHit> _searchHits = [];
     private int _activeHitIndex = -1;
 
+    private PrintService? _printService;
+    private DateTime _lastGPress = DateTime.MinValue; // vim "gg" sequence
+
     public MainWindow()
     {
         InitializeComponent();
@@ -34,11 +37,25 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
 
         _state = _store.Load();
+        ApplyTheme(_state.Settings.Theme);
+        NightButton.IsChecked = _state.Settings.NightMode;
+
         RegisterAccelerators();
+        ((UIElement)Content).KeyDown += Content_KeyDown;
         PopulateRecents();
 
         Activated += MainWindow_FirstActivated;
         Closed += MainWindow_Closed;
+    }
+
+    private void ApplyTheme(string theme)
+    {
+        ((FrameworkElement)Content).RequestedTheme = theme switch
+        {
+            "Light" => ElementTheme.Light,
+            "Dark" => ElementTheme.Dark,
+            _ => ElementTheme.Default,
+        };
     }
 
     // ---------------------------------------------------------------- lifecycle
@@ -57,6 +74,12 @@ public sealed partial class MainWindow : Window
 
     private async Task RestoreSessionAsync()
     {
+        if (!_state.Settings.RestoreSession)
+        {
+            UpdateStartPageVisibility();
+            return;
+        }
+
         _restoringSession = true;
         var paths = _state.Session.OpenPaths.Where(File.Exists).ToList();
         foreach (var path in paths)
@@ -101,13 +124,13 @@ public sealed partial class MainWindow : Window
 
     private void CaptureState(DocumentView view)
     {
-        if (!view.IsLoaded || view.LoadError is not null)
+        if (!view.IsDocumentLoaded || view.LoadError is not null)
         {
             return;
         }
         var viewer = view.Viewer;
         _state.Remember(view.FilePath, view.DisplayName,
-            viewer.CurrentPage, viewer.Zoom, viewer.Rotation, viewer.ScrollFraction);
+            viewer.CurrentPage, viewer.Zoom, viewer.ViewRotation, viewer.ScrollFraction);
     }
 
     // ---------------------------------------------------------------- tabs
@@ -117,6 +140,7 @@ public sealed partial class MainWindow : Window
         var view = new DocumentView(path);
         _pendingRestore[view] = restore;
         view.Viewer.LinkActivated += Viewer_LinkActivated;
+        view.Viewer.NightMode = _state.Settings.NightMode;
         view.Loaded2 += (_, _) => { if (view == CurrentView) { UpdateToolbarForActive(); } };
 
         var tab = new TabViewItem
@@ -271,13 +295,14 @@ public sealed partial class MainWindow : Window
     private void UpdateToolbarForActive()
     {
         var view = CurrentView;
-        bool ready = view is { IsLoaded: true, LoadError: null };
+        bool ready = view is { IsDocumentLoaded: true, LoadError: null };
         var viewer = ready ? view!.Viewer : null;
 
         foreach (var control in new Control[]
                  {
                      SidebarButton, PageBox, ZoomInButton, ZoomOutButton,
                      FitWidthButton, FitPageButton, RotateButton,
+                     NightButton, PrintButton,
                  })
         {
             control.IsEnabled = ready;
@@ -339,7 +364,7 @@ public sealed partial class MainWindow : Window
 
     private void SidebarButton_Click(object sender, RoutedEventArgs e)
     {
-        if (CurrentView is { IsLoaded: true } view)
+        if (CurrentView is { IsDocumentLoaded: true } view)
         {
             view.IsPaneOpen = !view.IsPaneOpen;
             SidebarButton.IsChecked = view.IsPaneOpen;
@@ -404,6 +429,185 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // ---------------------------------------------------------------- night / print / properties / settings
+
+    private void NightButton_Click(object sender, RoutedEventArgs e) => ToggleNightMode();
+
+    private void ToggleNightMode()
+    {
+        _state.Settings.NightMode = !_state.Settings.NightMode;
+        NightButton.IsChecked = _state.Settings.NightMode;
+        foreach (var view in AllDocumentViews())
+        {
+            view.Viewer.NightMode = _state.Settings.NightMode;
+        }
+        _store.Save(_state);
+    }
+
+    private IEnumerable<DocumentView> AllDocumentViews() =>
+        Tabs.TabItems.OfType<TabViewItem>().Select(t => t.Content).OfType<DocumentView>();
+
+    private void PrintButton_Click(object sender, RoutedEventArgs e) => _ = PrintAsync();
+
+    private async Task PrintAsync()
+    {
+        if (CurrentView is not { IsDocumentLoaded: true, LoadError: null } view || view.Viewer.Document is not { } document)
+        {
+            return;
+        }
+        if (!PrintService.IsSupported)
+        {
+            ShowError("Printing is not supported on this device.");
+            return;
+        }
+
+        try
+        {
+            _printService ??= new PrintService(WinRT.Interop.WindowNative.GetWindowHandle(this));
+            await _printService.ShowAsync(document, $"{view.DisplayName} — Folio");
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Printing failed: {ex.Message}");
+        }
+    }
+
+    private async Task ShowPropertiesAsync()
+    {
+        if (CurrentView is not { IsDocumentLoaded: true, LoadError: null } view || view.Viewer.Document is not { } document)
+        {
+            return;
+        }
+
+        var properties = await Task.Run(document.GetProperties);
+
+        var panel = new StackPanel { Spacing = 6, MinWidth = 360 };
+        foreach (var (name, value) in properties)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            row.Children.Add(new TextBlock { Text = name, Opacity = 0.6, MinWidth = 110 });
+            row.Children.Add(new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap, MaxWidth = 340, IsTextSelectionEnabled = true });
+            panel.Children.Add(row);
+        }
+
+        await new ContentDialog
+        {
+            Title = view.DisplayName,
+            Content = new ScrollViewer { Content = panel, MaxHeight = 420 },
+            CloseButtonText = "Close",
+            XamlRoot = Content.XamlRoot,
+        }.ShowAsync();
+    }
+
+    private async void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var themeBox = new ComboBox
+        {
+            ItemsSource = (string[])["System", "Light", "Dark"],
+            SelectedItem = _state.Settings.Theme,
+            MinWidth = 160,
+        };
+        var restoreCheck = new CheckBox { Content = "Reopen last session at startup", IsChecked = _state.Settings.RestoreSession };
+        var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
+
+        var panel = new StackPanel { Spacing = 12 };
+        panel.Children.Add(new TextBlock { Text = "Theme", Opacity = 0.7 });
+        panel.Children.Add(themeBox);
+        panel.Children.Add(restoreCheck);
+        panel.Children.Add(vimCheck);
+
+        var dialog = new ContentDialog
+        {
+            Title = "Settings",
+            Content = panel,
+            PrimaryButtonText = "Save",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
+            _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
+            _state.Settings.VimKeys = vimCheck.IsChecked == true;
+            ApplyTheme(_state.Settings.Theme);
+            _store.Save(_state);
+        }
+    }
+
+    // ---------------------------------------------------------------- command palette
+
+    private void ShowPalette()
+    {
+        var commands = new List<PaletteCommand>
+        {
+            new("Open file…", "Ctrl+O", () => OpenButton_Click(this, null!)),
+            new("Settings", "", () => SettingsButton_Click(this, null!)),
+        };
+
+        if (_activeViewer is { } viewer && CurrentView is { IsDocumentLoaded: true, LoadError: null })
+        {
+            commands.AddRange(
+            [
+                new("Find in document", "Ctrl+F", ShowFindBar),
+                new("Print", "Ctrl+P", () => _ = PrintAsync()),
+                new("Document properties", "Ctrl+D", () => _ = ShowPropertiesAsync()),
+                new("Toggle night mode", "Ctrl+I", ToggleNightMode),
+                new("Toggle sidebar", "F9", () => SidebarButton_Click(this, null!)),
+                new("Next page", "", () => viewer.GoToPage(viewer.CurrentPage + 1)),
+                new("Previous page", "", () => viewer.GoToPage(viewer.CurrentPage - 1)),
+                new("First page", "gg", () => viewer.GoToPage(0, recordHistory: true)),
+                new("Last page", "G", () => viewer.GoToPage(viewer.PageCount - 1, recordHistory: true)),
+                new("Zoom in", "Ctrl++", viewer.ZoomIn),
+                new("Zoom out", "Ctrl+-", viewer.ZoomOut),
+                new("Actual size", "Ctrl+1", () => viewer.SetZoom(1.0)),
+                new("Fit width", "Ctrl+2", () => SetFitMode(FitMode.FitWidth)),
+                new("Fit page", "Ctrl+0", () => SetFitMode(FitMode.FitPage)),
+                new("Rotate clockwise", "Ctrl+R", viewer.RotateClockwise),
+                new("Close tab", "Ctrl+W", CloseCurrentTab),
+            ]);
+        }
+
+        foreach (var recent in _state.Recents.Take(8))
+        {
+            string path = recent.Path;
+            commands.Add(new PaletteCommand($"Open recent: {recent.DisplayName}", "", () => OpenOrActivate(path)));
+        }
+
+        Palette.Show(commands, pageNumber =>
+            _activeViewer is { PageCount: > 0 } v && pageNumber >= 1 && pageNumber <= v.PageCount
+                ? new PaletteCommand($"Go to page {pageNumber}", "", () => v.GoToPage(pageNumber - 1, recordHistory: true))
+                : null);
+    }
+
+    // ---------------------------------------------------------------- drag & drop
+
+    private void RootGrid_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = DataPackageOperation.Link;
+        }
+    }
+
+    private async void RootGrid_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.DataView.Contains(StandardDataFormats.StorageItems))
+        {
+            return;
+        }
+        var items = await e.DataView.GetStorageItemsAsync();
+        foreach (var item in items)
+        {
+            if (item is Windows.Storage.StorageFile file &&
+                file.FileType.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            {
+                OpenOrActivate(file.Path);
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- recents
 
     private void PopulateRecents()
@@ -428,22 +632,106 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.Right, VirtualKeyModifiers.Menu, () => _activeViewer?.GoForward());
         AddAccelerator(VirtualKey.W, VirtualKeyModifiers.Control, CloseCurrentTab);
         AddAccelerator(VirtualKey.F, VirtualKeyModifiers.Control, ShowFindBar);
-        AddAccelerator(VirtualKey.C, VirtualKeyModifiers.Control, CopySelection);
-        AddAccelerator(VirtualKey.Escape, VirtualKeyModifiers.None, HideFindBar);
+        AddAccelerator(VirtualKey.F3, VirtualKeyModifiers.None, () => StepHit(+1));
+        AddAccelerator(VirtualKey.F3, VirtualKeyModifiers.Shift, () => StepHit(-1));
+        AddAccelerator(VirtualKey.I, VirtualKeyModifiers.Control, ToggleNightMode);
+        AddAccelerator(VirtualKey.P, VirtualKeyModifiers.Control, () => _ = PrintAsync());
+        AddAccelerator(VirtualKey.D, VirtualKeyModifiers.Control, () => _ = ShowPropertiesAsync());
+
+        // Available even with no document open.
+        AddAccelerator(VirtualKey.K, VirtualKeyModifiers.Control, ShowPalette, requiresDocument: false);
+        AddAccelerator(VirtualKey.Escape, VirtualKeyModifiers.None, () =>
+        {
+            if (Palette.IsOpen)
+            {
+                Palette.Hide();
+            }
+            else
+            {
+                HideFindBar();
+            }
+        }, requiresDocument: false);
+
+        // Ctrl+C must fall through to focused text boxes (find box, page box).
+        AddAccelerator(VirtualKey.C, VirtualKeyModifiers.Control, CopySelection, skipWhenTextInputFocused: true);
     }
 
-    private void AddAccelerator(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
+    private void AddAccelerator(
+        VirtualKey key, VirtualKeyModifiers modifiers, Action action,
+        bool requiresDocument = true, bool skipWhenTextInputFocused = false)
     {
         var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
         accelerator.Invoked += (_, args) =>
         {
-            if (_activeViewer is not null)
+            if (skipWhenTextInputFocused && IsTextInputFocused())
+            {
+                return; // leave args.Handled false so the text box gets the key
+            }
+            if (!requiresDocument || _activeViewer is not null)
             {
                 action();
                 args.Handled = true;
             }
         };
         ((UIElement)Content).KeyboardAccelerators.Add(accelerator);
+    }
+
+    private bool IsTextInputFocused() =>
+        FocusManager.GetFocusedElement(Content.XamlRoot) is TextBox or NumberBox or AutoSuggestBox or PasswordBox;
+
+    // ---------------------------------------------------------------- vim-style keys
+
+    private void Content_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Handled || !_state.Settings.VimKeys || _activeViewer is null ||
+            Palette.IsOpen || IsTextInputFocused())
+        {
+            return;
+        }
+
+        bool shift = Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(VirtualKey.Shift)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+        switch (e.Key)
+        {
+            case VirtualKey.J:
+                _activeViewer.ScrollByLines(+3);
+                break;
+            case VirtualKey.K:
+                _activeViewer.ScrollByLines(-3);
+                break;
+            case VirtualKey.H:
+                _activeViewer.ScrollHorizontally(-1);
+                break;
+            case VirtualKey.L:
+                _activeViewer.ScrollHorizontally(+1);
+                break;
+            case VirtualKey.N:
+                StepHit(shift ? -1 : +1);
+                break;
+            case VirtualKey.Space:
+                _activeViewer.ScrollByViewport(shift ? -0.9 : +0.9);
+                break;
+            case VirtualKey.G when shift:
+                _activeViewer.GoToPage(_activeViewer.PageCount - 1, recordHistory: true);
+                break;
+            case VirtualKey.G:
+                // "gg" = go to first page (two presses within 500 ms).
+                if ((DateTime.UtcNow - _lastGPress).TotalMilliseconds < 500)
+                {
+                    _activeViewer.GoToPage(0, recordHistory: true);
+                    _lastGPress = DateTime.MinValue;
+                }
+                else
+                {
+                    _lastGPress = DateTime.UtcNow;
+                }
+                break;
+            default:
+                return;
+        }
+        e.Handled = true;
     }
 
     private void CloseCurrentTab()
@@ -458,7 +746,7 @@ public sealed partial class MainWindow : Window
 
     private void ShowFindBar()
     {
-        if (CurrentView is not { IsLoaded: true })
+        if (CurrentView is not { IsDocumentLoaded: true })
         {
             return;
         }

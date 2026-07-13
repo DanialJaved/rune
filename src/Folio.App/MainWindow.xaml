@@ -10,7 +10,11 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid>
+    <Grid
+        x:Name="RootGrid"
+        AllowDrop="True"
+        DragOver="RootGrid_DragOver"
+        Drop="RootGrid_Drop">
         <Grid.RowDefinitions>
             <RowDefinition Height="36" />
             <RowDefinition Height="Auto" />
@@ -118,6 +122,18 @@
                     <KeyboardAccelerator Modifiers="Control" Key="R" />
                 </Button.KeyboardAccelerators>
             </Button>
+            <ToggleButton x:Name="NightButton" Click="NightButton_Click" IsEnabled="False" ToolTipService.ToolTip="Night mode — invert page colors (Ctrl+I)">
+                <FontIcon Glyph="&#xE708;" FontSize="14" />
+            </ToggleButton>
+
+            <AppBarSeparator />
+
+            <Button x:Name="PrintButton" Click="PrintButton_Click" IsEnabled="False" ToolTipService.ToolTip="Print (Ctrl+P)">
+                <FontIcon Glyph="&#xE749;" FontSize="14" />
+            </Button>
+            <Button x:Name="SettingsButton" Click="SettingsButton_Click" ToolTipService.ToolTip="Settings">
+                <FontIcon Glyph="&#xE713;" FontSize="14" />
+            </Button>
         </StackPanel>
 
         <Grid Grid.Row="2">
@@ -220,6 +236,8 @@
                 VerticalAlignment="Bottom"
                 Margin="24"
                 IsOpen="False" />
+
+            <controls:CommandPalette x:Name="Palette" />
         </Grid>
     </Grid>
 </Window>
