@@ -36,6 +36,12 @@ public sealed class AppSettings
 
     /// <summary>Enable j/k/g/G-style navigation keys.</summary>
     public bool VimKeys { get; set; } = true;
+
+    /// <summary>Check GitHub for a newer release once per launch (≥24h apart).</summary>
+    public bool AutoCheckUpdates { get; set; } = true;
+
+    /// <summary>Last time an update check ran, to rate-limit automatic checks.</summary>
+    public DateTime LastUpdateCheckUtc { get; set; } = DateTime.MinValue;
 }
 
 /// <summary>The whole persisted app state (one JSON file).</summary>

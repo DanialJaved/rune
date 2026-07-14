@@ -122,6 +122,7 @@ public sealed partial class MainWindow : Window
         }
         _sessionRestored = true;
         await RestoreSessionAsync();
+        await CheckForUpdatesAsync(userInitiated: false);
     }
 
     private async Task RestoreSessionAsync()
@@ -711,12 +712,24 @@ public sealed partial class MainWindow : Window
         };
         var restoreCheck = new CheckBox { Content = "Reopen last session at startup", IsChecked = _state.Settings.RestoreSession };
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
+        var updateCheck = new CheckBox { Content = "Check for updates automatically", IsChecked = _state.Settings.AutoCheckUpdates };
+
+        var checkNowButton = new Button { Content = "Check for updates now" };
+        checkNowButton.Click += async (_, _) => await CheckForUpdatesAsync(userInitiated: true);
 
         var panel = new StackPanel { Spacing = 12 };
         panel.Children.Add(new TextBlock { Text = "Theme", Opacity = 0.7 });
         panel.Children.Add(themeBox);
         panel.Children.Add(restoreCheck);
         panel.Children.Add(vimCheck);
+        panel.Children.Add(updateCheck);
+        panel.Children.Add(checkNowButton);
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Rune {UpdateService.CurrentVersion.ToString(3)}",
+            Opacity = 0.5,
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+        });
 
         var dialog = new ContentDialog
         {
@@ -733,9 +746,104 @@ public sealed partial class MainWindow : Window
             _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
             _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
             _state.Settings.VimKeys = vimCheck.IsChecked == true;
+            _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
             ApplyTheme(_state.Settings.Theme);
             _store.Save(_state);
         }
+    }
+
+    // ---------------------------------------------------------------- updates
+
+    private readonly UpdateService _updater = new();
+
+    /// <summary>Runs on launch (rate-limited) and from the Settings/palette "check now".</summary>
+    private async Task CheckForUpdatesAsync(bool userInitiated)
+    {
+        if (!userInitiated)
+        {
+            if (!_state.Settings.AutoCheckUpdates ||
+                (DateTime.UtcNow - _state.Settings.LastUpdateCheckUtc) < TimeSpan.FromHours(24))
+            {
+                return;
+            }
+        }
+
+        _state.Settings.LastUpdateCheckUtc = DateTime.UtcNow;
+        _store.Save(_state);
+
+        var update = await _updater.CheckAsync();
+        if (update is null)
+        {
+            if (userInitiated)
+            {
+                await new ContentDialog
+                {
+                    Title = "You're up to date",
+                    Content = $"Rune {UpdateService.CurrentVersion.ToString(3)} is the latest version.",
+                    CloseButtonText = "OK",
+                    XamlRoot = Content.XamlRoot,
+                }.ShowAsync();
+            }
+            return;
+        }
+
+        await ShowUpdateDialogAsync(update);
+    }
+
+    private async Task ShowUpdateDialogAsync(UpdateInfo update)
+    {
+        bool portable = UpdateService.IsPortable() && update.ZipUrl is not null;
+
+        var notes = new TextBlock
+        {
+            Text = string.IsNullOrWhiteSpace(update.Notes) ? "" : update.Notes,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var dialog = new ContentDialog
+        {
+            Title = $"Update available — Rune {update.Version.ToString(3)}",
+            Content = new ScrollViewer { Content = notes, MaxHeight = 320, MinWidth = 420 },
+            PrimaryButtonText = portable ? "Download and install" : "Open releases page",
+            CloseButtonText = "Later",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        if (portable)
+        {
+            bool ok = await _updater.DownloadAndApplyAsync(update);
+            if (ok)
+            {
+                _closeApproved = true;
+                Close(); // apply-update.cmd waits for exit, swaps files, relaunches
+            }
+            else
+            {
+                await OpenReleasesPageFallbackAsync("Rune couldn't update in place (its folder may be read-only). Opening the releases page instead.");
+            }
+        }
+        else
+        {
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(update.HtmlUrl));
+        }
+    }
+
+    private async Task OpenReleasesPageFallbackAsync(string message)
+    {
+        await new ContentDialog
+        {
+            Title = "Manual update needed",
+            Content = message,
+            PrimaryButtonText = "Open releases page",
+            CloseButtonText = "Cancel",
+            XamlRoot = Content.XamlRoot,
+        }.ShowAsync();
+        await Windows.System.Launcher.LaunchUriAsync(new Uri(_updater.ReleasesPageUrl));
     }
 
     // ---------------------------------------------------------------- command palette
@@ -746,6 +854,7 @@ public sealed partial class MainWindow : Window
         {
             new("Open file…", "Ctrl+O", () => OpenButton_Click(this, null!)),
             new("Settings", "", () => SettingsButton_Click(this, null!)),
+            new("Check for updates", "", () => _ = CheckForUpdatesAsync(userInitiated: true)),
         };
 
         if (_activeViewer is { } viewer && CurrentView is { IsDocumentLoaded: true, LoadError: null })
