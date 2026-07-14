@@ -86,6 +86,12 @@ public sealed partial class PdfViewer : UserControl
     /// <summary>Raised when the user clicks an external (URI) link. The shell decides whether to open it.</summary>
     public event EventHandler<string>? LinkActivated;
 
+    /// <summary>Raised after any annotation edit (dirty state changed).</summary>
+    public event EventHandler? DocumentEdited;
+
+    /// <summary>Raised when the user asks for a note at (pageIndex, x, y in top-left page points).</summary>
+    public event EventHandler<(int PageIndex, double X, double Y)>? NoteRequested;
+
     public int CurrentPage => _currentPage;
     public double Zoom => _zoom;
     public int ViewRotation => _rotation;
@@ -136,6 +142,7 @@ public sealed partial class PdfViewer : UserControl
         Canvas.PointerMoved += Canvas_PointerMoved;
         Canvas.PointerPressed += Canvas_PointerPressed;
         Canvas.PointerReleased += Canvas_PointerReleased;
+        Canvas.RightTapped += Canvas_RightTapped;
         Canvas.PointerExited += (_, _) => SetLinkCursor(false);
         ActualThemeChanged += (_, _) => Canvas.Invalidate();
         Unloaded += (_, _) => _scheduler.Dispose();
@@ -502,6 +509,157 @@ public sealed partial class PdfViewer : UserControl
     // Ctrl+wheel, touchpad pinch, and touch pinch are all handled natively by
     // the ScrollViewer (ZoomMode=Enabled) and folded into the real zoom by
     // RebaseZoom — no manual wheel handling needed.
+
+    // ---------------------------------------------------------------- annotations
+
+    /// <summary>Applies a markup annotation to the current text selection.</summary>
+    public void MarkupSelection(MarkupKind kind)
+    {
+        if (_document is null || _selection is not { Count: > 0 } selection || _rotation != 0)
+        {
+            return;
+        }
+
+        // Semi-transparent yellow for highlights; solid red for line markup.
+        if (kind == MarkupKind.Highlight)
+        {
+            _document.AddMarkup(selection.PageIndex, kind, selection.Rects, 255, 210, 0, 102);
+        }
+        else
+        {
+            _document.AddMarkup(selection.PageIndex, kind, selection.Rects, 220, 30, 30, 255);
+        }
+
+        int page = selection.PageIndex;
+        ClearSelectionState();
+        InvalidatePage(page);
+        DocumentEdited?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Adds a note (already collected by the shell) and refreshes the page.</summary>
+    public void AddNote(int pageIndex, double x, double y, string text)
+    {
+        if (_document is null)
+        {
+            return;
+        }
+        _document.AddNote(pageIndex, x, y, text);
+        InvalidatePage(pageIndex);
+        DocumentEdited?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ClearSelectionState()
+    {
+        _selection = null;
+        _selectionPage = -1;
+        _selectionAnchorChar = -1;
+        _isSelecting = false;
+    }
+
+    /// <summary>Drops one page's cached tiles + preview and re-renders it (after an edit).</summary>
+    public void InvalidatePage(int pageIndex)
+    {
+        foreach (var key in _tiles.Keys.Where(k => k.PageIndex == pageIndex).ToList())
+        {
+            var (bitmap, node) = _tiles[key];
+            _tileBytes -= (long)bitmap.SizeInPixels.Width * bitmap.SizeInPixels.Height * 4;
+            _tileLru.Remove(node);
+            _tiles.Remove(key);
+            bitmap.Dispose();
+        }
+        if (_previews.Remove(pageIndex, out var preview))
+        {
+            _previewLru.Remove(pageIndex);
+            preview.Dispose();
+        }
+
+        if (_layout is not null)
+        {
+            var rect = _layout.GetPageRect(pageIndex);
+            Canvas.Invalidate(new Rect(rect.X, rect.Y, rect.Width, rect.Height));
+        }
+        UpdateDesiredTiles();
+    }
+
+    private void Canvas_RightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        if (_document is null || _layout is null)
+        {
+            return;
+        }
+
+        var position = e.GetPosition(Canvas);
+        int page = _layout.PageAt(position.Y);
+        var (localX, localY) = ToPageLocal(page, new Point(position.X, position.Y));
+
+        var menu = new MenuFlyout();
+
+        bool annotationsAllowed = _rotation == 0;
+        if (annotationsAllowed && _selection is { Count: > 0 } sel && sel.PageIndex == page)
+        {
+            AddMenuItem(menu, "Highlight", Symbol.Highlight, () => MarkupSelection(MarkupKind.Highlight));
+            AddMenuItem(menu, "Underline", Symbol.Underline, () => MarkupSelection(MarkupKind.Underline));
+            AddMenuItem(menu, "Strikeout", Symbol.Font, () => MarkupSelection(MarkupKind.Strikeout));
+        }
+        if (HasSelection)
+        {
+            AddMenuItem(menu, "Copy", Symbol.Copy, CopySelectionToClipboard);
+        }
+
+        if (annotationsAllowed)
+        {
+            if (menu.Items.Count > 0)
+            {
+                menu.Items.Add(new MenuFlyoutSeparator());
+            }
+            AddMenuItem(menu, "Add note here", Symbol.Comment,
+                () => NoteRequested?.Invoke(this, (page, localX, localY)));
+
+            // Offer deletion when the click lands on an annotation.
+            var hit = _document.GetAnnotations(page)
+                .LastOrDefault(annot => annot.Subtype != 2 /* links aren't editable */ &&
+                                        localX >= annot.X - 4 && localX <= annot.X + annot.Width + 4 &&
+                                        localY >= annot.Y - 4 && localY <= annot.Y + annot.Height + 4);
+            if (hit is not null)
+            {
+                AddMenuItem(menu, hit.IsNote ? $"Delete note{FormatNotePreview(hit.Contents)}" : "Delete annotation",
+                    Symbol.Delete, () =>
+                    {
+                        if (_document.RemoveAnnotation(page, hit.Index))
+                        {
+                            InvalidatePage(page);
+                            DocumentEdited?.Invoke(this, EventArgs.Empty);
+                        }
+                    });
+            }
+        }
+
+        if (menu.Items.Count > 0)
+        {
+            menu.ShowAt(Canvas, position);
+            e.Handled = true;
+        }
+    }
+
+    private static string FormatNotePreview(string contents) =>
+        string.IsNullOrWhiteSpace(contents) ? "" : $" (“{contents[..Math.Min(24, contents.Length)]}…”)";
+
+    private static void AddMenuItem(MenuFlyout menu, string text, Symbol icon, Action action)
+    {
+        var item = new MenuFlyoutItem { Text = text, Icon = new SymbolIcon(icon) };
+        item.Click += (_, _) => action();
+        menu.Items.Add(item);
+    }
+
+    private void CopySelectionToClipboard()
+    {
+        if (HasSelection)
+        {
+            var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            package.SetText(SelectedText);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+        }
+    }
 
     private void Canvas_PointerMoved(object sender, PointerRoutedEventArgs e)
     {

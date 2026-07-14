@@ -48,6 +48,47 @@ public sealed partial class MainWindow : Window
 
         Activated += MainWindow_FirstActivated;
         Closed += MainWindow_Closed;
+        AppWindow.Closing += AppWindow_Closing;
+    }
+
+    private bool _closeApproved;
+
+    private async void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
+    {
+        if (_closeApproved)
+        {
+            return;
+        }
+        var dirty = AllDocumentViews().Where(v => v.IsDirty).ToList();
+        if (dirty.Count == 0)
+        {
+            return;
+        }
+
+        args.Cancel = true; // must be set before any await
+        var choice = await PromptSaveChangesAsync(
+            dirty.Count == 1 ? dirty[0].DisplayName : $"{dirty.Count} documents");
+        if (choice is null)
+        {
+            return;
+        }
+        if (choice == true)
+        {
+            foreach (var view in dirty)
+            {
+                try
+                {
+                    await view.SaveInPlaceAsync();
+                }
+                catch (Exception ex)
+                {
+                    ShowError($"Save failed: {ex.Message}");
+                    return;
+                }
+            }
+        }
+        _closeApproved = true;
+        Close();
     }
 
     private void ApplyTheme(string theme)
@@ -152,6 +193,8 @@ public sealed partial class MainWindow : Window
         _pendingRestore[view] = restore;
         view.Viewer.LinkActivated += Viewer_LinkActivated;
         view.Viewer.NightMode = _state.Settings.NightMode;
+        view.Viewer.DocumentEdited += (_, _) => UpdateDirtyIndicator(view);
+        view.Viewer.NoteRequested += Viewer_NoteRequested;
         view.Loaded2 += (_, _) => { if (view == CurrentView) { UpdateToolbarForActive(); } };
 
         // Tabs are strip-only (they live in the title bar); the view itself
@@ -219,7 +262,54 @@ public sealed partial class MainWindow : Window
 
     private void Tabs_AddTabButtonClick(TabView sender, object args) => OpenButton_Click(sender, null!);
 
-    private void Tabs_TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args) => CloseTab(args.Tab);
+    private async void Tabs_TabCloseRequested(TabView sender, TabViewTabCloseRequestedEventArgs args)
+        => await CloseTabWithPromptAsync(args.Tab);
+
+    private async Task CloseTabWithPromptAsync(TabViewItem tab)
+    {
+        if (tab.Tag is DocumentView { IsDirty: true } dirtyView)
+        {
+            var choice = await PromptSaveChangesAsync(dirtyView.DisplayName);
+            if (choice is null)
+            {
+                return; // cancelled
+            }
+            if (choice == true)
+            {
+                try
+                {
+                    await dirtyView.SaveInPlaceAsync();
+                }
+                catch (Exception ex)
+                {
+                    ShowError($"Save failed: {ex.Message}");
+                    return;
+                }
+            }
+        }
+        CloseTab(tab);
+    }
+
+    /// <summary>true = save, false = discard, null = cancel.</summary>
+    private async Task<bool?> PromptSaveChangesAsync(string name)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = $"Save changes to {name}?",
+            Content = "The document has unsaved annotations.",
+            PrimaryButtonText = "Save",
+            SecondaryButtonText = "Don't save",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+        return await dialog.ShowAsync() switch
+        {
+            ContentDialogResult.Primary => true,
+            ContentDialogResult.Secondary => false,
+            _ => null,
+        };
+    }
 
     private void CloseTab(TabViewItem tab)
     {
@@ -227,6 +317,7 @@ public sealed partial class MainWindow : Window
         {
             CaptureState(view);
             view.Viewer.LinkActivated -= Viewer_LinkActivated;
+            view.Viewer.NoteRequested -= Viewer_NoteRequested;
             view.Close();
             _pendingRestore.Remove(view);
         }
@@ -441,6 +532,105 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // ---------------------------------------------------------------- annotations & save
+
+    private void UpdateDirtyIndicator(DocumentView view)
+    {
+        foreach (var obj in Tabs.TabItems)
+        {
+            if (obj is TabViewItem { Tag: DocumentView v } tab && v == view)
+            {
+                tab.Header = view.IsDirty ? $"{view.DisplayName} •" : view.DisplayName;
+                return;
+            }
+        }
+    }
+
+    private async void Viewer_NoteRequested(object? sender, (int PageIndex, double X, double Y) at)
+    {
+        if (CurrentView is not { } view || sender != view.Viewer)
+        {
+            return;
+        }
+
+        var box = new TextBox
+        {
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 100,
+            MinWidth = 360,
+            PlaceholderText = "Note text…",
+        };
+        var dialog = new ContentDialog
+        {
+            Title = "Add note",
+            Content = box,
+            PrimaryButtonText = "Add",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(box.Text))
+        {
+            view.Viewer.AddNote(at.PageIndex, at.X, at.Y, box.Text.Trim());
+        }
+    }
+
+    private async Task SaveActiveAsync()
+    {
+        if (CurrentView is not { IsDirty: true } view)
+        {
+            return;
+        }
+        try
+        {
+            await view.SaveInPlaceAsync();
+            UpdateDirtyIndicator(view);
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Save failed: {ex.Message}");
+        }
+    }
+
+    private async Task SaveAsActiveAsync()
+    {
+        if (CurrentView is not { IsDocumentLoaded: true, LoadError: null } view || view.Viewer.Document is not { } document)
+        {
+            return;
+        }
+
+        var picker = new FileSavePicker
+        {
+            SuggestedFileName = Path.GetFileNameWithoutExtension(view.FilePath),
+        };
+        picker.FileTypeChoices.Add("PDF document", [".pdf"]);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+
+        var file = await picker.PickSaveFileAsync();
+        if (file is null)
+        {
+            return;
+        }
+
+        if (string.Equals(file.Path, view.FilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            await SaveActiveAsync(); // picked the same file: in-place save
+            return;
+        }
+
+        try
+        {
+            await Task.Run(() => document.SaveAs(file.Path));
+            OpenOrActivate(file.Path);
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Save As failed: {ex.Message}");
+        }
+    }
+
     // ---------------------------------------------------------------- night / print / properties / settings
 
     private void NightButton_Click(object sender, RoutedEventArgs e) => ToggleNightMode();
@@ -563,6 +753,9 @@ public sealed partial class MainWindow : Window
             commands.AddRange(
             [
                 new("Find in document", "Ctrl+F", ShowFindBar),
+                new("Highlight selection", "Ctrl+H", () => viewer.MarkupSelection(MarkupKind.Highlight)),
+                new("Save", "Ctrl+S", () => _ = SaveActiveAsync()),
+                new("Save As…", "Ctrl+Shift+S", () => _ = SaveAsActiveAsync()),
                 new("Print", "Ctrl+P", () => _ = PrintAsync()),
                 new("Document properties", "Ctrl+D", () => _ = ShowPropertiesAsync()),
                 new("Toggle night mode", "Ctrl+I", ToggleNightMode),
@@ -649,6 +842,9 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.I, VirtualKeyModifiers.Control, ToggleNightMode);
         AddAccelerator(VirtualKey.P, VirtualKeyModifiers.Control, () => _ = PrintAsync());
         AddAccelerator(VirtualKey.D, VirtualKeyModifiers.Control, () => _ = ShowPropertiesAsync());
+        AddAccelerator(VirtualKey.H, VirtualKeyModifiers.Control, () => _activeViewer?.MarkupSelection(MarkupKind.Highlight));
+        AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control, () => _ = SaveActiveAsync());
+        AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => _ = SaveAsActiveAsync());
 
         // Available even with no document open.
         AddAccelerator(VirtualKey.K, VirtualKeyModifiers.Control, ShowPalette, requiresDocument: false);

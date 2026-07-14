@@ -12,6 +12,110 @@ public static class PdfiumNative
     public static IntPtr LoadCustomDocument(FileAccessAdapter fileAccess, string? password)
         => NativeMethods.FPDF_LoadCustomDocument(fileAccess.NativePointer, password);
 
+    // ---- Annotations ----
+
+    public const int AnnotText = NativeMethods.FPDF_ANNOT_SUBTYPE_TEXT;
+    public const int AnnotHighlight = NativeMethods.FPDF_ANNOT_SUBTYPE_HIGHLIGHT;
+    public const int AnnotUnderline = NativeMethods.FPDF_ANNOT_SUBTYPE_UNDERLINE;
+    public const int AnnotStrikeout = NativeMethods.FPDF_ANNOT_SUBTYPE_STRIKEOUT;
+
+    public static IntPtr CreateAnnot(IntPtr page, int subtype) => NativeMethods.FPDFPage_CreateAnnot(page, subtype);
+
+    public static int GetAnnotCount(IntPtr page) => NativeMethods.FPDFPage_GetAnnotCount(page);
+
+    public static IntPtr GetAnnot(IntPtr page, int index) => NativeMethods.FPDFPage_GetAnnot(page, index);
+
+    public static bool RemoveAnnot(IntPtr page, int index) => NativeMethods.FPDFPage_RemoveAnnot(page, index) != 0;
+
+    public static void CloseAnnot(IntPtr annot) => NativeMethods.FPDFPage_CloseAnnot(annot);
+
+    public static int GetAnnotSubtype(IntPtr annot) => NativeMethods.FPDFAnnot_GetSubtype(annot);
+
+    /// <summary>Rect in PDF page coordinates (bottom-left origin).</summary>
+    public static bool SetAnnotRect(IntPtr annot, float left, float bottom, float right, float top)
+    {
+        var rect = new NativeMethods.FS_RECTF { Left = left, Bottom = bottom, Right = right, Top = top };
+        return NativeMethods.FPDFAnnot_SetRect(annot, ref rect) != 0;
+    }
+
+    public static bool GetAnnotRect(IntPtr annot, out float left, out float top, out float right, out float bottom)
+    {
+        if (NativeMethods.FPDFAnnot_GetRect(annot, out var rect) != 0)
+        {
+            left = rect.Left;
+            top = rect.Top;
+            right = rect.Right;
+            bottom = rect.Bottom;
+            return true;
+        }
+        left = top = right = bottom = 0;
+        return false;
+    }
+
+    /// <summary>Adds one markup quad (PDF page coords): corners UL, UR, LL, LR.</summary>
+    public static bool AppendQuad(IntPtr annot, float left, float bottom, float right, float top)
+    {
+        var quad = new NativeMethods.FS_QUADPOINTSF
+        {
+            X1 = left,  Y1 = top,
+            X2 = right, Y2 = top,
+            X3 = left,  Y3 = bottom,
+            X4 = right, Y4 = bottom,
+        };
+        return NativeMethods.FPDFAnnot_AppendAttachmentPoints(annot, ref quad) != 0;
+    }
+
+    public static bool SetAnnotColor(IntPtr annot, byte r, byte g, byte b, byte a)
+        => NativeMethods.FPDFAnnot_SetColor(annot, 0, r, g, b, a) != 0;
+
+    public static bool SetAnnotString(IntPtr annot, string key, string value)
+        => NativeMethods.FPDFAnnot_SetStringValue(annot, key, value) != 0;
+
+    public static string GetAnnotString(IntPtr annot, string key)
+    {
+        uint bytes = NativeMethods.FPDFAnnot_GetStringValue(annot, key, null, 0);
+        return ReadUtf16(bytes, buf => NativeMethods.FPDFAnnot_GetStringValue(annot, key, buf, (uint)buf.Length));
+    }
+
+    public static void SetAnnotPrintFlag(IntPtr annot)
+        => NativeMethods.FPDFAnnot_SetFlags(annot, NativeMethods.FPDF_ANNOT_FLAG_PRINT);
+
+    // ---- Saving ----
+
+    /// <summary>Writes a full (non-incremental) copy of the document to the stream.</summary>
+    public static bool SaveCopy(IntPtr document, Stream output)
+    {
+        int WriteBlock(IntPtr pThis, IntPtr data, uint size)
+        {
+            try
+            {
+                if (size > 0)
+                {
+                    var buffer = new byte[size];
+                    Marshal.Copy(data, buffer, 0, (int)size);
+                    output.Write(buffer, 0, (int)size);
+                }
+                return 1;
+            }
+            catch
+            {
+                return 0; // never let an exception cross the native boundary
+            }
+        }
+
+        // Delegate + struct only need to live for the duration of this call —
+        // FPDF_SaveAsCopy is synchronous.
+        NativeMethods.WriteBlockDelegate callback = WriteBlock;
+        var fileWrite = new NativeMethods.FPDF_FILEWRITE
+        {
+            Version = 1,
+            WriteBlock = Marshal.GetFunctionPointerForDelegate(callback),
+        };
+        bool ok = NativeMethods.FPDF_SaveAsCopy(document, ref fileWrite, NativeMethods.FPDF_SAVE_NO_INCREMENTAL) != 0;
+        GC.KeepAlive(callback);
+        return ok;
+    }
+
     public static void CloseDocument(IntPtr document) => NativeMethods.FPDF_CloseDocument(document);
 
     public static PdfiumException LastError() => PdfiumException.FromLastError();
