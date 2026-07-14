@@ -27,9 +27,12 @@ Windows never had a PDF reader that is fast **and** lightweight **and** modern-l
 - Zoom 10–640% at the cursor, fit-width / fit-page, rotation
 - Thumbnails + table-of-contents sidebar, internal & web links, back/forward history
 - Text selection & copy, find-in-document with highlight-all and hit stepping
+- **Annotations**: highlight, underline, strikeout from a selection, plus sticky notes — saved as standard PDF annotations any reader can see (`Ctrl+H`, right-click menu, `Ctrl+S` / `Ctrl+Shift+S`)
 - **Night mode**: GPU-inverted page colors for dark-room reading (`Ctrl+I`)
 - Command palette (`Ctrl+K`) with fuzzy filtering and go-to-page
 - Session restore: reopens your tabs at the exact scroll position
+- Pinch-to-zoom (touch/touchpad) and `Ctrl`+scroll, zoom at the cursor
+- **Self-updating**: checks GitHub for new releases and updates in place (portable build; toggle in Settings)
 - Printing with live preview and page ranges
 - Opens damaged PDFs gracefully; 4 GB-file streaming without loading into memory
 
@@ -45,9 +48,10 @@ Windows never had a PDF reader that is fast **and** lightweight **and** modern-l
 | First / last page | `gg` / `G` |
 | Back / forward | `Alt+←` / `Alt+→` |
 | Night mode / sidebar / rotate | `Ctrl+I` / `F9` / `Ctrl+R` |
+| Highlight selection / save / save as | `Ctrl+H` / `Ctrl+S` / `Ctrl+Shift+S` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
 
-Vim-style keys can be disabled in Settings.
+Vim-style keys can be disabled in Settings. Right-click a selection for underline/strikeout, or anywhere to add a note.
 
 ## Install
 
@@ -62,7 +66,9 @@ Add-AppxPackage -Path Rune.App_x.y.z.0_x64.msix
 
 Then set Rune as your default PDF handler in Settings → Apps → Default apps. (A store-signed package is planned so this step disappears.)
 
-> v0.1 packages are not yet size-optimized — the zip carries the full self-contained .NET + Windows App SDK runtimes.
+> **Smart App Control / SmartScreen:** Rune v0.2 is not yet code-signed, so machines with Smart App Control enabled will block it, and SmartScreen may warn on first run ("More info → Run anyway"). Code signing that satisfies SAC is planned. Until then, the portable build on a machine with SAC **off** is the smoothest path.
+>
+> Packages aren't size-optimized yet — the zip carries the full self-contained .NET + Windows App SDK runtimes.
 
 ## Tech
 
@@ -94,7 +100,7 @@ The debug build is an unpackaged self-contained exe — just run it.
 
 ## Roadmap
 
-**v2:** annotations (highlight, notes, ink — saved as standard PDF annotations), form filling, digital signature verification, page organizing (rotate/reorder/extract), more formats (ePub, CBZ), smaller packages.
+**Next:** freehand ink annotations, form filling, digital signature verification, page organizing (reorder/extract), more formats (ePub, CBZ), code signing, smaller packages.
 
 ## License
 
