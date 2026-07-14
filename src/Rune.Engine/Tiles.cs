@@ -19,8 +19,14 @@ public sealed record TileRequest(
 
 public static class TileMath
 {
-    /// <summary>Pages up to this size (px, either dimension) render as one bitmap.</summary>
-    public const int MaxSingleTilePx = 2048;
+    /// <summary>
+    /// Pages up to this size (px, either dimension) render as one bitmap.
+    /// Kept equal to <see cref="TileSizePx"/>: bitmaps much wider than ~1.5k px
+    /// silently fail to draw inside CanvasVirtualControl sessions on some
+    /// devices (observed with 1763px-wide rotated pages), so no bitmap the
+    /// viewer creates is allowed past the tile edge.
+    /// </summary>
+    public const int MaxSingleTilePx = 1024;
 
     /// <summary>Tile edge for pages that exceed <see cref="MaxSingleTilePx"/>.</summary>
     public const int TileSizePx = 1024;

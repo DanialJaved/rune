@@ -457,7 +457,7 @@ public sealed partial class MainWindow : Window
     }
 
     private IEnumerable<DocumentView> AllDocumentViews() =>
-        Tabs.TabItems.OfType<TabViewItem>().Select(t => t.Content).OfType<DocumentView>();
+        Tabs.TabItems.OfType<TabViewItem>().Select(t => t.Tag).OfType<DocumentView>();
 
     private void PrintButton_Click(object sender, RoutedEventArgs e) => _ = PrintAsync();
 

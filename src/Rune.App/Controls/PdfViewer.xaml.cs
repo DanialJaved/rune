@@ -133,8 +133,6 @@ public sealed partial class PdfViewer : UserControl
         _dispatcher = DispatcherQueue.GetForCurrentThread();
         _scheduler = new RenderScheduler(OnTileRendered);
 
-        // Catch Ctrl+wheel even after the ScrollViewer has marked it handled.
-        AddHandler(PointerWheelChangedEvent, new PointerEventHandler(OnPointerWheelChanged), handledEventsToo: true);
         Canvas.PointerMoved += Canvas_PointerMoved;
         Canvas.PointerPressed += Canvas_PointerPressed;
         Canvas.PointerReleased += Canvas_PointerReleased;
@@ -145,6 +143,21 @@ public sealed partial class PdfViewer : UserControl
 
     private double DisplayScale => XamlRoot?.RasterizationScale ?? 1.0;
     private float RenderScale => (float)(_zoom * DisplayScale);
+
+    // TEMP diagnostics: set RUNE_DEBUG=1 to trace the tile pipeline to %TEMP%\rune-debug.log
+    private static readonly bool DebugLogEnabled = Environment.GetEnvironmentVariable("RUNE_DEBUG") == "1";
+    private static void DebugLog(string message)
+    {
+        if (DebugLogEnabled)
+        {
+            try
+            {
+                File.AppendAllText(Path.Combine(Path.GetTempPath(), "rune-debug.log"),
+                    $"{DateTime.Now:HH:mm:ss.fff} {message}\n");
+            }
+            catch { }
+        }
+    }
 
     // ---------------------------------------------------------------- document
 
@@ -277,6 +290,17 @@ public sealed partial class PdfViewer : UserControl
     {
         _rotation = (_rotation + 1) % 4;
 
+        // Selection, search highlights, and link rects are all in unrotated
+        // text coordinates — stale after rotation. Drop them.
+        _selection = null;
+        _selectionPage = -1;
+        _selectionAnchorChar = -1;
+        _isSelecting = false;
+        _searchByPage.Clear();
+        _activeHit = null;
+        _links.Clear();
+        _linksRequested.Clear();
+
         // Previews are rendered per-rotation; drop them along with stale tiles.
         ClearCaches();
 
@@ -384,11 +408,60 @@ public sealed partial class PdfViewer : UserControl
         UpdateDesiredTiles();
     }
 
+    private bool _rebasingZoom;
+
     private void Scroller_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
+        if (_rebasingZoom)
+        {
+            return;
+        }
+
+        // Pinch (touch/touchpad) and Ctrl+wheel zoom arrive as ScrollViewer
+        // ZoomFactor changes: the canvas raster-scales during the gesture
+        // (instant, slightly blurry), and when the gesture settles we fold
+        // the factor into the real zoom and re-render crisp ("rebase").
+        float factor = Scroller.ZoomFactor;
+        if (Math.Abs(factor - 1f) > 0.001f)
+        {
+            if (!e.IsIntermediate)
+            {
+                RebaseZoom(factor);
+            }
+            return;
+        }
+
         UpdateDesiredTiles();
         UpdateCurrentPage();
         PrefetchVisibleLinks();
+    }
+
+    private void RebaseZoom(float factor)
+    {
+        _rebasingZoom = true;
+        try
+        {
+            double newZoom = Math.Clamp(_zoom * factor, MinZoom, MaxZoom);
+            double actualFactor = newZoom / _zoom;
+
+            // Content point at the viewport origin, in unscaled layout units.
+            double contentX = Scroller.HorizontalOffset / factor;
+            double contentY = Scroller.VerticalOffset / factor;
+
+            _zoom = newZoom;
+            _fitMode = FitMode.None;
+            RebuildLayout();
+            Scroller.ChangeView(contentX * actualFactor, contentY * actualFactor, 1f, disableAnimation: true);
+        }
+        finally
+        {
+            _rebasingZoom = false;
+        }
+
+        Canvas.Invalidate();
+        UpdateDesiredTiles();
+        UpdateCurrentPage();
+        ZoomChanged?.Invoke(this, _zoom);
     }
 
     /// <summary>
@@ -426,18 +499,9 @@ public sealed partial class PdfViewer : UserControl
 
     // ---------------------------------------------------------------- input
 
-    private void OnPointerWheelChanged(object sender, PointerRoutedEventArgs e)
-    {
-        if (!e.KeyModifiers.HasFlag(VirtualKeyModifiers.Control))
-        {
-            return;
-        }
-
-        int delta = e.GetCurrentPoint(Scroller).Properties.MouseWheelDelta;
-        double factor = Math.Pow(1.1, delta / 120.0);
-        SetZoom(_zoom * factor, e.GetCurrentPoint(Scroller).Position);
-        e.Handled = true;
-    }
+    // Ctrl+wheel, touchpad pinch, and touch pinch are all handled natively by
+    // the ScrollViewer (ZoomMode=Enabled) and folded into the real zoom by
+    // RebaseZoom — no manual wheel handling needed.
 
     private void Canvas_PointerMoved(object sender, PointerRoutedEventArgs e)
     {
@@ -726,6 +790,7 @@ public sealed partial class PdfViewer : UserControl
 
         float scale = RenderScale;
         int scaleKey = TileKey.ToScaleKey(scale);
+        DebugLog($"DRAW region=({region.X:0},{region.Y:0},{region.Width:0}x{region.Height:0}) pages={first}-{last} rot={_rotation} scaleKey={scaleKey} tiles={_tiles.Count} previews={_previews.Count}");
         double rasterScale = DisplayScale;
         var borderColor = dark ? Color.FromArgb(255, 60, 60, 66) : Color.FromArgb(255, 200, 200, 205);
 
@@ -756,8 +821,13 @@ public sealed partial class PdfViewer : UserControl
                             pageRect.Y + srcY / rasterScale,
                             w / rasterScale,
                             h / rasterScale);
+                        DebugLog($"  HIT {key.PageIndex}/{key.Row},{key.Col} bmp={entry.Bitmap.SizeInPixels.Width}x{entry.Bitmap.SizeInPixels.Height} dest=({dest.X:0},{dest.Y:0},{dest.Width:0}x{dest.Height:0}) night={_nightMode}");
                         DrawPageImage(session, entry.Bitmap, dest);
                         TouchTile(key);
+                    }
+                    else if (DebugLogEnabled)
+                    {
+                        DebugLog($"  MISS {key}");
                     }
                 }
             }
@@ -781,7 +851,7 @@ public sealed partial class PdfViewer : UserControl
         }
         else
         {
-            session.DrawImage(bitmap, dest);
+            session.DrawImage(bitmap, dest, bitmap.Bounds);
         }
     }
 
@@ -831,6 +901,10 @@ public sealed partial class PdfViewer : UserControl
         {
             _scheduler.SetDesired([]);
             return;
+        }
+        if (Math.Abs(Scroller.ZoomFactor - 1f) > 0.001f)
+        {
+            return; // mid-pinch: offsets are in scaled space; rebase re-requests
         }
 
         var viewport = new DipRect(Scroller.HorizontalOffset, Scroller.VerticalOffset, Scroller.ViewportWidth, Scroller.ViewportHeight);
@@ -889,6 +963,7 @@ public sealed partial class PdfViewer : UserControl
 
         visible.AddRange(previews);
         visible.AddRange(prefetch);
+        DebugLog($"WANT rot={_rotation} zoom={_zoom:0.###} scale={scale:0.###} n={visible.Count} vp=({viewport.X:0},{viewport.Y:0},{viewport.Width:0},{viewport.Height:0}) zf={Scroller.ZoomFactor:0.###}");
         _scheduler.SetDesired(visible);
     }
 
@@ -916,13 +991,31 @@ public sealed partial class PdfViewer : UserControl
     {
         if (_document is null || _layout is null || request.Key.Rotation != _rotation)
         {
+            DebugLog($"DROP rot-mismatch key={request.Key} cur_rot={_rotation}");
             return;
         }
 
         // A zoom change while this tile was in flight makes it useless.
         if (!request.Key.IsPreview && request.Key.ScaleKey != TileKey.ToScaleKey(RenderScale))
         {
+            DebugLog($"DROP scale-mismatch key={request.Key} cur={TileKey.ToScaleKey(RenderScale)}");
             return;
+        }
+        if (DebugLogEnabled)
+        {
+            int ink = 0;
+            for (int y = 0; y < bitmap.Height; y += 7)
+            {
+                for (int x = 0; x < bitmap.Width; x += 7)
+                {
+                    int i = y * bitmap.Stride + x * 4;
+                    if (bitmap.Pixels[i] != 0xFF || bitmap.Pixels[i + 1] != 0xFF || bitmap.Pixels[i + 2] != 0xFF)
+                    {
+                        ink++;
+                    }
+                }
+            }
+            DebugLog($"KEEP key={request.Key} {bitmap.Width}x{bitmap.Height} sampledInk={ink}");
         }
 
         CanvasBitmap canvasBitmap;
