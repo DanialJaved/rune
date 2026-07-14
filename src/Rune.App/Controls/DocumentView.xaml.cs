@@ -88,6 +88,51 @@ public sealed partial class DocumentView : UserControl
         _document = null;
     }
 
+    public bool IsDirty => _document?.IsDirty == true;
+
+    /// <summary>
+    /// Persists annotation edits back to the original file. The open document
+    /// holds the source file, so this saves to a temp copy, closes, swaps the
+    /// files, and reopens at the same view position.
+    /// </summary>
+    public async Task SaveInPlaceAsync()
+    {
+        if (_document is not { IsDirty: true } document)
+        {
+            return;
+        }
+
+        string tmp = FilePath + ".saving";
+        await Task.Run(() => document.SaveAs(tmp));
+
+        double zoom = Viewer.Zoom;
+        int rotation = Viewer.ViewRotation;
+        double fraction = Viewer.ScrollFraction;
+
+        Viewer.SetDocument(null);
+        document.Dispose();
+        _document = null;
+
+        try
+        {
+            File.Move(tmp, FilePath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { }
+            throw;
+        }
+        finally
+        {
+            // Reopen whatever now lives at FilePath (swapped or original).
+            _document = await Task.Run(() => PdfDocument.Open(FilePath));
+            Viewer.SetDocument(_document);
+            Viewer.RestoreView(zoom, rotation, fraction);
+            PopulateThumbnails(_document.PageCount);
+            _ = PopulateOutlineAsync(_document);
+        }
+    }
+
     // ---------------------------------------------------------------- thumbnails
 
     private void PopulateThumbnails(int pageCount)

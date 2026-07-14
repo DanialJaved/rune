@@ -6,7 +6,7 @@ namespace Rune.Engine;
 /// An open PDF document. Thread-safe: all PDFium access is serialized through
 /// the global <see cref="PdfiumLibrary.Lock"/>.
 /// </summary>
-public sealed class PdfDocument : IDisposable
+public sealed partial class PdfDocument : IDisposable
 {
     private readonly FileAccessAdapter _fileAccess;
     private IntPtr _handle;

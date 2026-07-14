@@ -146,6 +146,91 @@ internal static partial class NativeMethods
         IntPtr page, int startX, int startY, int sizeX, int sizeY, int rotate,
         double pageX, double pageY, out int deviceX, out int deviceY);
 
+    // ---- Annotations (fpdf_annot.h) ----
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFPage_CreateAnnot(IntPtr page, int subtype);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPage_GetAnnotCount(IntPtr page);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFPage_GetAnnot(IntPtr page, int index);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPage_RemoveAnnot(IntPtr page, int index);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFPage_CloseAnnot(IntPtr annot);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetSubtype(IntPtr annot);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_SetRect(IntPtr annot, ref FS_RECTF rect);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetRect(IntPtr annot, out FS_RECTF rect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FS_QUADPOINTSF
+    {
+        public float X1, Y1;   // upper-left
+        public float X2, Y2;   // upper-right
+        public float X3, Y3;   // lower-left
+        public float X4, Y4;   // lower-right
+    }
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_AppendAttachmentPoints(IntPtr annot, ref FS_QUADPOINTSF quadPoints);
+
+    /// <summary>colorType: 0 = fill/stroke color, 1 = interior color.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_SetColor(IntPtr annot, int colorType, uint r, uint g, uint b, uint a);
+
+    /// <summary>key is a narrow FPDF_BYTESTRING; value is UTF-16LE (FPDF_WIDESTRING).</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_SetStringValue(
+        IntPtr annot,
+        [MarshalAs(UnmanagedType.LPStr)] string key,
+        [MarshalAs(UnmanagedType.LPWStr)] string value);
+
+    /// <summary>Returns byte length needed (UTF-16LE incl. terminator); fills buffer when large enough.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAnnot_GetStringValue(
+        IntPtr annot,
+        [MarshalAs(UnmanagedType.LPStr)] string key,
+        byte[]? buffer,
+        uint buflen);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_SetFlags(IntPtr annot, int flags);
+
+    // Annotation subtypes (fpdf_annot.h)
+    internal const int FPDF_ANNOT_SUBTYPE_TEXT = 1;
+    internal const int FPDF_ANNOT_SUBTYPE_HIGHLIGHT = 9;
+    internal const int FPDF_ANNOT_SUBTYPE_UNDERLINE = 10;
+    internal const int FPDF_ANNOT_SUBTYPE_STRIKEOUT = 12;
+
+    internal const int FPDF_ANNOT_FLAG_PRINT = 1 << 2;
+
+    // ---- Saving (fpdf_save.h) ----
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FPDF_FILEWRITE
+    {
+        public int Version;       // must be 1
+        public IntPtr WriteBlock; // FPDF_BOOL (*)(FPDF_FILEWRITE*, const void*, unsigned long)
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int WriteBlockDelegate(IntPtr pThis, IntPtr data, uint size);
+
+    internal const uint FPDF_SAVE_NO_INCREMENTAL = 2;
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_SaveAsCopy(IntPtr document, ref FPDF_FILEWRITE fileWrite, uint flags);
+
     // ---- Text extraction & search (fpdf_text.h) ----
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
