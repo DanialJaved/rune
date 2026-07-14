@@ -549,7 +549,7 @@ public sealed partial class MainWindow : Window
 
     private async void Viewer_NoteRequested(object? sender, (int PageIndex, double X, double Y) at)
     {
-        if (CurrentView is not { } view || sender != view.Viewer)
+        if (CurrentView is not { } view || !ReferenceEquals(sender, view.Viewer))
         {
             return;
         }
