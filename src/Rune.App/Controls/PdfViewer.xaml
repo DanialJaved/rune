@@ -6,7 +6,9 @@
 
     <ScrollViewer
         x:Name="Scroller"
-        ZoomMode="Disabled"
+        ZoomMode="Enabled"
+        MinZoomFactor="0.2"
+        MaxZoomFactor="5"
         HorizontalScrollBarVisibility="Auto"
         VerticalScrollBarVisibility="Auto"
         HorizontalScrollMode="Enabled"

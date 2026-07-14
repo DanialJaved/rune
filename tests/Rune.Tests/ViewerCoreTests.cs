@@ -71,8 +71,29 @@ public class TileMathTests
     [Fact]
     public void SmallPage_IsSingleTile()
     {
-        Assert.Equal((1, 1), TileMath.GridFor(1200, 1600));
-        Assert.Equal((0, 0, 1200, 1600), TileMath.TileWindow(1200, 1600, 0, 0));
+        Assert.Equal((1, 1), TileMath.GridFor(800, 1000));
+        Assert.Equal((0, 0, 800, 1000), TileMath.TileWindow(800, 1000, 0, 0));
+    }
+
+    [Fact]
+    public void NoTileEverExceedsTheEdgeLimit()
+    {
+        // Regression: bitmaps wider than ~1.5k px silently fail to draw in
+        // CanvasVirtualControl sessions on some devices, so every produced
+        // tile must stay within TileSizePx in both dimensions.
+        foreach (var (w, h) in new[] { (1200, 1600), (1763, 1362), (1025, 800), (5000, 4000) })
+        {
+            var (cols, rows) = TileMath.GridFor(w, h);
+            for (int r = 0; r < rows; r++)
+            {
+                for (int c = 0; c < cols; c++)
+                {
+                    var (_, _, tw, th) = TileMath.TileWindow(w, h, r, c);
+                    Assert.True(tw <= TileMath.TileSizePx && th <= TileMath.TileSizePx,
+                        $"page {w}x{h} tile {r},{c} is {tw}x{th}");
+                }
+            }
+        }
     }
 
     [Fact]
@@ -115,6 +136,47 @@ public class RenderRegionTests
         var bmp = doc.RenderPage(0, scale: 1.0f, rotation: 1);
         Assert.Equal(792, bmp.Width);
         Assert.Equal(612, bmp.Height);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void RenderPage_Rotated_ActuallyDrawsInk(int rotation)
+    {
+        using var doc = PdfDocument.Open(CorpusPath("hello.pdf"));
+
+        var bmp = doc.RenderPage(0, scale: 1.0f, rotation);
+
+        int nonWhite = 0;
+        for (int y = 0; y < bmp.Height; y++)
+        {
+            for (int x = 0; x < bmp.Width; x++)
+            {
+                int i = y * bmp.Stride + x * 4;
+                if (bmp.Pixels[i] != 0xFF || bmp.Pixels[i + 1] != 0xFF || bmp.Pixels[i + 2] != 0xFF)
+                {
+                    nonWhite++;
+                }
+            }
+        }
+        Assert.True(nonWhite > 100, $"rotation {rotation}: expected text ink, found {nonWhite} non-white pixels");
+    }
+
+    [Fact]
+    public void RenderRegion_RotatedTile_MatchesWindowOfRotatedFullRender()
+    {
+        using var doc = PdfDocument.Open(CorpusPath("hello.pdf"));
+
+        var full = doc.RenderPage(0, scale: 1.0f, rotation: 1);          // 792×612
+        var tile = doc.RenderRegion(0, scale: 1.0f, rotation: 1, srcX: 100, srcY: 150, width: 120, height: 90);
+
+        for (int y = 0; y < 90; y++)
+        {
+            var expected = full.Pixels.AsSpan((y + 150) * full.Stride + 100 * 4, 120 * 4);
+            var actual = tile.Pixels.AsSpan(y * tile.Stride, 120 * 4);
+            Assert.True(expected.SequenceEqual(actual), $"rotated tile row {y} differs from full render window");
+        }
     }
 }
 
