@@ -93,6 +93,76 @@ public sealed partial class PdfDocument
         IsDirty = true;
     }
 
+    /// <summary>
+    /// Adds a freehand ink annotation. <paramref name="stroke"/> is a polyline
+    /// in page points with a top-left origin (canvas space). One annotation per
+    /// stroke, so each is individually deletable. <paramref name="width"/> is in
+    /// points.
+    /// </summary>
+    public void AddInk(int pageIndex, IReadOnlyList<(double X, double Y)> stroke, byte r, byte g, byte b, byte a, float width)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+        if (stroke.Count < 2)
+        {
+            return;
+        }
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                throw PdfiumNative.LastError();
+            }
+
+            try
+            {
+                IntPtr annot = PdfiumNative.CreateAnnot(page, PdfiumNative.AnnotInk);
+                if (annot == IntPtr.Zero)
+                {
+                    throw new PdfiumException("Could not create the ink annotation.", 1);
+                }
+
+                try
+                {
+                    var (ptW, ptH) = _pageSizes[pageIndex];
+                    int sizeX = Math.Max(1, (int)MathF.Round(ptW));
+                    int sizeY = Math.Max(1, (int)MathF.Round(ptH));
+
+                    var points = new (float X, float Y)[stroke.Count];
+                    float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+                    for (int i = 0; i < stroke.Count; i++)
+                    {
+                        var (px, py) = PdfiumNative.DeviceToPage(page, sizeX, sizeY, (int)Math.Round(stroke[i].X), (int)Math.Round(stroke[i].Y));
+                        points[i] = ((float)px, (float)py);
+                        minX = Math.Min(minX, (float)px);
+                        minY = Math.Min(minY, (float)py);
+                        maxX = Math.Max(maxX, (float)px);
+                        maxY = Math.Max(maxY, (float)py);
+                    }
+
+                    float pad = width / 2 + 1;
+                    PdfiumNative.SetAnnotRect(annot, minX - pad, minY - pad, maxX + pad, maxY + pad);
+                    PdfiumNative.SetAnnotColor(annot, r, g, b, a);
+                    PdfiumNative.SetAnnotBorderWidth(annot, width);
+                    PdfiumNative.AddInkStroke(annot, points);
+                    PdfiumNative.SetAnnotPrintFlag(annot);
+                }
+                finally
+                {
+                    PdfiumNative.CloseAnnot(annot);
+                }
+            }
+            finally
+            {
+                PdfiumNative.ClosePage(page);
+            }
+        }
+        IsDirty = true;
+    }
+
     /// <summary>Adds a sticky-note annotation at (x, y) in page points, top-left origin.</summary>
     public void AddNote(int pageIndex, double x, double y, string text)
     {

@@ -18,6 +18,25 @@ public static class PdfiumNative
     public const int AnnotHighlight = NativeMethods.FPDF_ANNOT_SUBTYPE_HIGHLIGHT;
     public const int AnnotUnderline = NativeMethods.FPDF_ANNOT_SUBTYPE_UNDERLINE;
     public const int AnnotStrikeout = NativeMethods.FPDF_ANNOT_SUBTYPE_STRIKEOUT;
+    public const int AnnotInk = NativeMethods.FPDF_ANNOT_SUBTYPE_INK;
+
+    /// <summary>Adds one freehand stroke to an ink annotation. Points are in PDF page space (bottom-left origin).</summary>
+    public static bool AddInkStroke(IntPtr annot, (float X, float Y)[] points)
+    {
+        if (points.Length == 0)
+        {
+            return false;
+        }
+        var native = new NativeMethods.FS_POINTF[points.Length];
+        for (int i = 0; i < points.Length; i++)
+        {
+            native[i] = new NativeMethods.FS_POINTF { X = points[i].X, Y = points[i].Y };
+        }
+        return NativeMethods.FPDFAnnot_AddInkStroke(annot, native, (UIntPtr)native.Length) >= 0;
+    }
+
+    public static bool SetAnnotBorderWidth(IntPtr annot, float width)
+        => NativeMethods.FPDFAnnot_SetBorder(annot, 0, 0, width) != 0;
 
     public static IntPtr CreateAnnot(IntPtr page, int subtype) => NativeMethods.FPDFPage_CreateAnnot(page, subtype);
 

@@ -101,6 +101,72 @@ public class AnnotationTests
     }
 
     [Fact]
+    public void AddInk_SaveAs_Reopen_InkAnnotationPersists()
+    {
+        string saved = TempPdf();
+        try
+        {
+            using (var doc = PdfDocument.Open(CorpusPath("hello.pdf")))
+            {
+                // A short diagonal stroke in top-left page points.
+                var stroke = new (double X, double Y)[] { (100, 100), (150, 130), (200, 110), (260, 160) };
+                doc.AddInk(0, stroke, 226, 34, 34, 255, 2.5f);
+                Assert.True(doc.IsDirty);
+                doc.SaveAs(saved);
+            }
+
+            using var reopened = PdfDocument.Open(saved);
+            var ink = Assert.Single(reopened.GetAnnotations(0));
+            Assert.Equal(15, ink.Subtype); // FPDF_ANNOT_SUBTYPE_INK
+        }
+        finally
+        {
+            File.Delete(saved);
+        }
+    }
+
+    [Fact]
+    public void AddInk_ShortStroke_IsIgnored()
+    {
+        using var doc = PdfDocument.Open(CorpusPath("hello.pdf"));
+        doc.AddInk(0, [(10.0, 10.0)], 0, 0, 0, 255, 2f); // single point → no annotation
+        Assert.False(doc.IsDirty);
+        Assert.Empty(doc.GetAnnotations(0));
+    }
+
+    [Fact]
+    public void AddInk_ChangesRenderedPixels()
+    {
+        using var doc = PdfDocument.Open(CorpusPath("hello.pdf"));
+        var before = doc.RenderPage(0, 1.0f);
+        int beforeInk = CountNonWhite(before);
+
+        var stroke = new (double X, double Y)[] { (60, 400), (200, 405), (340, 402), (480, 408) };
+        doc.AddInk(0, stroke, 226, 34, 34, 255, 4f);
+        var after = doc.RenderPage(0, 1.0f);
+        int afterInk = CountNonWhite(after);
+
+        Assert.True(afterInk > beforeInk + 500, $"expected ink pixels: before={beforeInk}, after={afterInk}");
+    }
+
+    private static int CountNonWhite(PageBitmap bmp)
+    {
+        int n = 0;
+        for (int y = 0; y < bmp.Height; y++)
+        {
+            for (int x = 0; x < bmp.Width; x++)
+            {
+                int i = y * bmp.Stride + x * 4;
+                if (bmp.Pixels[i] != 0xFF || bmp.Pixels[i + 1] != 0xFF || bmp.Pixels[i + 2] != 0xFF)
+                {
+                    n++;
+                }
+            }
+        }
+        return n;
+    }
+
+    [Fact]
     public void Highlight_ActuallyChangesRenderedPixels()
     {
         using var doc = PdfDocument.Open(CorpusPath("hello.pdf"));

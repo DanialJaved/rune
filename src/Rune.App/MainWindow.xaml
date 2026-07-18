@@ -13,6 +13,7 @@
     <Grid
         x:Name="RootGrid"
         AllowDrop="True"
+        KeyboardAcceleratorPlacementMode="Hidden"
         DragOver="RootGrid_DragOver"
         Drop="RootGrid_Drop">
         <Grid.RowDefinitions>
@@ -46,110 +47,147 @@
             </TabView.TabStripFooter>
         </TabView>
 
-        <!-- Toolbar -->
-        <StackPanel
+        <!-- Toolbar: stock compact CommandBar (Windows 11 Notepad pattern) —
+             uniform control sizing and automatic overflow on narrow windows. -->
+        <CommandBar
             x:Name="Toolbar"
             Grid.Row="1"
-            Orientation="Horizontal"
-            Spacing="4"
-            Padding="12,4">
-            <Button x:Name="OpenButton" Click="OpenButton_Click" ToolTipService.ToolTip="Open a PDF (Ctrl+O)">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <FontIcon Glyph="&#xE8E5;" FontSize="14" />
-                    <TextBlock Text="Open" />
-                </StackPanel>
-                <Button.KeyboardAccelerators>
+            DefaultLabelPosition="Collapsed"
+            IsDynamicOverflowEnabled="True"
+            OverflowButtonVisibility="Auto"
+            HorizontalAlignment="Left"
+            Background="Transparent">
+
+            <AppBarButton x:Name="OpenButton" Icon="OpenFile" Label="Open" Click="OpenButton_Click" ToolTipService.ToolTip="Open a PDF (Ctrl+O)">
+                <AppBarButton.KeyboardAccelerators>
                     <KeyboardAccelerator Modifiers="Control" Key="O" />
-                </Button.KeyboardAccelerators>
-            </Button>
-
-            <ToggleButton x:Name="SidebarButton" Click="SidebarButton_Click" IsEnabled="False" ToolTipService.ToolTip="Show sidebar (F9)">
-                <FontIcon Glyph="&#xE71C;" FontSize="14" />
-                <ToggleButton.KeyboardAccelerators>
+                </AppBarButton.KeyboardAccelerators>
+            </AppBarButton>
+            <AppBarToggleButton x:Name="SidebarButton" Label="Sidebar" Click="SidebarButton_Click" IsEnabled="False" ToolTipService.ToolTip="Show sidebar (F9)">
+                <AppBarToggleButton.Icon>
+                    <FontIcon Glyph="&#xE71C;" />
+                </AppBarToggleButton.Icon>
+                <AppBarToggleButton.KeyboardAccelerators>
                     <KeyboardAccelerator Key="F9" />
-                </ToggleButton.KeyboardAccelerators>
-            </ToggleButton>
+                </AppBarToggleButton.KeyboardAccelerators>
+            </AppBarToggleButton>
 
             <AppBarSeparator />
 
-            <Button x:Name="BackButton" Click="BackButton_Click" IsEnabled="False" ToolTipService.ToolTip="Back (Alt+Left)">
-                <FontIcon Glyph="&#xE72B;" FontSize="14" />
-            </Button>
-            <Button x:Name="ForwardButton" Click="ForwardButton_Click" IsEnabled="False" ToolTipService.ToolTip="Forward (Alt+Right)">
-                <FontIcon Glyph="&#xE72A;" FontSize="14" />
-            </Button>
+            <AppBarButton x:Name="BackButton" Icon="Back" Label="Back" Click="BackButton_Click" IsEnabled="False" ToolTipService.ToolTip="Back (Alt+Left)" />
+            <AppBarButton x:Name="ForwardButton" Icon="Forward" Label="Forward" Click="ForwardButton_Click" IsEnabled="False" ToolTipService.ToolTip="Forward (Alt+Right)" />
 
             <AppBarSeparator />
 
-            <Button x:Name="PrevButton" Click="PrevButton_Click" IsEnabled="False" ToolTipService.ToolTip="Previous page">
-                <FontIcon Glyph="&#xE70E;" FontSize="14" />
-            </Button>
-            <NumberBox
-                x:Name="PageBox"
-                Minimum="1"
-                SpinButtonPlacementMode="Hidden"
-                IsEnabled="False"
-                MinWidth="64"
-                VerticalAlignment="Center"
-                ValueChanged="PageBox_ValueChanged" />
-            <TextBlock
-                x:Name="PageCountLabel"
-                VerticalAlignment="Center"
-                Margin="4,0,0,0"
-                Style="{StaticResource BodyTextBlockStyle}"
-                Opacity="0.7" />
-            <Button x:Name="NextButton" Click="NextButton_Click" IsEnabled="False" ToolTipService.ToolTip="Next page">
-                <FontIcon Glyph="&#xE70D;" FontSize="14" />
-            </Button>
+            <AppBarButton x:Name="PrevButton" Label="Previous page" Click="PrevButton_Click" IsEnabled="False" ToolTipService.ToolTip="Previous page">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE70E;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarElementContainer VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <NumberBox
+                        x:Name="PageBox"
+                        Minimum="1"
+                        SpinButtonPlacementMode="Hidden"
+                        IsEnabled="False"
+                        MinWidth="56"
+                        VerticalAlignment="Center"
+                        ValueChanged="PageBox_ValueChanged" />
+                    <TextBlock
+                        x:Name="PageCountLabel"
+                        VerticalAlignment="Center"
+                        Style="{StaticResource BodyTextBlockStyle}"
+                        Opacity="0.7" />
+                </StackPanel>
+            </AppBarElementContainer>
+            <AppBarButton x:Name="NextButton" Label="Next page" Click="NextButton_Click" IsEnabled="False" ToolTipService.ToolTip="Next page">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE70D;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
 
             <AppBarSeparator />
 
-            <Button x:Name="ZoomOutButton" Click="ZoomOutButton_Click" IsEnabled="False" ToolTipService.ToolTip="Zoom out (Ctrl+-)">
-                <FontIcon Glyph="&#xE71F;" FontSize="14" />
-            </Button>
-            <TextBlock
-                x:Name="ZoomLabel"
-                Text="100%"
-                VerticalAlignment="Center"
-                MinWidth="44"
-                TextAlignment="Center"
-                Style="{StaticResource BodyTextBlockStyle}"
-                Opacity="0.7" />
-            <Button x:Name="ZoomInButton" Click="ZoomInButton_Click" IsEnabled="False" ToolTipService.ToolTip="Zoom in (Ctrl++)">
-                <FontIcon Glyph="&#xE8A3;" FontSize="14" />
-            </Button>
-            <ToggleButton x:Name="FitWidthButton" Click="FitWidthButton_Click" IsEnabled="False" ToolTipService.ToolTip="Fit width (Ctrl+2)">
-                <FontIcon Glyph="&#xE9A6;" FontSize="14" />
-            </ToggleButton>
-            <ToggleButton x:Name="FitPageButton" Click="FitPageButton_Click" IsEnabled="False" ToolTipService.ToolTip="Fit page (Ctrl+0)">
-                <FontIcon Glyph="&#xE9A6;" FontSize="14" RenderTransformOrigin="0.5,0.5">
-                    <FontIcon.RenderTransform>
-                        <RotateTransform Angle="90" />
-                    </FontIcon.RenderTransform>
-                </FontIcon>
-            </ToggleButton>
+            <AppBarButton x:Name="ZoomOutButton" Icon="ZoomOut" Label="Zoom out" Click="ZoomOutButton_Click" IsEnabled="False" ToolTipService.ToolTip="Zoom out (Ctrl+-)" />
+            <AppBarElementContainer VerticalAlignment="Center">
+                <TextBlock
+                    x:Name="ZoomLabel"
+                    Text="100%"
+                    VerticalAlignment="Center"
+                    MinWidth="44"
+                    TextAlignment="Center"
+                    Style="{StaticResource BodyTextBlockStyle}"
+                    Opacity="0.7" />
+            </AppBarElementContainer>
+            <AppBarButton x:Name="ZoomInButton" Icon="ZoomIn" Label="Zoom in" Click="ZoomInButton_Click" IsEnabled="False" ToolTipService.ToolTip="Zoom in (Ctrl++)" />
+            <AppBarToggleButton x:Name="FitWidthButton" Label="Fit width" Click="FitWidthButton_Click" IsEnabled="False" ToolTipService.ToolTip="Fit width (Ctrl+2)">
+                <AppBarToggleButton.Icon>
+                    <FontIcon Glyph="&#xE9A6;" />
+                </AppBarToggleButton.Icon>
+            </AppBarToggleButton>
+            <AppBarToggleButton x:Name="FitPageButton" Label="Fit page" Click="FitPageButton_Click" IsEnabled="False" ToolTipService.ToolTip="Fit page (Ctrl+0)">
+                <AppBarToggleButton.Icon>
+                    <FontIcon Glyph="&#xE9A6;" RenderTransformOrigin="0.5,0.5">
+                        <FontIcon.RenderTransform>
+                            <RotateTransform Angle="90" />
+                        </FontIcon.RenderTransform>
+                    </FontIcon>
+                </AppBarToggleButton.Icon>
+            </AppBarToggleButton>
 
             <AppBarSeparator />
 
-            <Button x:Name="RotateButton" Click="RotateButton_Click" IsEnabled="False" ToolTipService.ToolTip="Rotate (Ctrl+R)">
-                <FontIcon Glyph="&#xE7AD;" FontSize="14" />
-                <Button.KeyboardAccelerators>
+            <AppBarButton x:Name="RotateButton" Icon="Rotate" Label="Rotate" Click="RotateButton_Click" IsEnabled="False" ToolTipService.ToolTip="Rotate (Ctrl+R)">
+                <AppBarButton.KeyboardAccelerators>
                     <KeyboardAccelerator Modifiers="Control" Key="R" />
-                </Button.KeyboardAccelerators>
-            </Button>
-            <ToggleButton x:Name="NightButton" Click="NightButton_Click" IsEnabled="False" ToolTipService.ToolTip="Night mode — invert page colors (Ctrl+I)">
-                <FontIcon Glyph="&#xE708;" FontSize="14" />
-            </ToggleButton>
+                </AppBarButton.KeyboardAccelerators>
+            </AppBarButton>
+            <AppBarToggleButton x:Name="NightButton" Label="Night mode" Click="NightButton_Click" IsEnabled="False" ToolTipService.ToolTip="Night mode — invert page colors (Ctrl+I)">
+                <AppBarToggleButton.Icon>
+                    <FontIcon Glyph="&#xE708;" />
+                </AppBarToggleButton.Icon>
+            </AppBarToggleButton>
+            <AppBarToggleButton x:Name="InkButton" Label="Draw" Click="InkButton_Click" IsEnabled="False" ToolTipService.ToolTip="Draw with the pen (Ctrl+E)">
+                <AppBarToggleButton.Icon>
+                    <FontIcon Glyph="&#xE76D;" />
+                </AppBarToggleButton.Icon>
+            </AppBarToggleButton>
 
             <AppBarSeparator />
 
-            <Button x:Name="PrintButton" Click="PrintButton_Click" IsEnabled="False" ToolTipService.ToolTip="Print (Ctrl+P)">
-                <FontIcon Glyph="&#xE749;" FontSize="14" />
-            </Button>
-            <Button x:Name="SettingsButton" Click="SettingsButton_Click" ToolTipService.ToolTip="Settings">
-                <FontIcon Glyph="&#xE713;" FontSize="14" />
-            </Button>
-        </StackPanel>
+            <AppBarButton x:Name="SaveButton" Icon="Save" Label="Save" Click="SaveButton_Click" IsEnabled="False" ToolTipService.ToolTip="Save (Ctrl+S)" />
+            <AppBarButton x:Name="PrintButton" Label="Print" Click="PrintButton_Click" IsEnabled="False" ToolTipService.ToolTip="Print (Ctrl+P)">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE749;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+
+            <CommandBar.SecondaryCommands>
+                <AppBarButton x:Name="SaveAsButton" Label="Save As…" Click="SaveAsButton_Click" IsEnabled="False">
+                    <AppBarButton.Icon>
+                        <FontIcon Glyph="&#xE792;" />
+                    </AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="InkOptionsButton" Label="Pen color &amp; width" IsEnabled="False">
+                    <AppBarButton.Icon>
+                        <FontIcon Glyph="&#xE790;" />
+                    </AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="PropertiesButton" Label="Document properties" Click="PropertiesButton_Click" IsEnabled="False">
+                    <AppBarButton.Icon>
+                        <FontIcon Glyph="&#xE946;" />
+                    </AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarSeparator />
+                <AppBarButton x:Name="UpdatesButton" Label="Check for updates" Click="UpdatesButton_Click">
+                    <AppBarButton.Icon>
+                        <FontIcon Glyph="&#xE895;" />
+                    </AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton x:Name="SettingsButton" Icon="Setting" Label="Settings" Click="SettingsButton_Click" />
+            </CommandBar.SecondaryCommands>
+        </CommandBar>
 
         <Grid Grid.Row="2">
             <!-- The selected tab's DocumentView is swapped in here. -->
@@ -160,7 +198,7 @@
 
             <!-- Start page: recents, shown when no tab is open -->
             <ScrollViewer x:Name="StartPage" HorizontalScrollMode="Disabled">
-                <StackPanel MaxWidth="720" Margin="48,32" Spacing="20" HorizontalAlignment="Center">
+                <StackPanel MaxWidth="760" Margin="48,32" Spacing="20" HorizontalAlignment="Center">
                     <StackPanel Spacing="4">
                         <TextBlock Text="Rune" Style="{StaticResource TitleLargeTextBlockStyle}" />
                         <TextBlock Text="A fast, free PDF reader for Windows" Style="{StaticResource BodyTextBlockStyle}" Opacity="0.7" />
@@ -173,8 +211,36 @@
                         </StackPanel>
                     </Button>
 
+                    <!-- Recent thumbnails grid (optional; up to 6 cards) -->
+                    <StackPanel x:Name="RecentThumbsSection" Spacing="8" Visibility="Collapsed">
+                        <TextBlock Text="Recent" Style="{StaticResource SubtitleTextBlockStyle}" />
+                        <GridView
+                            x:Name="RecentThumbs"
+                            SelectionMode="None"
+                            IsItemClickEnabled="True"
+                            ItemClick="RecentThumbs_ItemClick">
+                            <GridView.ItemTemplate>
+                                <DataTemplate x:DataType="controls:RecentCard">
+                                    <StackPanel Width="150" Margin="0,0,12,12" Spacing="6">
+                                        <Border
+                                            Width="150"
+                                            Height="194"
+                                            CornerRadius="6"
+                                            BorderThickness="1"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            Background="White">
+                                            <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform" />
+                                        </Border>
+                                        <TextBlock Text="{x:Bind DisplayName}" MaxWidth="150" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        <TextBlock Text="{x:Bind Folder}" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.5" MaxWidth="150" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </GridView.ItemTemplate>
+                        </GridView>
+                    </StackPanel>
+
                     <StackPanel Spacing="8">
-                        <TextBlock x:Name="RecentsHeader" Text="Recent" Style="{StaticResource SubtitleTextBlockStyle}" Visibility="Collapsed" />
+                        <TextBlock x:Name="RecentsHeader" Text="All recent" Style="{StaticResource SubtitleTextBlockStyle}" Visibility="Collapsed" />
                         <ItemsControl x:Name="RecentsList">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="services:RecentFile">
