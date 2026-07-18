@@ -206,9 +206,24 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FPDFAnnot_SetFlags(IntPtr annot, int flags);
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FS_POINTF
+    {
+        public float X;
+        public float Y;
+    }
+
+    /// <summary>Adds a freehand stroke (page-space points). Returns the stroke index, or -1.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_AddInkStroke(IntPtr annot, [In] FS_POINTF[] points, UIntPtr pointCount);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_SetBorder(IntPtr annot, float horizontalRadius, float verticalRadius, float borderWidth);
+
     // Annotation subtypes (fpdf_annot.h)
     internal const int FPDF_ANNOT_SUBTYPE_TEXT = 1;
     internal const int FPDF_ANNOT_SUBTYPE_HIGHLIGHT = 9;
+    internal const int FPDF_ANNOT_SUBTYPE_INK = 15;
     internal const int FPDF_ANNOT_SUBTYPE_UNDERLINE = 10;
     internal const int FPDF_ANNOT_SUBTYPE_STRIKEOUT = 12;
 

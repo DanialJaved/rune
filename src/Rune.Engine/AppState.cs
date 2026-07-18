@@ -42,6 +42,15 @@ public sealed class AppSettings
 
     /// <summary>Last time an update check ran, to rate-limit automatic checks.</summary>
     public DateTime LastUpdateCheckUtc { get; set; } = DateTime.MinValue;
+
+    /// <summary>Show a thumbnail grid of recent documents on the start page.</summary>
+    public bool ShowRecentThumbnails { get; set; } = true;
+
+    /// <summary>Ink pen color as #RRGGBB (default red).</summary>
+    public string InkColor { get; set; } = "#E22222";
+
+    /// <summary>Ink pen width in points.</summary>
+    public double InkWidth { get; set; } = 2.5;
 }
 
 /// <summary>The whole persisted app state (one JSON file).</summary>

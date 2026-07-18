@@ -23,7 +23,8 @@ public sealed class PageLayout
     /// <param name="zoom">DIPs per PDF point (1.0 ≈ 100% at 96 DPI).</param>
     /// <param name="rotation">View rotation in quarter turns clockwise (0–3).</param>
     /// <param name="minViewportWidth">Pages are centered within at least this width.</param>
-    public PageLayout(IReadOnlyList<(float Width, float Height)> pageSizesPoints, double zoom, int rotation, double minViewportWidth = 0)
+    /// <param name="minViewportHeight">Pages are centered within at least this height, so the canvas always fills the viewport.</param>
+    public PageLayout(IReadOnlyList<(float Width, float Height)> pageSizesPoints, double zoom, int rotation, double minViewportWidth = 0, double minViewportHeight = 0)
     {
         Zoom = zoom;
         Rotation = ((rotation % 4) + 4) % 4;
@@ -45,7 +46,21 @@ public sealed class PageLayout
             _pageRects[i] = new DipRect((TotalWidth - width) / 2, y, width, height);
             y += height + PageGap;
         }
-        TotalHeight = y - PageGap + Margin;
+        double contentHeight = pageSizesPoints.Count > 0 ? y - PageGap + Margin : 2 * Margin;
+
+        // When the whole document is shorter than the viewport (far zoom-out),
+        // grow the layout to fill it and center the pages vertically — a canvas
+        // smaller than the viewport shows a mismatched-background box.
+        TotalHeight = Math.Max(contentHeight, minViewportHeight);
+        double shift = (TotalHeight - contentHeight) / 2;
+        if (shift > 0)
+        {
+            for (int i = 0; i < _pageRects.Length; i++)
+            {
+                var r = _pageRects[i];
+                _pageRects[i] = new DipRect(r.X, r.Y + shift, r.Width, r.Height);
+            }
+        }
     }
 
     private double RotatedWidth((float Width, float Height) size) => Rotation % 2 == 0 ? size.Width : size.Height;

@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Input;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
 using Windows.System;
+using Windows.UI;
 
 namespace Rune;
 
@@ -44,6 +45,7 @@ public sealed partial class MainWindow : Window
 
         RegisterAccelerators();
         ((UIElement)Content).KeyDown += Content_KeyDown;
+        BuildInkOptionsFlyout();
         PopulateRecents();
 
         Activated += MainWindow_FirstActivated;
@@ -194,6 +196,7 @@ public sealed partial class MainWindow : Window
         _pendingRestore[view] = restore;
         view.Viewer.LinkActivated += Viewer_LinkActivated;
         view.Viewer.NightMode = _state.Settings.NightMode;
+        view.Viewer.SetInkStyle(_state.Settings.InkColor, _state.Settings.InkWidth);
         view.Viewer.DocumentEdited += (_, _) => UpdateDirtyIndicator(view);
         view.Viewer.NoteRequested += Viewer_NoteRequested;
         view.Loaded2 += (_, _) => { if (view == CurrentView) { UpdateToolbarForActive(); } };
@@ -406,7 +409,8 @@ public sealed partial class MainWindow : Window
                  {
                      SidebarButton, PageBox, ZoomInButton, ZoomOutButton,
                      FitWidthButton, FitPageButton, RotateButton,
-                     NightButton, PrintButton,
+                     NightButton, InkButton, PrintButton,
+                     SaveButton, SaveAsButton, PropertiesButton, InkOptionsButton,
                  })
         {
             control.IsEnabled = ready;
@@ -427,9 +431,89 @@ public sealed partial class MainWindow : Window
         NextButton.IsEnabled = viewer.CurrentPage < viewer.PageCount - 1;
         ZoomLabel.Text = $"{Math.Round(viewer.Zoom * 100)}%";
         SidebarButton.IsChecked = view!.IsPaneOpen;
+        InkButton.IsChecked = viewer.IsInkMode;
         BackButton.IsEnabled = viewer.CanGoBack;
         ForwardButton.IsEnabled = viewer.CanGoForward;
         UpdateFitToggles();
+    }
+
+    private void SetInkMode(bool on)
+    {
+        if (_activeViewer is not null)
+        {
+            _activeViewer.IsInkMode = on;
+            InkButton.IsChecked = on;
+        }
+    }
+
+    private static readonly (string Name, string Hex)[] InkColors =
+    [
+        ("Red", "#E22222"), ("Blue", "#2266DD"), ("Green", "#1E9E4A"), ("Black", "#000000"),
+    ];
+    private static readonly (string Name, double Width)[] InkWidths =
+    [
+        ("Thin", 1.5), ("Medium", 2.5), ("Thick", 4.5),
+    ];
+
+    /// <summary>Builds the pen color/width picker for the overflow "Pen color & width" button.</summary>
+    private void BuildInkOptionsFlyout()
+    {
+        var flyout = new MenuFlyout();
+        flyout.Items.Add(new MenuFlyoutItem { Text = "Pen color", IsEnabled = false });
+        foreach (var (name, hex) in InkColors)
+        {
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = name,
+                IsChecked = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase),
+                Icon = new FontIcon { Glyph = "", Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(hex)) },
+            };
+            item.Click += (_, _) =>
+            {
+                _state.Settings.InkColor = hex;
+                _store.Save(_state);
+                ApplyInkStyleToAll();
+            };
+            flyout.Items.Add(item);
+        }
+
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        flyout.Items.Add(new MenuFlyoutItem { Text = "Width", IsEnabled = false });
+        foreach (var (name, width) in InkWidths)
+        {
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = name,
+                IsChecked = Math.Abs(_state.Settings.InkWidth - width) < 0.01,
+            };
+            item.Click += (_, _) =>
+            {
+                _state.Settings.InkWidth = width;
+                _store.Save(_state);
+                ApplyInkStyleToAll();
+            };
+            flyout.Items.Add(item);
+        }
+
+        InkOptionsButton.Flyout = flyout;
+    }
+
+    private void ApplyInkStyleToAll()
+    {
+        foreach (var view in AllDocumentViews())
+        {
+            view.Viewer.SetInkStyle(_state.Settings.InkColor, _state.Settings.InkWidth);
+        }
+        BuildInkOptionsFlyout(); // refresh checkmarks
+    }
+
+    private static Color HexToColor(string hex)
+    {
+        hex = hex.TrimStart('#');
+        return Color.FromArgb(255,
+            Convert.ToByte(hex[..2], 16),
+            Convert.ToByte(hex[2..4], 16),
+            Convert.ToByte(hex[4..6], 16));
     }
 
     // ---------------------------------------------------------------- commands
@@ -484,6 +568,11 @@ public sealed partial class MainWindow : Window
     private void ForwardButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoForward();
     private void FitWidthButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitWidth);
     private void FitPageButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitPage);
+    private void SaveButton_Click(object sender, RoutedEventArgs e) => _ = SaveActiveAsync();
+    private void SaveAsButton_Click(object sender, RoutedEventArgs e) => _ = SaveAsActiveAsync();
+    private void PropertiesButton_Click(object sender, RoutedEventArgs e) => _ = ShowPropertiesAsync();
+    private void UpdatesButton_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
+    private void InkButton_Click(object sender, RoutedEventArgs e) => SetInkMode(InkButton.IsChecked == true);
 
     private void SetFitMode(FitMode mode)
     {
@@ -711,6 +800,7 @@ public sealed partial class MainWindow : Window
             MinWidth = 160,
         };
         var restoreCheck = new CheckBox { Content = "Reopen last session at startup", IsChecked = _state.Settings.RestoreSession };
+        var thumbsCheck = new CheckBox { Content = "Show recent documents as thumbnails on the start page", IsChecked = _state.Settings.ShowRecentThumbnails };
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
         var updateCheck = new CheckBox { Content = "Check for updates automatically", IsChecked = _state.Settings.AutoCheckUpdates };
 
@@ -721,6 +811,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(new TextBlock { Text = "Theme", Opacity = 0.7 });
         panel.Children.Add(themeBox);
         panel.Children.Add(restoreCheck);
+        panel.Children.Add(thumbsCheck);
         panel.Children.Add(vimCheck);
         panel.Children.Add(updateCheck);
         panel.Children.Add(checkNowButton);
@@ -745,10 +836,12 @@ public sealed partial class MainWindow : Window
         {
             _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
             _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
+            _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
             _state.Settings.VimKeys = vimCheck.IsChecked == true;
             _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
             ApplyTheme(_state.Settings.Theme);
             _store.Save(_state);
+            PopulateRecents(); // reflect the thumbnails toggle immediately
         }
     }
 
@@ -863,6 +956,7 @@ public sealed partial class MainWindow : Window
             [
                 new("Find in document", "Ctrl+F", ShowFindBar),
                 new("Highlight selection", "Ctrl+H", () => viewer.MarkupSelection(MarkupKind.Highlight)),
+                new("Draw (toggle pen)", "Ctrl+E", () => SetInkMode(!viewer.IsInkMode)),
                 new("Save", "Ctrl+S", () => _ = SaveActiveAsync()),
                 new("Save As…", "Ctrl+Shift+S", () => _ = SaveAsActiveAsync()),
                 new("Print", "Ctrl+P", () => _ = PrintAsync()),
@@ -924,11 +1018,74 @@ public sealed partial class MainWindow : Window
 
     // ---------------------------------------------------------------- recents
 
+    private readonly ThumbnailCache _thumbnails = new();
+
     private void PopulateRecents()
     {
         var recents = _state.Recents.Take(AppState.MaxRecents).ToList();
         RecentsList.ItemsSource = recents;
         RecentsHeader.Visibility = recents.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        PopulateRecentThumbnails(recents);
+    }
+
+    private void PopulateRecentThumbnails(List<RecentFile> recents)
+    {
+        bool show = _state.Settings.ShowRecentThumbnails && recents.Count > 0;
+        RecentThumbsSection.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (!show)
+        {
+            RecentThumbs.ItemsSource = null;
+            return;
+        }
+
+        var cards = recents.Take(6).Select(r => new RecentCard(r.Path, r.DisplayName)).ToList();
+        RecentThumbs.ItemsSource = cards;
+
+        foreach (var card in cards)
+        {
+            _ = LoadThumbnailAsync(card);
+        }
+    }
+
+    private async Task LoadThumbnailAsync(RecentCard card)
+    {
+        byte[]? png = await _thumbnails.GetAsync(card.Path);
+        if (png is null)
+        {
+            return;
+        }
+        // Decode on the UI thread into a BitmapImage.
+        var bitmap = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+        using (var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream())
+        {
+            using (var writer = new Windows.Storage.Streams.DataWriter(stream))
+            {
+                writer.WriteBytes(png);
+                await writer.StoreAsync();
+                await writer.FlushAsync();
+                writer.DetachStream();
+            }
+            stream.Seek(0);
+            await bitmap.SetSourceAsync(stream);
+        }
+        card.Thumbnail = bitmap;
+    }
+
+    private void RecentThumbs_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is RecentCard card)
+        {
+            if (File.Exists(card.Path))
+            {
+                OpenOrActivate(card.Path);
+            }
+            else
+            {
+                ShowError($"File not found: {card.Path}");
+                _state.Recents.RemoveAll(r => r.Path == card.Path);
+                PopulateRecents();
+            }
+        }
     }
 
     // ---------------------------------------------------------------- accelerators
@@ -952,6 +1109,7 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.P, VirtualKeyModifiers.Control, () => _ = PrintAsync());
         AddAccelerator(VirtualKey.D, VirtualKeyModifiers.Control, () => _ = ShowPropertiesAsync());
         AddAccelerator(VirtualKey.H, VirtualKeyModifiers.Control, () => _activeViewer?.MarkupSelection(MarkupKind.Highlight));
+        AddAccelerator(VirtualKey.E, VirtualKeyModifiers.Control, () => SetInkMode(!(_activeViewer?.IsInkMode ?? false)));
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control, () => _ = SaveActiveAsync());
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => _ = SaveAsActiveAsync());
 

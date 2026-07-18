@@ -79,6 +79,14 @@ public sealed partial class PdfViewer : UserControl
     private readonly Dictionary<int, List<SearchHit>> _searchByPage = [];
     private SearchHit? _activeHit;
 
+    // Freehand ink.
+    private bool _isInkMode;
+    private bool _isDrawingInk;
+    private int _inkPage = -1;
+    private readonly List<Point> _inkPoints = [];   // document (layout) space
+    private Color _inkColor = Color.FromArgb(255, 226, 34, 34);
+    private double _inkWidthPt = 2.5;
+
     public event EventHandler<int>? CurrentPageChanged;
     public event EventHandler<double>? ZoomChanged;
     public event EventHandler? HistoryChanged;
@@ -108,6 +116,48 @@ public sealed partial class PdfViewer : UserControl
     /// <summary>The currently selected text, or empty if nothing is selected.</summary>
     public string SelectedText => _selection?.Text ?? string.Empty;
     public bool HasSelection => (_selection?.Count ?? 0) > 0;
+
+    /// <summary>When on, dragging draws a freehand ink stroke instead of selecting text.</summary>
+    public bool IsInkMode
+    {
+        get => _isInkMode;
+        set
+        {
+            if (_isInkMode == value)
+            {
+                return;
+            }
+            _isInkMode = value;
+            if (!value && _isDrawingInk)
+            {
+                CancelInkStroke();
+            }
+            ClearSelectionState();
+            ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(
+                value ? Microsoft.UI.Input.InputSystemCursorShape.Cross
+                      : Microsoft.UI.Input.InputSystemCursorShape.Arrow);
+        }
+    }
+
+    /// <summary>Sets the pen color (#RRGGBB) and width (points) for new ink strokes.</summary>
+    public void SetInkStyle(string hexColor, double widthPoints)
+    {
+        _inkColor = ParseHexColor(hexColor, _inkColor);
+        _inkWidthPt = widthPoints > 0 ? widthPoints : _inkWidthPt;
+    }
+
+    private static Color ParseHexColor(string hex, Color fallback)
+    {
+        hex = hex.TrimStart('#');
+        if (hex.Length == 6 &&
+            byte.TryParse(hex[..2], System.Globalization.NumberStyles.HexNumber, null, out byte r) &&
+            byte.TryParse(hex[2..4], System.Globalization.NumberStyles.HexNumber, null, out byte g) &&
+            byte.TryParse(hex[4..6], System.Globalization.NumberStyles.HexNumber, null, out byte b))
+        {
+            return Color.FromArgb(255, r, g, b);
+        }
+        return fallback;
+    }
 
     /// <summary>Invert page colors for night reading. Draw-time effect; cheap to toggle.</summary>
     public bool NightMode
@@ -144,7 +194,12 @@ public sealed partial class PdfViewer : UserControl
         Canvas.PointerReleased += Canvas_PointerReleased;
         Canvas.RightTapped += Canvas_RightTapped;
         Canvas.PointerExited += (_, _) => SetLinkCursor(false);
-        ActualThemeChanged += (_, _) => Canvas.Invalidate();
+        ApplyViewerBackground();
+        ActualThemeChanged += (_, _) =>
+        {
+            ApplyViewerBackground();
+            Canvas.Invalidate();
+        };
         Unloaded += (_, _) => _scheduler.Dispose();
     }
 
@@ -397,7 +452,7 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        _layout = new PageLayout(_pageSizes, _zoom, _rotation, Scroller.ViewportWidth);
+        _layout = new PageLayout(_pageSizes, _zoom, _rotation, Scroller.ViewportWidth, Scroller.ViewportHeight);
         Canvas.Width = _layout.TotalWidth;
         Canvas.Height = _layout.TotalHeight;
     }
@@ -665,6 +720,13 @@ public sealed partial class PdfViewer : UserControl
     {
         var doc = DocumentPointFromPointer(e);
 
+        if (_isDrawingInk)
+        {
+            AppendInkPoint(doc);
+            e.Handled = true;
+            return;
+        }
+
         if (_isSelecting)
         {
             UpdateSelection(doc);
@@ -672,7 +734,10 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        SetLinkCursor(HitTestLink(doc) is not null);
+        if (!_isInkMode)
+        {
+            SetLinkCursor(HitTestLink(doc) is not null);
+        }
     }
 
     private void Canvas_PointerPressed(object sender, PointerRoutedEventArgs e)
@@ -683,6 +748,13 @@ public sealed partial class PdfViewer : UserControl
         }
 
         var docPoint = DocumentPointFromPointer(e);
+
+        if (_isInkMode)
+        {
+            BeginInkStroke(docPoint, e.Pointer);
+            e.Handled = true;
+            return;
+        }
 
         // Links take precedence over starting a selection.
         var link = HitTestLink(docPoint);
@@ -705,12 +777,101 @@ public sealed partial class PdfViewer : UserControl
 
     private void Canvas_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        if (_isDrawingInk)
+        {
+            CommitInkStroke();
+            Canvas.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+            return;
+        }
         if (_isSelecting)
         {
             _isSelecting = false;
             Canvas.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
         }
+    }
+
+    // ---------------------------------------------------------------- ink capture
+
+    private void BeginInkStroke(Point docPoint, Pointer pointer)
+    {
+        if (_layout is null || _document is null || _rotation != 0)
+        {
+            return; // ink geometry only tracked for the unrotated view
+        }
+        _inkPage = _layout.PageAt(docPoint.Y);
+        _inkPoints.Clear();
+        _inkPoints.Add(ClampToPage(_inkPage, docPoint));
+        _isDrawingInk = true;
+        Canvas.CapturePointer(pointer);
+    }
+
+    private void AppendInkPoint(Point docPoint)
+    {
+        var p = ClampToPage(_inkPage, docPoint);
+        // Skip sub-pixel jitter to keep the stroke light.
+        if (_inkPoints.Count == 0 || Math.Abs(p.X - _inkPoints[^1].X) + Math.Abs(p.Y - _inkPoints[^1].Y) >= 1.0)
+        {
+            _inkPoints.Add(p);
+            InvalidateInkArea();
+        }
+    }
+
+    private void CommitInkStroke()
+    {
+        _isDrawingInk = false;
+        if (_document is null || _inkPage < 0 || _inkPoints.Count < 2)
+        {
+            _inkPoints.Clear();
+            Canvas.Invalidate();
+            return;
+        }
+
+        var rect = _layout!.GetPageRect(_inkPage);
+        // Document space → page-local top-left points (undo centering + zoom).
+        var stroke = _inkPoints.Select(p => ((p.X - rect.X) / _zoom, (p.Y - rect.Y) / _zoom)).ToList();
+        _document.AddInk(_inkPage, stroke,
+            _inkColor.R, _inkColor.G, _inkColor.B, 255, (float)_inkWidthPt);
+
+        int page = _inkPage;
+        _inkPoints.Clear();
+        _inkPage = -1;
+        InvalidatePage(page);
+        DocumentEdited?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void CancelInkStroke()
+    {
+        _isDrawingInk = false;
+        _inkPoints.Clear();
+        _inkPage = -1;
+        Canvas.Invalidate();
+    }
+
+    private Point ClampToPage(int page, Point docPoint)
+    {
+        if (_layout is null)
+        {
+            return docPoint;
+        }
+        var r = _layout.GetPageRect(page);
+        return new Point(Math.Clamp(docPoint.X, r.X, r.Right), Math.Clamp(docPoint.Y, r.Y, r.Bottom));
+    }
+
+    private void InvalidateInkArea()
+    {
+        // Repaint a small box around the last segment (cheap live feedback).
+        if (_inkPoints.Count < 2)
+        {
+            return;
+        }
+        var a = _inkPoints[^2];
+        var b = _inkPoints[^1];
+        double pad = _inkWidthPt * _zoom + 4;
+        Canvas.Invalidate(new Rect(
+            Math.Min(a.X, b.X) - pad, Math.Min(a.Y, b.Y) - pad,
+            Math.Abs(a.X - b.X) + 2 * pad, Math.Abs(a.Y - b.Y) + 2 * pad));
     }
 
     // ---------------------------------------------------------------- selection
@@ -930,10 +1091,21 @@ public sealed partial class PdfViewer : UserControl
         UpdateDesiredTiles();
     }
 
+    /// <summary>One source of truth for the area behind pages (canvas clear + control background).</summary>
+    private static Color ViewerBackgroundColor(bool dark) =>
+        dark ? Color.FromArgb(255, 25, 25, 28) : Color.FromArgb(255, 240, 240, 244);
+
+    private void ApplyViewerBackground()
+    {
+        var brush = new Microsoft.UI.Xaml.Media.SolidColorBrush(ViewerBackgroundColor(ActualTheme == ElementTheme.Dark));
+        Background = brush;
+        Scroller.Background = brush;
+    }
+
     private void DrawRegion(CanvasDrawingSession session, Rect region)
     {
         bool dark = ActualTheme == ElementTheme.Dark;
-        session.Clear(dark ? Color.FromArgb(255, 25, 25, 28) : Color.FromArgb(255, 240, 240, 244));
+        session.Clear(ViewerBackgroundColor(dark));
 
         if (_layout is null || _document is null)
         {
@@ -992,6 +1164,24 @@ public sealed partial class PdfViewer : UserControl
 
             DrawHighlights(session, i, pageRect);
             session.DrawRectangle(pageXamlRect, borderColor, 1);
+        }
+
+        DrawLiveInk(session);
+    }
+
+    /// <summary>Draws the in-progress ink stroke as a polyline (committed once released).</summary>
+    private void DrawLiveInk(CanvasDrawingSession session)
+    {
+        if (!_isDrawingInk || _inkPoints.Count < 2)
+        {
+            return;
+        }
+        float strokeWidth = (float)(_inkWidthPt * _zoom);
+        for (int i = 1; i < _inkPoints.Count; i++)
+        {
+            var a = _inkPoints[i - 1];
+            var b = _inkPoints[i];
+            session.DrawLine((float)a.X, (float)a.Y, (float)b.X, (float)b.Y, _inkColor, strokeWidth);
         }
     }
 

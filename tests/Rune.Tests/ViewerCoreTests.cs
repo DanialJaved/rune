@@ -23,6 +23,34 @@ public class PageLayoutTests
     }
 
     [Fact]
+    public void Layout_ShorterThanViewport_FillsHeightAndCentersPages()
+    {
+        // One tiny page zoomed way out; viewport is much taller.
+        var tiny = new (float, float)[] { (612f, 792f) };
+        var layout = new PageLayout(tiny, zoom: 0.2, rotation: 0, minViewportWidth: 1000, minViewportHeight: 900);
+
+        // Canvas grows to fill the viewport so no mismatched-background box shows.
+        Assert.Equal(900, layout.TotalHeight, precision: 3);
+
+        // The single page is centered vertically within that height.
+        double pageHeight = 792 * 0.2;
+        var rect = layout.GetPageRect(0);
+        double expectedTop = (900 - (2 * PageLayout.Margin + pageHeight)) / 2 + PageLayout.Margin;
+        Assert.Equal(expectedTop, rect.Y, precision: 3);
+    }
+
+    [Fact]
+    public void Layout_TallerThanViewport_UsesContentHeight()
+    {
+        var pages = new (float, float)[] { (612f, 792f), (612f, 792f), (612f, 792f) };
+        var layout = new PageLayout(pages, zoom: 1.0, rotation: 0, minViewportWidth: 800, minViewportHeight: 600);
+
+        // Content is far taller than the viewport, so min-height doesn't apply.
+        Assert.Equal(2 * PageLayout.Margin + 3 * 792 + 2 * PageLayout.PageGap, layout.TotalHeight, precision: 3);
+        Assert.Equal(PageLayout.Margin, layout.GetPageRect(0).Y, precision: 3);
+    }
+
+    [Fact]
     public void Layout_Rotation90_SwapsPageDimensions()
     {
         var layout = new PageLayout(ThreeLetterPages, zoom: 1.0, rotation: 1);
