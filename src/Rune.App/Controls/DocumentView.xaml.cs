@@ -31,6 +31,9 @@ public sealed partial class DocumentView : UserControl
     public bool IsDocumentLoaded => _loaded;
     public string? LoadError { get; private set; }
 
+    /// <summary>Set by the shell (from settings) before load: open the sidebar once the document is ready.</summary>
+    public bool OpenSidebarOnLoad { get; set; }
+
     public event EventHandler? Loaded2;
 
     public DocumentView(string filePath)
@@ -74,6 +77,10 @@ public sealed partial class DocumentView : UserControl
         if (restore is not null)
         {
             Viewer.RestoreView(restore.Zoom, restore.Rotation, restore.ScrollFraction);
+        }
+        if (OpenSidebarOnLoad)
+        {
+            IsPaneOpen = true;
         }
 
         PopulateThumbnails(_document.PageCount);
@@ -166,9 +173,10 @@ public sealed partial class DocumentView : UserControl
         {
             var bmp = await Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Thumbnail, () =>
             {
-                // Small fixed-width render; thumbnails don't need DPI scaling.
+                // Render at 1.5x the 168-DIP display width so thumbnails stay
+                // crisp on the typical 125-150% display scale.
                 var (ptWidth, _) = document.GetPageSize(pageIndex);
-                float scale = 120f / Math.Max(1f, ptWidth);
+                float scale = 252f / Math.Max(1f, ptWidth);
                 return document.RenderPage(pageIndex, scale);
             });
             if (_document == document)
@@ -247,7 +255,6 @@ public sealed partial class DocumentView : UserControl
         var nodes = outline.Select(item => new OutlineNode(item)).ToList();
         _hasOutline = nodes.Count > 0;
         OutlineTree.ItemsSource = nodes;
-        OutlineTab.IsEnabled = _hasOutline;
     }
 
     private void OutlineTree_ItemInvoked(TreeView sender, TreeViewItemInvokedEventArgs args)
@@ -258,18 +265,34 @@ public sealed partial class DocumentView : UserControl
         }
     }
 
-    // ---------------------------------------------------------------- sidebar tabs
+    // ---------------------------------------------------------------- sidebar panes
 
-    private void ThumbsTab_Click(object sender, RoutedEventArgs e) => ShowSidebar(thumbnails: true);
-    private void OutlineTab_Click(object sender, RoutedEventArgs e) => ShowSidebar(thumbnails: false);
-
-    private void ShowSidebar(bool thumbnails)
+    private enum SidebarPane
     {
-        ThumbsTab.IsChecked = thumbnails;
-        OutlineTab.IsChecked = !thumbnails;
-        ThumbList.Visibility = thumbnails ? Visibility.Visible : Visibility.Collapsed;
+        Thumbnails,
+        Chapters,
+        Bookmarks,
+    }
 
-        OutlineTree.Visibility = !thumbnails && _hasOutline ? Visibility.Visible : Visibility.Collapsed;
-        NoOutlineLabel.Visibility = !thumbnails && !_hasOutline ? Visibility.Visible : Visibility.Collapsed;
+    private SidebarPane _activePane = SidebarPane.Thumbnails;
+
+    private void ThumbsTab_Click(object sender, RoutedEventArgs e) => ShowSidebar(SidebarPane.Thumbnails);
+    private void OutlineTab_Click(object sender, RoutedEventArgs e) => ShowSidebar(SidebarPane.Chapters);
+    private void BookmarksTab_Click(object sender, RoutedEventArgs e) => ShowSidebar(SidebarPane.Bookmarks);
+
+    private void ShowSidebar(SidebarPane pane)
+    {
+        _activePane = pane;
+        ThumbsTab.IsChecked = pane == SidebarPane.Thumbnails;
+        OutlineTab.IsChecked = pane == SidebarPane.Chapters;
+        BookmarksTab.IsChecked = pane == SidebarPane.Bookmarks;
+
+        ThumbList.Visibility = pane == SidebarPane.Thumbnails ? Visibility.Visible : Visibility.Collapsed;
+        OutlineTree.Visibility = pane == SidebarPane.Chapters && _hasOutline ? Visibility.Visible : Visibility.Collapsed;
+        NoOutlineLabel.Visibility = pane == SidebarPane.Chapters && !_hasOutline ? Visibility.Visible : Visibility.Collapsed;
+
+        bool hasBookmarks = BookmarkList.Items.Count > 0;
+        BookmarkList.Visibility = pane == SidebarPane.Bookmarks && hasBookmarks ? Visibility.Visible : Visibility.Collapsed;
+        NoBookmarksLabel.Visibility = pane == SidebarPane.Bookmarks && !hasBookmarks ? Visibility.Visible : Visibility.Collapsed;
     }
 }

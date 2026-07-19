@@ -46,6 +46,9 @@ public sealed class AppSettings
     /// <summary>Show a thumbnail grid of recent documents on the start page.</summary>
     public bool ShowRecentThumbnails { get; set; } = true;
 
+    /// <summary>Open the sidebar (thumbnails/chapters/bookmarks) when a document loads.</summary>
+    public bool SidebarOpenByDefault { get; set; } = true;
+
     /// <summary>Ink pen color as #RRGGBB (default red).</summary>
     public string InkColor { get; set; } = "#E22222";
 

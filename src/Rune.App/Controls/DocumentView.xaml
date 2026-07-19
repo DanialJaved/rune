@@ -8,37 +8,35 @@
         x:Name="Split"
         DisplayMode="Inline"
         PanePlacement="Left"
-        OpenPaneLength="240"
+        OpenPaneLength="{StaticResource SidebarWidth}"
+        PaneBackground="{ThemeResource LayerFillColorDefaultBrush}"
         IsPaneOpen="False">
 
         <SplitView.Pane>
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="4" Padding="8,8,8,4">
-                    <ToggleButton x:Name="ThumbsTab" Content="Thumbnails" IsChecked="True" Click="ThumbsTab_Click" />
-                    <ToggleButton x:Name="OutlineTab" Content="Contents" Click="OutlineTab_Click" />
-                </StackPanel>
-
+                <!-- Pane content: one of thumbnails / chapters / bookmarks -->
                 <ListView
                     x:Name="ThumbList"
-                    Grid.Row="1"
+                    Grid.Row="0"
                     SelectionMode="Single"
-                    Padding="4"
+                    Padding="4,8"
                     ContainerContentChanging="ThumbList_ContainerContentChanging"
                     SelectionChanged="ThumbList_SelectionChanged">
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="controls:ThumbnailItem">
-                            <StackPanel HorizontalAlignment="Center" Spacing="2" Padding="0,4">
+                            <StackPanel HorizontalAlignment="Center" Spacing="4" Padding="0,6">
                                 <Border
                                     BorderThickness="1"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    CornerRadius="4"
                                     Background="White"
-                                    Width="120"
-                                    MinHeight="150">
+                                    Width="{StaticResource SidebarThumbWidth}"
+                                    MinHeight="210">
                                     <Image Source="{x:Bind Image, Mode=OneWay}" Stretch="Uniform" />
                                 </Border>
                                 <TextBlock
@@ -53,9 +51,10 @@
 
                 <TreeView
                     x:Name="OutlineTree"
-                    Grid.Row="1"
+                    Grid.Row="0"
                     Visibility="Collapsed"
                     SelectionMode="Single"
+                    Padding="0,8"
                     ItemInvoked="OutlineTree_ItemInvoked">
                     <TreeView.ItemTemplate>
                         <DataTemplate x:DataType="controls:OutlineNode">
@@ -70,13 +69,75 @@
 
                 <TextBlock
                     x:Name="NoOutlineLabel"
-                    Grid.Row="1"
+                    Grid.Row="0"
                     Text="No table of contents"
                     Visibility="Collapsed"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                     Style="{StaticResource CaptionTextBlockStyle}"
                     Opacity="0.5" />
+
+                <!-- Bookmarks pane (user bookmarks; filled by the shell) -->
+                <ListView
+                    x:Name="BookmarkList"
+                    Grid.Row="0"
+                    Visibility="Collapsed"
+                    SelectionMode="Single"
+                    Padding="0,8" />
+                <StackPanel
+                    x:Name="NoBookmarksLabel"
+                    Grid.Row="0"
+                    Spacing="4"
+                    Visibility="Collapsed"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                    <TextBlock
+                        Text="No bookmarks yet"
+                        HorizontalAlignment="Center"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Opacity="0.5" />
+                    <TextBlock
+                        Text="Press Ctrl+B to bookmark this page"
+                        HorizontalAlignment="Center"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Opacity="0.35" />
+                </StackPanel>
+
+                <!-- Bottom switcher (Papers pattern): thumbnails / chapters / bookmarks -->
+                <Grid Grid.Row="1" Padding="8,4" ColumnSpacing="4"
+                      BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                      BorderThickness="0,1,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ToggleButton
+                        x:Name="ThumbsTab"
+                        Grid.Column="0"
+                        Style="{StaticResource SidebarTabStyle}"
+                        IsChecked="True"
+                        Click="ThumbsTab_Click"
+                        ToolTipService.ToolTip="Thumbnails">
+                        <FontIcon Glyph="&#xE8A9;" FontSize="14" />
+                    </ToggleButton>
+                    <ToggleButton
+                        x:Name="OutlineTab"
+                        Grid.Column="1"
+                        Style="{StaticResource SidebarTabStyle}"
+                        Click="OutlineTab_Click"
+                        ToolTipService.ToolTip="Chapters">
+                        <FontIcon Glyph="&#xE8FD;" FontSize="14" />
+                    </ToggleButton>
+                    <ToggleButton
+                        x:Name="BookmarksTab"
+                        Grid.Column="2"
+                        Style="{StaticResource SidebarTabStyle}"
+                        Click="BookmarksTab_Click"
+                        ToolTipService.ToolTip="Bookmarks">
+                        <FontIcon Glyph="&#xE8A4;" FontSize="14" />
+                    </ToggleButton>
+                </Grid>
             </Grid>
         </SplitView.Pane>
 
