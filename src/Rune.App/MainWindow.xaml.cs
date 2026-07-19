@@ -337,6 +337,9 @@ public sealed partial class MainWindow : Window
         bool hasTabs = Tabs.TabItems.Count > 0;
         StartPage.Visibility = hasTabs ? Visibility.Collapsed : Visibility.Visible;
         DocHost.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
+        // The document toolbar is meaningless on the start page (and would show
+        // stale page/zoom from the last-closed tab), so hide it there.
+        Toolbar.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
         if (!hasTabs)
         {
             Title = "Rune";
