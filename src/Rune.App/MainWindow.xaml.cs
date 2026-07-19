@@ -1298,7 +1298,10 @@ public sealed partial class MainWindow : Window
         {
             await Task.Delay(200, cts.Token); // debounce rapid typing
             bool matchCase = MatchCaseButton.IsChecked == true;
-            var search = new DocumentSearch(document, query, matchCase, wholeWord: false);
+            // Route each page's search through the viewer's render thread at
+            // Background priority: visible tiles always outrank the sweep.
+            var search = new DocumentSearch(document, query, matchCase, wholeWord: false,
+                workQueue: viewer.WorkQueue);
 
             await search.RunAsync(
                 onPageHits: hits => DispatcherQueue.TryEnqueue(() =>

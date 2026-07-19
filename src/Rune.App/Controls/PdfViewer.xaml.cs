@@ -11,6 +11,7 @@ using Windows.Graphics.DirectX;
 using Windows.System;
 using Windows.UI;
 using DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue;
+using DispatcherQueueTimer = Microsoft.UI.Dispatching.DispatcherQueueTimer;
 
 namespace Rune.Controls;
 
@@ -65,6 +66,22 @@ public sealed partial class PdfViewer : UserControl
     private readonly HashSet<int> _linksRequested = [];
     private bool _pointerOverLink;
 
+    // Per-page text maps (text + char boxes) so selection hit-testing never
+    // calls PDFium on the pointer path. Prefetched for visible pages.
+    private const int PageTextCacheCapacity = 16;
+    private readonly Dictionary<int, PageText> _pageTexts = [];
+    private readonly LinkedList<int> _pageTextLru = [];
+    private readonly HashSet<int> _pageTextRequested = [];
+
+    // Coalesces desired-tile recomputes during scrolling (they're O(visible
+    // tiles) with list allocations — running them on every scroll tick is
+    // measurable churn).
+    private readonly DispatcherQueueTimer _desiredTimer;
+
+    // One reusable invert effect for night mode (allocating per tile per draw
+    // churns the GC during scrolling).
+    private Microsoft.Graphics.Canvas.Effects.InvertEffect? _invertEffect;
+
     // Back/forward: vertical offsets we jumped away from (outline/link/page jumps).
     private readonly Stack<double> _back = new();
     private readonly Stack<double> _forward = new();
@@ -105,6 +122,16 @@ public sealed partial class PdfViewer : UserControl
     public int ViewRotation => _rotation;
     public int PageCount => _document?.PageCount ?? 0;
     public PdfDocument? Document => _document;
+
+    /// <summary>
+    /// The render-thread work queue. ALL PDFium work for this document must go
+    /// through it (or the desired-tile list) — never call the document
+    /// directly from the UI thread or the thread pool.
+    /// </summary>
+    internal IPdfWorkQueue WorkQueue => _scheduler;
+
+    internal Task<T> RunOnRenderThreadAsync<T>(PdfWorkPriority priority, Func<T> operation)
+        => _scheduler.RunAsync(priority, operation);
 
     public bool CanGoBack => _back.Count > 0;
     public bool CanGoForward => _forward.Count > 0;
@@ -189,6 +216,16 @@ public sealed partial class PdfViewer : UserControl
         _dispatcher = DispatcherQueue.GetForCurrentThread();
         _scheduler = new RenderScheduler(OnTileRendered);
 
+        _desiredTimer = _dispatcher.CreateTimer();
+        _desiredTimer.Interval = TimeSpan.FromMilliseconds(50);
+        _desiredTimer.IsRepeating = false;
+        _desiredTimer.Tick += (_, _) =>
+        {
+            UpdateDesiredTiles();
+            UpdateCurrentPage();
+            PrefetchVisiblePageData();
+        };
+
         Canvas.PointerMoved += Canvas_PointerMoved;
         Canvas.PointerPressed += Canvas_PointerPressed;
         Canvas.PointerReleased += Canvas_PointerReleased;
@@ -238,6 +275,7 @@ public sealed partial class PdfViewer : UserControl
         _forward.Clear();
         _links.Clear();
         _linksRequested.Clear();
+        ClearPageTextCache();
         _selection = null;
         _selectionPage = -1;
         _selectionAnchorChar = -1;
@@ -251,7 +289,7 @@ public sealed partial class PdfViewer : UserControl
         Scroller.ChangeView(0, 0, null, disableAnimation: true);
         Canvas.Invalidate();
         UpdateDesiredTiles();
-        PrefetchVisibleLinks(); // ChangeView(0,0) on a fresh doc fires no ViewChanged
+        PrefetchVisiblePageData(); // ChangeView(0,0) on a fresh doc fires no ViewChanged
         CurrentPageChanged?.Invoke(this, 0);
         HistoryChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -284,6 +322,10 @@ public sealed partial class PdfViewer : UserControl
         }
         _previews.Clear();
         _previewLru.Clear();
+
+        // The effect holds a reference to a (possibly device-lost) bitmap.
+        _invertEffect?.Dispose();
+        _invertEffect = null;
     }
 
     // ---------------------------------------------------------------- zoom & fit
@@ -362,6 +404,7 @@ public sealed partial class PdfViewer : UserControl
         _activeHit = null;
         _links.Clear();
         _linksRequested.Clear();
+        ClearPageTextCache();
 
         // Previews are rendered per-rotation; drop them along with stale tiles.
         ClearCaches();
@@ -493,9 +536,27 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        UpdateDesiredTiles();
-        UpdateCurrentPage();
-        PrefetchVisibleLinks();
+        if (e.IsIntermediate)
+        {
+            // Mid-scroll: coalesce the (allocating) want-list recompute; the
+            // 50 ms timer keeps tiles flowing without per-tick churn.
+            RequestDesiredUpdate();
+        }
+        else
+        {
+            UpdateDesiredTiles();
+            UpdateCurrentPage();
+            PrefetchVisiblePageData();
+        }
+    }
+
+    /// <summary>Coalesced <see cref="UpdateDesiredTiles"/> (plus page/prefetch upkeep).</summary>
+    private void RequestDesiredUpdate()
+    {
+        if (!_desiredTimer.IsRunning)
+        {
+            _desiredTimer.Start();
+        }
     }
 
     private void RebaseZoom(float factor)
@@ -527,11 +588,11 @@ public sealed partial class PdfViewer : UserControl
     }
 
     /// <summary>
-    /// Kick off link extraction for pages entering the viewport so the FIRST
-    /// click on a link works — extracting lazily on pointer contact loses the
-    /// race against the click itself.
+    /// Kick off link + text-map extraction for pages entering the viewport so
+    /// the FIRST click (on a link, or starting a selection) works — extracting
+    /// lazily on pointer contact loses the race against the click itself.
     /// </summary>
-    private void PrefetchVisibleLinks()
+    private void PrefetchVisiblePageData()
     {
         if (_layout is null || _document is null || _rotation != 0)
         {
@@ -542,6 +603,7 @@ public sealed partial class PdfViewer : UserControl
         for (int i = first; i <= last; i++)
         {
             EnsureLinks(i);
+            EnsurePageText(i);
         }
     }
 
@@ -567,38 +629,71 @@ public sealed partial class PdfViewer : UserControl
 
     // ---------------------------------------------------------------- annotations
 
-    /// <summary>Applies a markup annotation to the current text selection.</summary>
-    public void MarkupSelection(MarkupKind kind)
+    /// <summary>
+    /// Applies a markup annotation to the current text selection. The PDFium
+    /// write runs on the render thread (never block the UI on the PDFium lock);
+    /// the page refreshes when it completes.
+    /// </summary>
+    public async void MarkupSelection(MarkupKind kind)
     {
         if (_document is null || _selection is not { Count: > 0 } selection || _rotation != 0)
         {
             return;
         }
 
-        // Semi-transparent yellow for highlights; solid red for line markup.
-        if (kind == MarkupKind.Highlight)
-        {
-            _document.AddMarkup(selection.PageIndex, kind, selection.Rects, 255, 210, 0, 102);
-        }
-        else
-        {
-            _document.AddMarkup(selection.PageIndex, kind, selection.Rects, 220, 30, 30, 255);
-        }
-
+        var document = _document;
         int page = selection.PageIndex;
         ClearSelectionState();
+        Canvas.Invalidate();
+
+        try
+        {
+            // Semi-transparent yellow for highlights; solid red for line markup.
+            await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+            {
+                if (kind == MarkupKind.Highlight)
+                {
+                    document.AddMarkup(page, kind, selection.Rects, 255, 210, 0, 102);
+                }
+                else
+                {
+                    document.AddMarkup(page, kind, selection.Rects, 220, 30, 30, 255);
+                }
+            });
+        }
+        catch
+        {
+            return; // document swapped or closed mid-edit
+        }
+        if (_document != document)
+        {
+            return;
+        }
         InvalidatePage(page);
         DocumentEdited?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Adds a note (already collected by the shell) and refreshes the page.</summary>
-    public void AddNote(int pageIndex, double x, double y, string text)
+    public async void AddNote(int pageIndex, double x, double y, string text)
     {
         if (_document is null)
         {
             return;
         }
-        _document.AddNote(pageIndex, x, y, text);
+        var document = _document;
+        try
+        {
+            await _scheduler.RunAsync(PdfWorkPriority.Interactive,
+                () => document.AddNote(pageIndex, x, y, text));
+        }
+        catch
+        {
+            return;
+        }
+        if (_document != document)
+        {
+            return;
+        }
         InvalidatePage(pageIndex);
         DocumentEdited?.Invoke(this, EventArgs.Empty);
     }
@@ -636,16 +731,18 @@ public sealed partial class PdfViewer : UserControl
         UpdateDesiredTiles();
     }
 
-    private void Canvas_RightTapped(object sender, RightTappedRoutedEventArgs e)
+    private async void Canvas_RightTapped(object sender, RightTappedRoutedEventArgs e)
     {
         if (_document is null || _layout is null)
         {
             return;
         }
+        e.Handled = true; // must be set before any await — the event returns at the first one
 
         var position = e.GetPosition(Canvas);
         int page = _layout.PageAt(position.Y);
         var (localX, localY) = ToPageLocal(page, new Point(position.X, position.Y));
+        var document = _document;
 
         var menu = new MenuFlyout();
 
@@ -670,17 +767,43 @@ public sealed partial class PdfViewer : UserControl
             AddMenuItem(menu, "Add note here", Symbol.Comment,
                 () => NoteRequested?.Invoke(this, (page, localX, localY)));
 
-            // Offer deletion when the click lands on an annotation.
-            var hit = _document.GetAnnotations(page)
-                .LastOrDefault(annot => annot.Subtype != 2 /* links aren't editable */ &&
-                                        localX >= annot.X - 4 && localX <= annot.X + annot.Width + 4 &&
-                                        localY >= annot.Y - 4 && localY <= annot.Y + annot.Height + 4);
+            // Offer deletion when the click lands on an annotation. The query
+            // runs on the render thread so a slow tile render can't freeze the
+            // UI while the menu is being built.
+            AnnotationInfo? hit = null;
+            try
+            {
+                var annotations = await _scheduler.RunAsync(
+                    PdfWorkPriority.Interactive, () => document.GetAnnotations(page));
+                hit = annotations.LastOrDefault(annot =>
+                    annot.Subtype != 2 /* links aren't editable */ &&
+                    localX >= annot.X - 4 && localX <= annot.X + annot.Width + 4 &&
+                    localY >= annot.Y - 4 && localY <= annot.Y + annot.Height + 4);
+            }
+            catch
+            {
+                // Document swapped/closed; show the menu without a delete entry.
+            }
+            if (_document != document)
+            {
+                return;
+            }
             if (hit is not null)
             {
                 AddMenuItem(menu, hit.IsNote ? $"Delete note{FormatNotePreview(hit.Contents)}" : "Delete annotation",
-                    Symbol.Delete, () =>
+                    Symbol.Delete, async () =>
                     {
-                        if (_document.RemoveAnnotation(page, hit.Index))
+                        bool removed;
+                        try
+                        {
+                            removed = await _scheduler.RunAsync(
+                                PdfWorkPriority.Interactive, () => document.RemoveAnnotation(page, hit.Index));
+                        }
+                        catch
+                        {
+                            return;
+                        }
+                        if (removed && _document == document)
                         {
                             InvalidatePage(page);
                             DocumentEdited?.Invoke(this, EventArgs.Empty);
@@ -692,7 +815,6 @@ public sealed partial class PdfViewer : UserControl
         if (menu.Items.Count > 0)
         {
             menu.ShowAt(Canvas, position);
-            e.Handled = true;
         }
     }
 
@@ -818,7 +940,7 @@ public sealed partial class PdfViewer : UserControl
         }
     }
 
-    private void CommitInkStroke()
+    private async void CommitInkStroke()
     {
         _isDrawingInk = false;
         if (_document is null || _inkPage < 0 || _inkPoints.Count < 2)
@@ -831,12 +953,28 @@ public sealed partial class PdfViewer : UserControl
         var rect = _layout!.GetPageRect(_inkPage);
         // Document space → page-local top-left points (undo centering + zoom).
         var stroke = _inkPoints.Select(p => ((p.X - rect.X) / _zoom, (p.Y - rect.Y) / _zoom)).ToList();
-        _document.AddInk(_inkPage, stroke,
-            _inkColor.R, _inkColor.G, _inkColor.B, 255, (float)_inkWidthPt);
 
+        var document = _document;
         int page = _inkPage;
+        var (cr, cg, cb) = (_inkColor.R, _inkColor.G, _inkColor.B);
+        float width = (float)_inkWidthPt;
         _inkPoints.Clear();
         _inkPage = -1;
+
+        try
+        {
+            await _scheduler.RunAsync(PdfWorkPriority.Interactive,
+                () => document.AddInk(page, stroke, cr, cg, cb, 255, width));
+        }
+        catch
+        {
+            Canvas.Invalidate(); // stroke is lost (doc swapped/closed); clear the live line
+            return;
+        }
+        if (_document != document)
+        {
+            return;
+        }
         InvalidatePage(page);
         DocumentEdited?.Invoke(this, EventArgs.Empty);
     }
@@ -885,7 +1023,15 @@ public sealed partial class PdfViewer : UserControl
 
         int page = _layout.PageAt(docPoint.Y);
         var (localX, localY) = ToPageLocal(page, docPoint);
-        int charIndex = _document.CharIndexAt(page, localX, localY);
+
+        // Hit-test against the cached text map — never PDFium on the pointer
+        // path. If the map hasn't arrived yet (racing the very first press),
+        // kick off extraction; the next press will hit.
+        if (!_pageTexts.TryGetValue(page, out var pageText))
+        {
+            EnsurePageText(page);
+        }
+        int charIndex = pageText?.CharIndexAt(localX, localY) ?? -1;
 
         // Clear any previous selection regardless of whether we hit a glyph.
         bool hadSelection = HasSelection;
@@ -906,34 +1052,24 @@ public sealed partial class PdfViewer : UserControl
 
     private void UpdateSelection(Point docPoint)
     {
-        if (_document is null || _selectionPage < 0 || _selectionAnchorChar < 0)
+        // Selection stays on the page it started on (single-page selection).
+        // Everything here is a managed lookup on the cached text map — this
+        // runs on every PointerMoved during a drag and must never touch PDFium.
+        if (_document is null || _selectionPage < 0 || _selectionAnchorChar < 0 ||
+            !_pageTexts.TryGetValue(_selectionPage, out var pageText))
         {
             return;
         }
 
-        // Selection stays on the page it started on (single-page selection).
         var (localX, localY) = ToPageLocal(_selectionPage, docPoint);
-        int focusChar = _document.CharIndexAt(_selectionPage, localX, localY);
+        int focusChar = pageText.CharIndexAt(localX, localY);
         if (focusChar < 0)
         {
             return;
         }
 
-        var document = _document;
-        int page = _selectionPage;
-        int anchor = _selectionAnchorChar;
-        Task.Run(() =>
-        {
-            var selection = document.GetSelection(page, anchor, focusChar);
-            _dispatcher.TryEnqueue(() =>
-            {
-                if (_document == document && _isSelecting)
-                {
-                    _selection = selection;
-                    Canvas.Invalidate();
-                }
-            });
-        });
+        _selection = pageText.GetSelection(_selectionAnchorChar, focusChar);
+        Canvas.Invalidate();
     }
 
     /// <summary>Document (layout) point → page-local points (top-left origin, unscaled).</summary>
@@ -1029,31 +1165,70 @@ public sealed partial class PdfViewer : UserControl
         return null;
     }
 
-    private void EnsureLinks(int pageIndex)
+    private async void EnsureLinks(int pageIndex)
     {
         if (_document is null || !_linksRequested.Add(pageIndex))
         {
             return;
         }
         var document = _document;
-        Task.Run(() =>
+        try
         {
-            try
+            var links = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () => document.GetLinks(pageIndex));
+            if (_document == document)
             {
-                var links = document.GetLinks(pageIndex);
-                _dispatcher.TryEnqueue(() =>
-                {
-                    if (_document == document)
-                    {
-                        _links[pageIndex] = links;
-                    }
-                });
+                _links[pageIndex] = links;
             }
-            catch
+        }
+        catch
+        {
+            // Best-effort; also covers cancellation when the document swaps.
+        }
+    }
+
+    private async void EnsurePageText(int pageIndex)
+    {
+        if (_document is null || !_pageTextRequested.Add(pageIndex))
+        {
+            return;
+        }
+        var document = _document;
+        try
+        {
+            var text = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () => document.GetPageText(pageIndex));
+            if (_document == document)
             {
-                // Link extraction is best-effort; ignore failures.
+                InsertPageText(pageIndex, text);
             }
-        });
+        }
+        catch
+        {
+            _pageTextRequested.Remove(pageIndex); // retry on the next prefetch
+        }
+    }
+
+    private void InsertPageText(int pageIndex, PageText text)
+    {
+        if (_pageTexts.ContainsKey(pageIndex))
+        {
+            _pageTextLru.Remove(pageIndex);
+        }
+        _pageTexts[pageIndex] = text;
+        _pageTextLru.AddFirst(pageIndex);
+
+        while (_pageTextLru.Count > PageTextCacheCapacity && _pageTextLru.Last is { } oldest)
+        {
+            _pageTexts.Remove(oldest.Value);
+            _pageTextRequested.Remove(oldest.Value);
+            _pageTextLru.RemoveLast();
+        }
+    }
+
+    private void ClearPageTextCache()
+    {
+        _pageTexts.Clear();
+        _pageTextLru.Clear();
+        _pageTextRequested.Clear();
     }
 
     private void SetLinkCursor(bool overLink)
@@ -1088,7 +1263,9 @@ public sealed partial class PdfViewer : UserControl
             using var session = sender.CreateDrawingSession(region);
             DrawRegion(session, region);
         }
-        UpdateDesiredTiles();
+        // Safety net for regions the virtual control materializes without a
+        // ViewChanged (e.g. fast flicks) — coalesced, not per-draw.
+        RequestDesiredUpdate();
     }
 
     /// <summary>One source of truth for the area behind pages (canvas clear + control background).</summary>
@@ -1193,9 +1370,9 @@ public sealed partial class PdfViewer : UserControl
     {
         if (_nightMode)
         {
-            session.DrawImage(
-                new Microsoft.Graphics.Canvas.Effects.InvertEffect { Source = bitmap },
-                dest, bitmap.Bounds);
+            _invertEffect ??= new Microsoft.Graphics.Canvas.Effects.InvertEffect();
+            _invertEffect.Source = bitmap;
+            session.DrawImage(_invertEffect, dest, bitmap.Bounds);
         }
         else
         {
