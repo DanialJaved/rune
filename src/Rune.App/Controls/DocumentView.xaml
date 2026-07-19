@@ -77,13 +77,29 @@
                     Style="{StaticResource CaptionTextBlockStyle}"
                     Opacity="0.5" />
 
-                <!-- Bookmarks pane (user bookmarks; filled by the shell) -->
+                <!-- Bookmarks pane (user bookmarks; persisted via the shell) -->
                 <ListView
                     x:Name="BookmarkList"
                     Grid.Row="0"
                     Visibility="Collapsed"
                     SelectionMode="Single"
-                    Padding="0,8" />
+                    Padding="0,8"
+                    IsItemClickEnabled="True"
+                    ItemClick="BookmarkList_ItemClick"
+                    RightTapped="BookmarkList_RightTapped"
+                    KeyDown="BookmarkList_KeyDown">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="controls:BookmarkItem">
+                            <StackPanel Orientation="Horizontal" Spacing="10" Padding="4,6">
+                                <FontIcon Glyph="&#xE8A4;" FontSize="14" Opacity="0.6" VerticalAlignment="Center" />
+                                <StackPanel>
+                                    <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{x:Bind PageLabel, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.5" />
+                                </StackPanel>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
                 <StackPanel
                     x:Name="NoBookmarksLabel"
                     Grid.Row="0"
