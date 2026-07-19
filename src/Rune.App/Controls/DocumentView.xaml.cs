@@ -84,8 +84,14 @@ public sealed partial class DocumentView : UserControl
     public void Close()
     {
         Viewer.SetDocument(null);
-        _document?.Dispose();
+        var document = _document;
         _document = null;
+        if (document is not null)
+        {
+            // Dispose takes the global PDFium lock; never block the UI thread
+            // on it (a tile render can hold it for tens of milliseconds).
+            _ = Task.Run(document.Dispose);
+        }
     }
 
     public bool IsDirty => _document?.IsDirty == true;
@@ -110,7 +116,7 @@ public sealed partial class DocumentView : UserControl
         double fraction = Viewer.ScrollFraction;
 
         Viewer.SetDocument(null);
-        document.Dispose();
+        await Task.Run(document.Dispose); // takes the PDFium lock — keep it off the UI thread
         _document = null;
 
         try
@@ -145,7 +151,9 @@ public sealed partial class DocumentView : UserControl
     }
 
     // Lazily render a thumbnail as its container is realized (list virtualization).
-    private void ThumbList_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    // Runs on the render thread at Thumbnail priority: visible tiles always win,
+    // so scrolling the sidebar can't make the document stutter.
+    private async void ThumbList_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
     {
         if (args.InRecycleQueue || args.Item is not ThumbnailItem item || item.IsRendered || _document is null)
         {
@@ -154,30 +162,25 @@ public sealed partial class DocumentView : UserControl
 
         var document = _document;
         int pageIndex = item.PageIndex;
-        Task.Run(() =>
+        try
         {
-            try
+            var bmp = await Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Thumbnail, () =>
             {
                 // Small fixed-width render; thumbnails don't need DPI scaling.
                 var (ptWidth, _) = document.GetPageSize(pageIndex);
                 float scale = 120f / Math.Max(1f, ptWidth);
-                var bmp = document.RenderPage(pageIndex, scale);
-                _dispatcher.TryEnqueue(() =>
-                {
-                    if (_document != document)
-                    {
-                        bmp.Return();
-                        return;
-                    }
-                    item.Image = ToBitmap(bmp);
-                    bmp.Return();
-                });
-            }
-            catch
+                return document.RenderPage(pageIndex, scale);
+            });
+            if (_document == document)
             {
-                // Skip unrenderable thumbnails.
+                item.Image = ToBitmap(bmp);
             }
-        });
+            bmp.Return();
+        }
+        catch
+        {
+            // Skip unrenderable thumbnails (also covers doc-swap cancellation).
+        }
     }
 
     private static WriteableBitmap ToBitmap(PageBitmap page)

@@ -309,6 +309,10 @@ public static class PdfiumNative
     public static int TextCharIndexAtPos(IntPtr textPage, double x, double y, double tolerance)
         => NativeMethods.FPDFText_GetCharIndexAtPos(textPage, x, y, tolerance, tolerance);
 
+    /// <summary>Bounding box of one character, in page space (bottom-left origin). False for chars with no box.</summary>
+    public static bool TextGetCharBox(IntPtr textPage, int index, out double left, out double right, out double bottom, out double top)
+        => NativeMethods.FPDFText_GetCharBox(textPage, index, out left, out right, out bottom, out top) != 0;
+
     public static int TextCountRects(IntPtr textPage, int startIndex, int count)
         => NativeMethods.FPDFText_CountRects(textPage, startIndex, count);
 

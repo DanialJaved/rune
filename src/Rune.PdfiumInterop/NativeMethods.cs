@@ -264,6 +264,10 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FPDFText_GetCharIndexAtPos(IntPtr textPage, double x, double y, double xTolerance, double yTolerance);
 
+    /// <summary>Bounding box of one character in page space. NOTE the parameter order: left, right, bottom, top.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_GetCharBox(IntPtr textPage, int index, out double left, out double right, out double bottom, out double top);
+
     /// <summary>Number of distinct rectangles covering the given char range (multi-line selections span several).</summary>
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FPDFText_CountRects(IntPtr textPage, int startIndex, int count);
