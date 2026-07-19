@@ -873,6 +873,71 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    // ---------------------------------------------------------------- shortcuts overlay
+
+    private void ShortcutsMenuItem_Click(object sender, RoutedEventArgs e) => _ = ShowShortcutsAsync();
+
+    /// <summary>GNOME-style two-column shortcuts window, fed by <see cref="ShortcutCatalog"/>.</summary>
+    private async Task ShowShortcutsAsync()
+    {
+        var grid = new Grid { ColumnSpacing = 40, MinWidth = 620 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var columns = new[] { new StackPanel { Spacing = 20 }, new StackPanel { Spacing = 20 } };
+        Grid.SetColumn(columns[1], 1);
+        grid.Children.Add(columns[0]);
+        grid.Children.Add(columns[1]);
+
+        var strongStyle = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"];
+        var captionStyle = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+        var keyBackground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["ControlFillColorDefaultBrush"];
+
+        // Flow groups into whichever column is currently shorter.
+        var weight = new int[2];
+        foreach (var group in ShortcutCatalog.Groups)
+        {
+            int target = weight[0] <= weight[1] ? 0 : 1;
+            var panel = new StackPanel { Spacing = 6 };
+            panel.Children.Add(new TextBlock { Text = group.Title, Style = strongStyle });
+            foreach (var shortcut in group.Shortcuts)
+            {
+                var row = new Grid { ColumnSpacing = 12 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var name = new TextBlock
+                {
+                    Text = shortcut.Name,
+                    Opacity = 0.85,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                };
+                var keys = new Border
+                {
+                    Background = keyBackground,
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(7, 3, 7, 3),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Child = new TextBlock { Text = shortcut.Keys, Style = captionStyle },
+                };
+                Grid.SetColumn(keys, 1);
+                row.Children.Add(name);
+                row.Children.Add(keys);
+                panel.Children.Add(row);
+            }
+            columns[target].Children.Add(panel);
+            weight[target] += group.Shortcuts.Length + 2;
+        }
+
+        await new ContentDialog
+        {
+            Title = "Keyboard shortcuts",
+            Content = new ScrollViewer { Content = grid, MaxHeight = 540 },
+            CloseButtonText = "Close",
+            XamlRoot = Content.XamlRoot,
+        }.ShowAsync();
+    }
+
     // ---------------------------------------------------------------- updates
 
     private readonly UpdateService _updater = new();
@@ -974,6 +1039,7 @@ public sealed partial class MainWindow : Window
         var commands = new List<PaletteCommand>
         {
             new("Open file…", "Ctrl+O", () => OpenButton_Click(this, null!)),
+            new("Keyboard shortcuts", "F1", () => _ = ShowShortcutsAsync()),
             new("Settings", "", () => SettingsButton_Click(this, null!)),
             new("Check for updates", "", () => _ = CheckForUpdatesAsync(userInitiated: true)),
         };
@@ -1148,6 +1214,10 @@ public sealed partial class MainWindow : Window
         // Available even with no document open.
         AddAccelerator(VirtualKey.O, VirtualKeyModifiers.Control, () => OpenButton_Click(this, null!), requiresDocument: false);
         AddAccelerator(VirtualKey.K, VirtualKeyModifiers.Control, ShowPalette, requiresDocument: false);
+        AddAccelerator(VirtualKey.F1, VirtualKeyModifiers.None, () => _ = ShowShortcutsAsync(), requiresDocument: false);
+        // Ctrl+? — GNOME's other shortcuts-window binding (Shift+/ = ? on US layouts).
+        AddAccelerator((VirtualKey)0xBF, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
+            () => _ = ShowShortcutsAsync(), requiresDocument: false);
         AddAccelerator(VirtualKey.F5, VirtualKeyModifiers.None, TogglePresentation);
         AddAccelerator(VirtualKey.Escape, VirtualKeyModifiers.None, () =>
         {
