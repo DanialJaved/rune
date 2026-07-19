@@ -45,6 +45,10 @@ public sealed partial class MainWindow : Window
 
         RegisterAccelerators();
         ((UIElement)Content).KeyDown += Content_KeyDown;
+        // Tunneling handler: navigation keys must reach the document even when
+        // focus sits on the tab strip or a toolbar button (those controls eat
+        // arrow keys in the bubbling phase for their own focus movement).
+        ((UIElement)Content).PreviewKeyDown += Content_PreviewKeyDown;
         BuildInkOptionsFlyout();
         PopulateRecents();
 
@@ -1161,15 +1165,30 @@ public sealed partial class MainWindow : Window
 
     private void Content_KeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Handled || !_state.Settings.VimKeys || _activeViewer is null ||
-            Palette.IsOpen || IsTextInputFocused())
+        if (e.Handled || _activeViewer is null || Palette.IsOpen || IsTextInputFocused())
         {
             return;
         }
 
-        bool shift = Microsoft.UI.Input.InputKeyboardSource
-            .GetKeyStateForCurrentThread(VirtualKey.Shift)
-            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        bool shift = IsKeyDown(VirtualKey.Shift);
+        if (IsKeyDown(VirtualKey.Control) || IsKeyDown(VirtualKey.Menu))
+        {
+            return; // modified combos belong to the KeyboardAccelerators
+        }
+
+        // Space pages here in the BUBBLING phase (not PreviewKeyDown) so a
+        // focused button keeps its Space-to-activate accessibility behavior.
+        if (e.Key == VirtualKey.Space)
+        {
+            _activeViewer.ScrollByViewport(shift ? -0.9 : +0.9);
+            e.Handled = true;
+            return;
+        }
+
+        if (!_state.Settings.VimKeys)
+        {
+            return;
+        }
 
         switch (e.Key)
         {
@@ -1186,10 +1205,18 @@ public sealed partial class MainWindow : Window
                 _activeViewer.ScrollHorizontally(+1);
                 break;
             case VirtualKey.N:
-                StepHit(shift ? -1 : +1);
+                // Next search hit while a search is active, else next page.
+                if (_searchHits.Count > 0)
+                {
+                    StepHit(shift ? -1 : +1);
+                }
+                else if (!shift)
+                {
+                    _activeViewer.GoToPage(_activeViewer.CurrentPage + 1);
+                }
                 break;
-            case VirtualKey.Space:
-                _activeViewer.ScrollByViewport(shift ? -0.9 : +0.9);
+            case VirtualKey.P:
+                _activeViewer.GoToPage(_activeViewer.CurrentPage - 1);
                 break;
             case VirtualKey.G when shift:
                 _activeViewer.GoToPage(_activeViewer.PageCount - 1, recordHistory: true);
@@ -1211,6 +1238,66 @@ public sealed partial class MainWindow : Window
         }
         e.Handled = true;
     }
+
+    /// <summary>
+    /// Standard navigation — always on, matching Evince/GNOME Papers: arrows
+    /// scroll/page, PageUp/Down step viewports, Home/End jump. Tunneling so
+    /// the tab strip and toolbar can't swallow the keys; text inputs and the
+    /// sidebar's own lists are explicitly excluded.
+    /// </summary>
+    private void Content_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Handled || _activeViewer is null || Palette.IsOpen || IsTextInputFocused())
+        {
+            return;
+        }
+        if (IsKeyDown(VirtualKey.Control) || IsKeyDown(VirtualKey.Menu))
+        {
+            return;
+        }
+        // Sidebar thumbnails/outline/bookmarks keep their own arrow navigation.
+        if (FocusManager.GetFocusedElement(Content.XamlRoot)
+            is Microsoft.UI.Xaml.Controls.Primitives.SelectorItem or TreeViewItem)
+        {
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case VirtualKey.Up:
+                _activeViewer.ScrollByLines(-3);
+                break;
+            case VirtualKey.Down:
+                _activeViewer.ScrollByLines(+3);
+                break;
+            case VirtualKey.Left:
+                _activeViewer.GoToPage(_activeViewer.CurrentPage - 1);
+                break;
+            case VirtualKey.Right:
+                _activeViewer.GoToPage(_activeViewer.CurrentPage + 1);
+                break;
+            case VirtualKey.PageUp:
+                _activeViewer.ScrollByViewport(-0.9);
+                break;
+            case VirtualKey.PageDown:
+                _activeViewer.ScrollByViewport(+0.9);
+                break;
+            case VirtualKey.Home:
+                _activeViewer.GoToPage(0, recordHistory: true);
+                break;
+            case VirtualKey.End:
+                _activeViewer.GoToPage(_activeViewer.PageCount - 1, recordHistory: true);
+                break;
+            default:
+                return;
+        }
+        e.Handled = true;
+    }
+
+    private static bool IsKeyDown(VirtualKey key) =>
+        Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(key)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
     private void CloseCurrentTab()
     {

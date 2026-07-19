@@ -60,32 +60,50 @@ public class SchedulerOpTests
     public async Task SetDocument_CancelsPendingOps()
     {
         using var scheduler = new RenderScheduler((_, bmp) => bmp.Return());
+        var started = new ManualResetEventSlim(false);
         var gate = new ManualResetEventSlim(false);
 
-        var blocker = scheduler.RunAsync(PdfWorkPriority.Interactive, () => gate.Wait());
+        // Occupy the render thread, and only queue the victim op once the
+        // blocker is definitely executing — otherwise SetDocument would drain
+        // the blocker too (or the victim could slip through and run).
+        var blocker = scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+        {
+            started.Set();
+            gate.Wait();
+        });
+        started.Wait();
         var pending = scheduler.RunAsync(PdfWorkPriority.Background, () => 1);
 
         scheduler.SetDocument(null); // swap drops queued (not-yet-started) ops
-        gate.Set();
-
-        await blocker;
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+
+        gate.Set();
+        await blocker;
     }
 
     [Fact]
     public async Task Dispose_CancelsPendingOps_AndRejectsNewOnes()
     {
         var scheduler = new RenderScheduler((_, bmp) => bmp.Return());
+        var started = new ManualResetEventSlim(false);
         var gate = new ManualResetEventSlim(false);
-        var blocker = scheduler.RunAsync(PdfWorkPriority.Interactive, () => gate.Wait());
+        var blocker = scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+        {
+            started.Set();
+            gate.Wait();
+        });
+        started.Wait(); // render thread is now busy; the next op must queue
         var pending = scheduler.RunAsync(PdfWorkPriority.Thumbnail, () => 1);
 
-        var disposal = Task.Run(scheduler.Dispose); // Dispose joins the thread; unblock it
-        gate.Set();
-        await disposal;
-
-        await blocker;
+        // Dispose drains + cancels queued ops before joining the thread, so
+        // the pending op is cancelled while the blocker is still running.
+        var disposal = Task.Run(scheduler.Dispose);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+
+        gate.Set(); // let the blocker finish so Dispose's Join returns
+        await disposal;
+        await blocker;
+
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => scheduler.RunAsync(PdfWorkPriority.Interactive, () => 2));
     }
