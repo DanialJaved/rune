@@ -27,14 +27,17 @@ Windows never had a PDF reader that is fast **and** lightweight **and** modern-l
 - Zoom 10–640% at the cursor, fit-width / fit-page, rotation
 - Thumbnails + table-of-contents sidebar, internal & web links, back/forward history
 - Text selection & copy, find-in-document with highlight-all and hit stepping
-- **Annotations**: highlight, underline, strikeout from a selection, plus sticky notes — saved as standard PDF annotations any reader can see (`Ctrl+H`, right-click menu, `Ctrl+S` / `Ctrl+Shift+S`)
+- **Annotations**: highlight, underline, strikeout from a selection, sticky notes, and **freehand pen/ink** — saved as standard PDF annotations any reader can see (`Ctrl+H` highlight, `Ctrl+E` pen, right-click menu, `Ctrl+S` / `Ctrl+Shift+S`)
 - **Night mode**: GPU-inverted page colors for dark-room reading (`Ctrl+I`)
+- **Recent-documents homepage**: first-page thumbnails of your last files (optional, in Settings)
 - Command palette (`Ctrl+K`) with fuzzy filtering and go-to-page
 - Session restore: reopens your tabs at the exact scroll position
 - Pinch-to-zoom (touch/touchpad) and `Ctrl`+scroll, zoom at the cursor
 - **Self-updating**: checks GitHub for new releases and updates in place (portable build; toggle in Settings)
 - Printing with live preview and page ranges
 - Opens damaged PDFs gracefully; 4 GB-file streaming without loading into memory
+
+The toolbar is a stock Windows 11 command bar — uniform, and it collapses commands into an overflow menu on narrow windows.
 
 ## Keyboard shortcuts
 
@@ -48,10 +51,10 @@ Windows never had a PDF reader that is fast **and** lightweight **and** modern-l
 | First / last page | `gg` / `G` |
 | Back / forward | `Alt+←` / `Alt+→` |
 | Night mode / sidebar / rotate | `Ctrl+I` / `F9` / `Ctrl+R` |
-| Highlight selection / save / save as | `Ctrl+H` / `Ctrl+S` / `Ctrl+Shift+S` |
+| Highlight / pen / save / save as | `Ctrl+H` / `Ctrl+E` / `Ctrl+S` / `Ctrl+Shift+S` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
 
-Vim-style keys can be disabled in Settings. Right-click a selection for underline/strikeout, or anywhere to add a note.
+Vim-style keys can be disabled in Settings. Right-click a selection for underline/strikeout, or anywhere to add a note. Pen color and width are in the toolbar's overflow menu.
 
 ## Install
 
