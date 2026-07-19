@@ -21,6 +21,7 @@ internal static class ShortcutCatalog
             new("First / last page", "Home / End"),
             new("Back / forward", "Alt+← / Alt+→"),
             new("Go to page", "Ctrl+K, type a number"),
+            new("Bookmark current page", "Ctrl+B"),
         ]),
         new("View",
         [

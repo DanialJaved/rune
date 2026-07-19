@@ -190,6 +190,11 @@ public sealed partial class MainWindow : Window
         var viewer = view.Viewer;
         _state.Remember(view.FilePath, view.DisplayName,
             viewer.CurrentPage, viewer.Zoom, viewer.ViewRotation, viewer.ScrollFraction);
+        // The open view owns the truth about bookmarks while it lives.
+        if (_state.FindRecent(view.FilePath) is { } entry)
+        {
+            entry.Bookmarks = view.GetBookmarks();
+        }
     }
 
     // ---------------------------------------------------------------- tabs
@@ -204,6 +209,7 @@ public sealed partial class MainWindow : Window
         view.Viewer.SetInkStyle(_state.Settings.InkColor, _state.Settings.InkWidth);
         view.Viewer.DocumentEdited += (_, _) => UpdateDirtyIndicator(view);
         view.Viewer.NoteRequested += Viewer_NoteRequested;
+        view.BookmarksChanged += (_, _) => PersistBookmarks(view);
         view.Loaded2 += (_, _) => { if (view == CurrentView) { UpdateToolbarForActive(); } };
 
         // Tabs are strip-only (they live in the title bar); the view itself
@@ -259,6 +265,10 @@ public sealed partial class MainWindow : Window
         _pendingRestore.Remove(view, out var restore);
         await view.EnsureLoadedAsync(restore);
 
+        if (view.LoadError is null)
+        {
+            view.LoadBookmarks(_state.FindRecent(view.FilePath)?.Bookmarks ?? []);
+        }
         if (view.LoadError is { } error && view == CurrentView)
         {
             ShowError(error);
@@ -266,6 +276,35 @@ public sealed partial class MainWindow : Window
         if (view == CurrentView)
         {
             UpdateToolbarForActive();
+        }
+    }
+
+    /// <summary>Writes a view's bookmarks into the recents entry (creating one if needed) and saves.</summary>
+    private void PersistBookmarks(DocumentView view)
+    {
+        var entry = _state.FindRecent(view.FilePath);
+        if (entry is null)
+        {
+            CaptureState(view); // creates the recents entry with the current position
+            entry = _state.FindRecent(view.FilePath);
+        }
+        if (entry is not null)
+        {
+            entry.Bookmarks = view.GetBookmarks();
+            _store.Save(_state);
+        }
+    }
+
+    private void ToggleBookmark()
+    {
+        if (CurrentView is not { IsDocumentLoaded: true, LoadError: null } view || _activeViewer is null)
+        {
+            return;
+        }
+        view.ToggleBookmark(_activeViewer.CurrentPage);
+        if (view.IsPaneOpen)
+        {
+            view.ShowBookmarksPane(); // show the result where it landed
         }
     }
 
@@ -1058,6 +1097,7 @@ public sealed partial class MainWindow : Window
                 new("Toggle night mode", "Ctrl+I", ToggleNightMode),
                 new("Toggle sidebar", "F9", () => SidebarButton_Click(this, null!)),
                 new("Presentation mode", "F5", TogglePresentation),
+                new("Bookmark this page", "Ctrl+B", ToggleBookmark),
                 new("Next page", "", () => viewer.GoToPage(viewer.CurrentPage + 1)),
                 new("Previous page", "", () => viewer.GoToPage(viewer.CurrentPage - 1)),
                 new("First page", "gg", () => viewer.GoToPage(0, recordHistory: true)),
@@ -1210,6 +1250,7 @@ public sealed partial class MainWindow : Window
         // Moved off the old CommandBar buttons when the header was slimmed down.
         AddAccelerator(VirtualKey.F9, VirtualKeyModifiers.None, () => SidebarButton_Click(this, null!));
         AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control, () => _activeViewer?.RotateClockwise());
+        AddAccelerator(VirtualKey.B, VirtualKeyModifiers.Control, ToggleBookmark);
 
         // Available even with no document open.
         AddAccelerator(VirtualKey.O, VirtualKeyModifiers.Control, () => OpenButton_Click(this, null!), requiresDocument: false);

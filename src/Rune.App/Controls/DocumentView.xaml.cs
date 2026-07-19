@@ -42,6 +42,7 @@ public sealed partial class DocumentView : UserControl
         FilePath = filePath;
         _dispatcher = DispatcherQueue.GetForCurrentThread();
         ThumbList.ItemsSource = _thumbnails;
+        BookmarkList.ItemsSource = _bookmarks;
 
         ViewerControl.CurrentPageChanged += (_, page) => SyncThumbnailSelection(page);
     }
@@ -265,6 +266,121 @@ public sealed partial class DocumentView : UserControl
         }
     }
 
+    // ---------------------------------------------------------------- bookmarks
+
+    private readonly ObservableCollection<BookmarkItem> _bookmarks = [];
+    private bool _bookmarksLoaded;
+
+    /// <summary>Raised after any bookmark add/remove/rename; the shell persists.</summary>
+    public event EventHandler? BookmarksChanged;
+
+    /// <summary>Fills the pane from persisted state. First call wins (idempotent across tab switches).</summary>
+    public void LoadBookmarks(IEnumerable<Rune.Services.BookmarkEntry> entries)
+    {
+        if (_bookmarksLoaded)
+        {
+            return;
+        }
+        _bookmarksLoaded = true;
+        foreach (var entry in entries.OrderBy(b => b.PageIndex))
+        {
+            _bookmarks.Add(new BookmarkItem(entry.PageIndex, entry.Name));
+        }
+        RefreshPaneVisibility();
+    }
+
+    public List<Rune.Services.BookmarkEntry> GetBookmarks() =>
+        [.. _bookmarks.Select(b => new Rune.Services.BookmarkEntry { PageIndex = b.PageIndex, Name = b.Name })];
+
+    /// <summary>Adds a bookmark on the page (or removes the existing one). Returns true when added.</summary>
+    public bool ToggleBookmark(int pageIndex)
+    {
+        var existing = _bookmarks.FirstOrDefault(b => b.PageIndex == pageIndex);
+        if (existing is not null)
+        {
+            _bookmarks.Remove(existing);
+        }
+        else
+        {
+            var item = new BookmarkItem(pageIndex, $"Page {pageIndex + 1}");
+            int insertAt = 0;
+            while (insertAt < _bookmarks.Count && _bookmarks[insertAt].PageIndex < pageIndex)
+            {
+                insertAt++;
+            }
+            _bookmarks.Insert(insertAt, item);
+        }
+        RefreshPaneVisibility();
+        BookmarksChanged?.Invoke(this, EventArgs.Empty);
+        return existing is null;
+    }
+
+    /// <summary>Switches the sidebar to the Bookmarks pane (used after Ctrl+B when the pane is open).</summary>
+    public void ShowBookmarksPane() => ShowSidebar(SidebarPane.Bookmarks);
+
+    private void BookmarkList_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is BookmarkItem item)
+        {
+            Viewer.GoToPage(item.PageIndex, recordHistory: true);
+        }
+    }
+
+    private void BookmarkList_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Delete && BookmarkList.SelectedItem is BookmarkItem item)
+        {
+            RemoveBookmark(item);
+            e.Handled = true;
+        }
+    }
+
+    private void BookmarkList_RightTapped(object sender, Microsoft.UI.Xaml.Input.RightTappedRoutedEventArgs e)
+    {
+        if ((e.OriginalSource as FrameworkElement)?.DataContext is not BookmarkItem item)
+        {
+            return;
+        }
+
+        var menu = new MenuFlyout();
+        var rename = new MenuFlyoutItem { Text = "Rename", Icon = new SymbolIcon(Symbol.Rename) };
+        rename.Click += async (_, _) => await RenameBookmarkAsync(item);
+        var delete = new MenuFlyoutItem { Text = "Delete", Icon = new SymbolIcon(Symbol.Delete) };
+        delete.Click += (_, _) => RemoveBookmark(item);
+        menu.Items.Add(rename);
+        menu.Items.Add(delete);
+        menu.ShowAt(BookmarkList, e.GetPosition(BookmarkList));
+        e.Handled = true;
+    }
+
+    private void RemoveBookmark(BookmarkItem item)
+    {
+        _bookmarks.Remove(item);
+        RefreshPaneVisibility();
+        BookmarksChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async Task RenameBookmarkAsync(BookmarkItem item)
+    {
+        var box = new TextBox { Text = item.Name, SelectionStart = item.Name.Length, MinWidth = 280 };
+        var dialog = new ContentDialog
+        {
+            Title = "Rename bookmark",
+            Content = box,
+            PrimaryButtonText = "Rename",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(box.Text))
+        {
+            item.Name = box.Text.Trim();
+            BookmarksChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private void RefreshPaneVisibility() => ShowSidebar(_activePane);
+
     // ---------------------------------------------------------------- sidebar panes
 
     private enum SidebarPane
@@ -291,7 +407,7 @@ public sealed partial class DocumentView : UserControl
         OutlineTree.Visibility = pane == SidebarPane.Chapters && _hasOutline ? Visibility.Visible : Visibility.Collapsed;
         NoOutlineLabel.Visibility = pane == SidebarPane.Chapters && !_hasOutline ? Visibility.Visible : Visibility.Collapsed;
 
-        bool hasBookmarks = BookmarkList.Items.Count > 0;
+        bool hasBookmarks = _bookmarks.Count > 0;
         BookmarkList.Visibility = pane == SidebarPane.Bookmarks && hasBookmarks ? Visibility.Visible : Visibility.Collapsed;
         NoBookmarksLabel.Visibility = pane == SidebarPane.Bookmarks && !hasBookmarks ? Visibility.Visible : Visibility.Collapsed;
     }
