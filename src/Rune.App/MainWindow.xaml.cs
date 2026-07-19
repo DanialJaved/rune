@@ -414,7 +414,7 @@ public sealed partial class MainWindow : Window
         foreach (var item in new MenuFlyoutItemBase[]
                  {
                      SaveMenuItem, SaveAsMenuItem, PrintMenuItem, RotateMenuItem,
-                     PropertiesMenuItem, InkOptionsMenuItem,
+                     PropertiesMenuItem, InkOptionsMenuItem, PresentMenuItem,
                  })
         {
             item.IsEnabled = ready;
@@ -552,6 +552,43 @@ public sealed partial class MainWindow : Window
     private void UpdatesButton_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
     private void InkButton_Click(object sender, RoutedEventArgs e) => SetInkMode(InkButton.IsChecked == true);
     private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
+    private void PresentMenuItem_Click(object sender, RoutedEventArgs e) => TogglePresentation();
+
+    // ---------------------------------------------------------------- presentation
+
+    private void TogglePresentation()
+    {
+        if (Presentation.IsActive)
+        {
+            ExitPresentation();
+            return;
+        }
+        if (_activeViewer is not { } viewer ||
+            CurrentView is not { IsDocumentLoaded: true, LoadError: null })
+        {
+            return;
+        }
+
+        Presentation.ExitRequested -= Presentation_ExitRequested;
+        Presentation.ExitRequested += Presentation_ExitRequested;
+        Presentation.Show(viewer, _state.Settings.NightMode);
+        AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.FullScreen);
+    }
+
+    private void Presentation_ExitRequested(object? sender, EventArgs e) => ExitPresentation();
+
+    private void ExitPresentation()
+    {
+        if (!Presentation.IsActive)
+        {
+            return;
+        }
+        int page = Presentation.CurrentPage;
+        Presentation.Hide();
+        AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.Default);
+        // Land the reading view on the page the show ended on.
+        _activeViewer?.GoToPage(page);
+    }
 
     private void ZoomPreset_Click(object sender, RoutedEventArgs e)
     {
@@ -954,6 +991,7 @@ public sealed partial class MainWindow : Window
                 new("Document properties", "Ctrl+D", () => _ = ShowPropertiesAsync()),
                 new("Toggle night mode", "Ctrl+I", ToggleNightMode),
                 new("Toggle sidebar", "F9", () => SidebarButton_Click(this, null!)),
+                new("Presentation mode", "F5", TogglePresentation),
                 new("Next page", "", () => viewer.GoToPage(viewer.CurrentPage + 1)),
                 new("Previous page", "", () => viewer.GoToPage(viewer.CurrentPage - 1)),
                 new("First page", "gg", () => viewer.GoToPage(0, recordHistory: true)),
@@ -1110,9 +1148,14 @@ public sealed partial class MainWindow : Window
         // Available even with no document open.
         AddAccelerator(VirtualKey.O, VirtualKeyModifiers.Control, () => OpenButton_Click(this, null!), requiresDocument: false);
         AddAccelerator(VirtualKey.K, VirtualKeyModifiers.Control, ShowPalette, requiresDocument: false);
+        AddAccelerator(VirtualKey.F5, VirtualKeyModifiers.None, TogglePresentation);
         AddAccelerator(VirtualKey.Escape, VirtualKeyModifiers.None, () =>
         {
-            if (Palette.IsOpen)
+            if (Presentation.IsActive)
+            {
+                ExitPresentation();
+            }
+            else if (Palette.IsOpen)
             {
                 Palette.Hide();
             }
@@ -1235,7 +1278,35 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void Content_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Handled || _activeViewer is null || Palette.IsOpen || IsTextInputFocused())
+        if (e.Handled)
+        {
+            return;
+        }
+
+        // Presentation mode owns the keyboard while active (Esc/F5 exit via
+        // their accelerators).
+        if (Presentation.IsActive)
+        {
+            switch (e.Key)
+            {
+                case VirtualKey.Right:
+                case VirtualKey.Down:
+                case VirtualKey.Space:
+                case VirtualKey.PageDown:
+                    Presentation.Next();
+                    e.Handled = true;
+                    break;
+                case VirtualKey.Left:
+                case VirtualKey.Up:
+                case VirtualKey.PageUp:
+                    Presentation.Prev();
+                    e.Handled = true;
+                    break;
+            }
+            return;
+        }
+
+        if (_activeViewer is null || Palette.IsOpen || IsTextInputFocused())
         {
             return;
         }

@@ -162,6 +162,11 @@
                                 <FontIcon Glyph="&#xE790;" />
                             </MenuFlyoutSubItem.Icon>
                         </MenuFlyoutSubItem>
+                        <MenuFlyoutItem x:Name="PresentMenuItem" Text="Presentation" Click="PresentMenuItem_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="F5">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE7F4;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
                         <MenuFlyoutSeparator />
                         <MenuFlyoutItem x:Name="PropertiesMenuItem" Text="Document properties" Click="PropertiesButton_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="Ctrl+D">
                             <MenuFlyoutItem.Icon>
@@ -372,5 +377,11 @@
 
             <controls:CommandPalette x:Name="Palette" />
         </Grid>
+
+        <!-- Fullscreen presentation overlay: covers ALL rows (tabs included). -->
+        <controls:PresentationView
+            x:Name="Presentation"
+            Grid.Row="0"
+            Grid.RowSpan="3" />
     </Grid>
 </Window>
