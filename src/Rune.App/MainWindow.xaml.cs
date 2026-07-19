@@ -198,6 +198,7 @@ public sealed partial class MainWindow : Window
     {
         var view = new DocumentView(path);
         _pendingRestore[view] = restore;
+        view.OpenSidebarOnLoad = _state.Settings.SidebarOpenByDefault;
         view.Viewer.LinkActivated += Viewer_LinkActivated;
         view.Viewer.NightMode = _state.Settings.NightMode;
         view.Viewer.SetInkStyle(_state.Settings.InkColor, _state.Settings.InkWidth);
@@ -341,9 +342,10 @@ public sealed partial class MainWindow : Window
         bool hasTabs = Tabs.TabItems.Count > 0;
         StartPage.Visibility = hasTabs ? Visibility.Collapsed : Visibility.Visible;
         DocHost.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
-        // The document toolbar is meaningless on the start page (and would show
-        // stale page/zoom from the last-closed tab), so hide it there.
+        // The document header + zoom pill are meaningless on the start page
+        // (and would show stale page/zoom from the last-closed tab).
         Toolbar.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
+        ZoomPill.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
         if (!hasTabs)
         {
             Title = "Rune";
@@ -359,7 +361,6 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.CurrentPageChanged -= Viewer_CurrentPageChanged;
             _activeViewer.ZoomChanged -= Viewer_ZoomChanged;
-            _activeViewer.HistoryChanged -= Viewer_HistoryChanged;
         }
 
         _activeViewer = CurrentView?.Viewer;
@@ -368,7 +369,6 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.CurrentPageChanged += Viewer_CurrentPageChanged;
             _activeViewer.ZoomChanged += Viewer_ZoomChanged;
-            _activeViewer.HistoryChanged += Viewer_HistoryChanged;
         }
 
         if (CurrentView is { } view)
@@ -389,21 +389,12 @@ public sealed partial class MainWindow : Window
         _suppressPageBox = true;
         PageBox.Value = pageIndex + 1;
         _suppressPageBox = false;
-        int count = _activeViewer?.PageCount ?? 0;
-        PrevButton.IsEnabled = pageIndex > 0;
-        NextButton.IsEnabled = pageIndex < count - 1;
     }
 
     private void Viewer_ZoomChanged(object? sender, double zoom)
     {
         ZoomLabel.Text = $"{Math.Round(zoom * 100)}%";
         UpdateFitToggles();
-    }
-
-    private void Viewer_HistoryChanged(object? sender, EventArgs e)
-    {
-        BackButton.IsEnabled = _activeViewer?.CanGoBack ?? false;
-        ForwardButton.IsEnabled = _activeViewer?.CanGoForward ?? false;
     }
 
     private void UpdateToolbarForActive()
@@ -414,13 +405,19 @@ public sealed partial class MainWindow : Window
 
         foreach (var control in new Control[]
                  {
-                     SidebarButton, PageBox, ZoomInButton, ZoomOutButton,
-                     FitWidthButton, FitPageButton, RotateButton,
-                     NightButton, InkButton, PrintButton,
-                     SaveButton, SaveAsButton, PropertiesButton, InkOptionsButton,
+                     SidebarButton, PageBox, FindButton, InkButton, NightButton,
+                     ZoomInButton, ZoomOutButton, ZoomLabelButton,
                  })
         {
             control.IsEnabled = ready;
+        }
+        foreach (var item in new MenuFlyoutItemBase[]
+                 {
+                     SaveMenuItem, SaveAsMenuItem, PrintMenuItem, RotateMenuItem,
+                     PropertiesMenuItem, InkOptionsMenuItem,
+                 })
+        {
+            item.IsEnabled = ready;
         }
 
         if (viewer is null)
@@ -434,13 +431,9 @@ public sealed partial class MainWindow : Window
         PageBox.Value = viewer.CurrentPage + 1;
         _suppressPageBox = false;
         PageCountLabel.Text = $"of {viewer.PageCount}";
-        PrevButton.IsEnabled = viewer.CurrentPage > 0;
-        NextButton.IsEnabled = viewer.CurrentPage < viewer.PageCount - 1;
         ZoomLabel.Text = $"{Math.Round(viewer.Zoom * 100)}%";
         SidebarButton.IsChecked = view!.IsPaneOpen;
         InkButton.IsChecked = viewer.IsInkMode;
-        BackButton.IsEnabled = viewer.CanGoBack;
-        ForwardButton.IsEnabled = viewer.CanGoForward;
         UpdateFitToggles();
     }
 
@@ -462,10 +455,11 @@ public sealed partial class MainWindow : Window
         ("Thin", 1.5), ("Medium", 2.5), ("Thick", 4.5),
     ];
 
-    /// <summary>Builds the pen color/width picker for the overflow "Pen color & width" button.</summary>
+    /// <summary>(Re)fills the "Pen color and width" submenu in the main menu.</summary>
     private void BuildInkOptionsFlyout()
     {
-        var flyout = new MenuFlyout();
+        var flyout = InkOptionsMenuItem;
+        flyout.Items.Clear();
         flyout.Items.Add(new MenuFlyoutItem { Text = "Pen color", IsEnabled = false });
         foreach (var (name, hex) in InkColors)
         {
@@ -501,8 +495,6 @@ public sealed partial class MainWindow : Window
             };
             flyout.Items.Add(item);
         }
-
-        InkOptionsButton.Flyout = flyout;
     }
 
     private void ApplyInkStyleToAll()
@@ -540,23 +532,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void Recent_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Tag: string path })
-        {
-            if (File.Exists(path))
-            {
-                OpenOrActivate(path);
-            }
-            else
-            {
-                ShowError($"File not found: {path}");
-                _state.Recents.RemoveAll(r => r.Path == path);
-                PopulateRecents();
-            }
-        }
-    }
-
     private void SidebarButton_Click(object sender, RoutedEventArgs e)
     {
         if (CurrentView is { IsDocumentLoaded: true } view)
@@ -566,13 +541,9 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void PrevButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoToPage((_activeViewer?.CurrentPage ?? 1) - 1);
-    private void NextButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoToPage((_activeViewer?.CurrentPage ?? -1) + 1);
     private void ZoomInButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomIn();
     private void ZoomOutButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomOut();
     private void RotateButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.RotateClockwise();
-    private void BackButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoBack();
-    private void ForwardButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoForward();
     private void FitWidthButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitWidth);
     private void FitPageButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitPage);
     private void SaveButton_Click(object sender, RoutedEventArgs e) => _ = SaveActiveAsync();
@@ -580,6 +551,16 @@ public sealed partial class MainWindow : Window
     private void PropertiesButton_Click(object sender, RoutedEventArgs e) => _ = ShowPropertiesAsync();
     private void UpdatesButton_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
     private void InkButton_Click(object sender, RoutedEventArgs e) => SetInkMode(InkButton.IsChecked == true);
+    private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
+
+    private void ZoomPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuFlyoutItem { Tag: string factor } &&
+            double.TryParse(factor, System.Globalization.CultureInfo.InvariantCulture, out double zoom))
+        {
+            _activeViewer?.SetZoom(zoom);
+        }
+    }
 
     private void SetFitMode(FitMode mode)
     {
@@ -592,8 +573,8 @@ public sealed partial class MainWindow : Window
 
     private void UpdateFitToggles()
     {
-        FitWidthButton.IsChecked = _activeViewer?.FitMode == FitMode.FitWidth;
-        FitPageButton.IsChecked = _activeViewer?.FitMode == FitMode.FitPage;
+        FitWidthItem.IsChecked = _activeViewer?.FitMode == FitMode.FitWidth;
+        FitPageItem.IsChecked = _activeViewer?.FitMode == FitMode.FitPage;
     }
 
     private void PageBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -807,6 +788,7 @@ public sealed partial class MainWindow : Window
             MinWidth = 160,
         };
         var restoreCheck = new CheckBox { Content = "Reopen last session at startup", IsChecked = _state.Settings.RestoreSession };
+        var sidebarCheck = new CheckBox { Content = "Show the sidebar when a document opens", IsChecked = _state.Settings.SidebarOpenByDefault };
         var thumbsCheck = new CheckBox { Content = "Show recent documents as thumbnails on the start page", IsChecked = _state.Settings.ShowRecentThumbnails };
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
         var updateCheck = new CheckBox { Content = "Check for updates automatically", IsChecked = _state.Settings.AutoCheckUpdates };
@@ -818,6 +800,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(new TextBlock { Text = "Theme", Opacity = 0.7 });
         panel.Children.Add(themeBox);
         panel.Children.Add(restoreCheck);
+        panel.Children.Add(sidebarCheck);
         panel.Children.Add(thumbsCheck);
         panel.Children.Add(vimCheck);
         panel.Children.Add(updateCheck);
@@ -843,6 +826,7 @@ public sealed partial class MainWindow : Window
         {
             _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
             _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
+            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
             _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
             _state.Settings.VimKeys = vimCheck.IsChecked == true;
             _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
@@ -1027,30 +1011,29 @@ public sealed partial class MainWindow : Window
 
     private readonly ThumbnailCache _thumbnails = new();
 
+    /// <summary>How many cards the homepage grid shows (page-1 thumbnails are cached to disk).</summary>
+    private const int MaxRecentCards = 18;
+
     private void PopulateRecents()
     {
-        var recents = _state.Recents.Take(AppState.MaxRecents).ToList();
-        RecentsList.ItemsSource = recents;
-        RecentsHeader.Visibility = recents.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        PopulateRecentThumbnails(recents);
-    }
+        var recents = _state.Recents.Take(MaxRecentCards).ToList();
+        bool any = recents.Count > 0;
+        RecentsHeader.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+        RecentThumbs.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+        EmptyState.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
 
-    private void PopulateRecentThumbnails(List<RecentFile> recents)
-    {
-        bool show = _state.Settings.ShowRecentThumbnails && recents.Count > 0;
-        RecentThumbsSection.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        if (!show)
-        {
-            RecentThumbs.ItemsSource = null;
-            return;
-        }
-
-        var cards = recents.Take(6).Select(r => new RecentCard(r.Path, r.DisplayName)).ToList();
+        var cards = recents.Select(r => new RecentCard(r.Path, r.DisplayName)).ToList();
         RecentThumbs.ItemsSource = cards;
 
-        foreach (var card in cards)
+        // With thumbnails disabled the cards keep their document glyph; with
+        // them enabled each card swaps its glyph for the page-1 render as the
+        // (disk-cached) bitmap arrives.
+        if (_state.Settings.ShowRecentThumbnails)
         {
-            _ = LoadThumbnailAsync(card);
+            foreach (var card in cards)
+            {
+                _ = LoadThumbnailAsync(card);
+            }
         }
     }
 
@@ -1120,7 +1103,12 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control, () => _ = SaveActiveAsync());
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => _ = SaveAsActiveAsync());
 
+        // Moved off the old CommandBar buttons when the header was slimmed down.
+        AddAccelerator(VirtualKey.F9, VirtualKeyModifiers.None, () => SidebarButton_Click(this, null!));
+        AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control, () => _activeViewer?.RotateClockwise());
+
         // Available even with no document open.
+        AddAccelerator(VirtualKey.O, VirtualKeyModifiers.Control, () => OpenButton_Click(this, null!), requiresDocument: false);
         AddAccelerator(VirtualKey.K, VirtualKeyModifiers.Control, ShowPalette, requiresDocument: false);
         AddAccelerator(VirtualKey.Escape, VirtualKeyModifiers.None, () =>
         {

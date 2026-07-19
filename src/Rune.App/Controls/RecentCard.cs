@@ -37,12 +37,17 @@ public sealed class RecentCard : INotifyPropertyChanged
             _thumbnail = value;
             PropertyChanged?.Invoke(this, ThumbnailChanged);
             PropertyChanged?.Invoke(this, HasThumbnailChanged);
+            PropertyChanged?.Invoke(this, ShowPlaceholderChanged);
         }
     }
 
     public bool HasThumbnail => _thumbnail is not null;
 
+    /// <summary>Document-glyph placeholder shown until (or instead of) a thumbnail.</summary>
+    public bool ShowPlaceholder => _thumbnail is null;
+
     private static readonly PropertyChangedEventArgs ThumbnailChanged = new(nameof(Thumbnail));
     private static readonly PropertyChangedEventArgs HasThumbnailChanged = new(nameof(HasThumbnail));
+    private static readonly PropertyChangedEventArgs ShowPlaceholderChanged = new(nameof(ShowPlaceholder));
     public event PropertyChangedEventHandler? PropertyChanged;
 }
