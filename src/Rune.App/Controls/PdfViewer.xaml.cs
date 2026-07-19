@@ -61,6 +61,16 @@ public sealed partial class PdfViewer : UserControl
     private int _currentPage;
     private bool _nightMode;
 
+    // A document can arrive before the ScrollViewer has been measured (fast
+    // opens, lazy tabs). Building the layout against a 0-width viewport makes
+    // PageLayout.TotalWidth collapse to the page width and the ScrollViewer
+    // left-align the canvas ("page stuck to the left"). Instead, remember the
+    // intent and apply it on the first real SizeChanged.
+    private bool _pendingFit;
+    private (double Zoom, int Rotation, double Fraction)? _pendingRestore;
+
+    private bool ViewportReady => Scroller.ViewportWidth > 50 && Scroller.ViewportHeight > 50;
+
     // Link hit-testing: per-page links, extracted lazily off the UI thread.
     private readonly Dictionary<int, IReadOnlyList<PdfLink>> _links = [];
     private readonly HashSet<int> _linksRequested = [];
@@ -285,7 +295,24 @@ public sealed partial class PdfViewer : UserControl
 
         _scheduler.SetDocument(document);
         ClearCaches();
-        ApplyFitMode();
+        _pendingRestore = null;
+        _pendingFit = false;
+        if (document is null || ViewportReady)
+        {
+            ApplyFitMode();      // no-op for null; RebuildLayout below clears the layout
+            if (document is null)
+            {
+                RebuildLayout();
+            }
+        }
+        else
+        {
+            // Not measured yet: drop the old layout and wait for SizeChanged.
+            _layout = null;
+            Canvas.Width = 0;
+            Canvas.Height = 0;
+            _pendingFit = true;
+        }
         Scroller.ChangeView(0, 0, null, disableAnimation: true);
         Canvas.Invalidate();
         UpdateDesiredTiles();
@@ -297,6 +324,12 @@ public sealed partial class PdfViewer : UserControl
     /// <summary>Restores a saved reading position after the layout is ready.</summary>
     public void RestoreView(double zoom, int rotation, double scrollFraction)
     {
+        if (!ViewportReady)
+        {
+            _pendingRestore = (zoom, rotation, scrollFraction);
+            _pendingFit = false;
+            return; // replayed on the first real SizeChanged
+        }
         _rotation = ((rotation % 4) + 4) % 4;
         _fitMode = FitMode.None;
         SetZoom(zoom <= 0 ? 1.0 : zoom);
@@ -369,10 +402,13 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        double viewportWidth = Scroller.ViewportWidth > 50 ? Scroller.ViewportWidth : 800;
-        double viewportHeight = Scroller.ViewportHeight > 50 ? Scroller.ViewportHeight : 600;
-        double usableWidth = viewportWidth - 2 * PageLayout.Margin;
-        double usableHeight = viewportHeight - 2 * PageLayout.Margin;
+        if (!ViewportReady)
+        {
+            _pendingFit = true; // never fit against a guessed viewport size
+            return;
+        }
+        double usableWidth = Scroller.ViewportWidth - 2 * PageLayout.Margin;
+        double usableHeight = Scroller.ViewportHeight - 2 * PageLayout.Margin;
 
         var size = _pageSizes[Math.Clamp(_currentPage, 0, _pageSizes.Length - 1)];
         double pageW = _rotation % 2 == 0 ? size.Width : size.Height;
@@ -502,7 +538,25 @@ public sealed partial class PdfViewer : UserControl
 
     private void Scroller_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (_fitMode != FitMode.None)
+        if (!ViewportReady)
+        {
+            return;
+        }
+
+        if (_pendingRestore is { } restore)
+        {
+            // A session position arrived before the first measure; replay it
+            // now that the viewport is real (zoom → layout → scroll ordering).
+            _pendingRestore = null;
+            _pendingFit = false;
+            RestoreView(restore.Zoom, restore.Rotation, restore.Fraction);
+        }
+        else if (_pendingFit)
+        {
+            _pendingFit = false;
+            ApplyFitMode();
+        }
+        else if (_fitMode != FitMode.None)
         {
             ApplyFitMode();
         }
@@ -511,6 +565,7 @@ public sealed partial class PdfViewer : UserControl
             RebuildLayout();
         }
         UpdateDesiredTiles();
+        PrefetchVisiblePageData();
     }
 
     private bool _rebasingZoom;
