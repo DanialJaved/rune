@@ -1,0 +1,14 @@
+<UserControl
+    x:Class="Rune.Controls.PresentationView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml"
+    Visibility="Collapsed">
+
+    <Grid Background="Black">
+        <canvas:CanvasControl
+            x:Name="Canvas"
+            Draw="Canvas_Draw"
+            CreateResources="Canvas_CreateResources" />
+    </Grid>
+</UserControl>
