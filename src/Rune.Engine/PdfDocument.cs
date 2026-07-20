@@ -10,25 +10,32 @@ public sealed partial class PdfDocument : IDisposable
 {
     private readonly FileAccessAdapter _fileAccess;
     private IntPtr _handle;
-    private readonly (float Width, float Height)[] _pageSizes;
+    private (float Width, float Height)[] _pageSizes;
 
     public string FilePath { get; }
-    public int PageCount { get; }
+    public int PageCount { get; private set; }
 
     private PdfDocument(string path, FileAccessAdapter fileAccess, IntPtr handle)
     {
         FilePath = path;
         _fileAccess = fileAccess;
         _handle = handle;
+        _pageSizes = [];
+        ReadPageMetricsLocked(); // Open holds the lock around this ctor
+    }
 
-        // Page sizes come from the page tree without loading pages, so this
-        // stays fast even for multi-thousand-page documents. Sizes are in
-        // PDF points (1/72 inch) and already account for the page's /Rotate.
-        PageCount = PdfiumNative.GetPageCount(handle);
+    /// <summary>
+    /// (Re)reads page count and sizes — cheap (page tree only, no page loads).
+    /// Caller must hold <see cref="PdfiumLibrary.Lock"/>. Sizes are in PDF
+    /// points (1/72 inch) and already account for each page's /Rotate.
+    /// </summary>
+    private void ReadPageMetricsLocked()
+    {
+        PageCount = PdfiumNative.GetPageCount(_handle);
         _pageSizes = new (float, float)[PageCount];
         for (int i = 0; i < PageCount; i++)
         {
-            if (!PdfiumNative.TryGetPageSize(handle, i, out float w, out float h) || w <= 0 || h <= 0)
+            if (!PdfiumNative.TryGetPageSize(_handle, i, out float w, out float h) || w <= 0 || h <= 0)
             {
                 (w, h) = (612f, 792f); // broken page entry: pretend US Letter
             }

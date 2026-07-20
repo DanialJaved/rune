@@ -206,7 +206,10 @@ public sealed partial class DocumentView : UserControl
 
     private void ThumbList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_syncingSelection || ThumbList.SelectedItem is not ThumbnailItem item)
+        // Navigate only on a plain single selection — Ctrl/Shift multi-select
+        // (for page editing) must not yank the view around.
+        if (_syncingSelection || ThumbList.SelectedItems.Count != 1 ||
+            ThumbList.SelectedItem is not ThumbnailItem item)
         {
             return;
         }
@@ -215,7 +218,9 @@ public sealed partial class DocumentView : UserControl
 
     private void SyncThumbnailSelection(int pageIndex)
     {
-        if (pageIndex < 0 || pageIndex >= _thumbnails.Count)
+        // Never collapse an in-progress multi-selection just because the
+        // viewer scrolled to another page.
+        if (pageIndex < 0 || pageIndex >= _thumbnails.Count || ThumbList.SelectedItems.Count > 1)
         {
             return;
         }
@@ -263,6 +268,336 @@ public sealed partial class DocumentView : UserControl
         if (args.InvokedItem is OutlineNode node && node.PageIndex >= 0)
         {
             Viewer.GoToPage(node.PageIndex, recordHistory: true);
+        }
+    }
+
+    // ---------------------------------------------------------------- page editing
+
+    private bool _pageOpRunning;
+
+    /// <summary>Raised after any page delete/move/insert (dirty marker + toolbar refresh).</summary>
+    public event EventHandler? PagesEdited;
+
+    /// <summary>Raised when a page operation fails with a user-relevant message.</summary>
+    public event EventHandler<string>? PageOpFailed;
+
+    private List<int> SelectedPageIndices() =>
+        [.. ThumbList.SelectedItems.OfType<ThumbnailItem>().Select(t => t.PageIndex).OrderBy(i => i)];
+
+    /// <summary>
+    /// Runs one page mutation on the render thread, then rebuilds every
+    /// page-derived cache and remaps bookmarks. One op at a time — the
+    /// sidebar is a live view of the document and re-entrancy would race it.
+    /// </summary>
+    private async Task RunPageOpAsync(Action<PdfDocument> op, Func<int, int?>? remapBookmark)
+    {
+        if (_pageOpRunning || _document is not { } document)
+        {
+            return;
+        }
+        _pageOpRunning = true;
+        try
+        {
+            Viewer.PreparePageMutation();
+            await Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Interactive, () =>
+            {
+                op(document);
+                return true;
+            });
+            AfterPageMutation(remapBookmark);
+        }
+        catch (Exception ex) when (ex is Rune.PdfiumInterop.PdfiumException or InvalidOperationException)
+        {
+            AfterPageMutation(null); // resync the UI; metrics may have moved
+            PageOpFailed?.Invoke(this, ex.Message);
+        }
+        finally
+        {
+            _pageOpRunning = false;
+        }
+    }
+
+    private void AfterPageMutation(Func<int, int?>? remapBookmark)
+    {
+        if (_document is not { } document)
+        {
+            return;
+        }
+
+        Viewer.HandleDocumentMutated();
+        PopulateThumbnails(document.PageCount);
+        _ = PopulateOutlineAsync(document);
+
+        if (remapBookmark is not null && _bookmarks.Count > 0)
+        {
+            var remapped = _bookmarks
+                .Select(b => (Item: b, NewPage: remapBookmark(b.PageIndex)))
+                .ToList();
+            _bookmarks.Clear();
+            foreach (var (item, newPage) in remapped.Where(t => t.NewPage is not null).OrderBy(t => t.NewPage))
+            {
+                item.PageIndex = newPage!.Value;
+                _bookmarks.Add(item);
+            }
+            BookmarksChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        RefreshPaneVisibility();
+        SyncThumbnailSelection(Viewer.CurrentPage);
+        PagesEdited?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task DeleteSelectedPagesAsync()
+    {
+        var pages = SelectedPageIndices();
+        if (pages.Count == 0 || _document is not { } document)
+        {
+            return;
+        }
+        if (pages.Count >= document.PageCount)
+        {
+            PageOpFailed?.Invoke(this, "Cannot delete every page of a document.");
+            return;
+        }
+        var deleted = pages.ToHashSet();
+        await RunPageOpAsync(d => d.DeletePages(pages), p => BookmarkRemap.AfterDelete(p, deleted));
+    }
+
+    /// <summary>Copy (or cut) the selected pages into the app-wide page clipboard.</summary>
+    public async Task CopySelectedPagesAsync(bool cut)
+    {
+        var pages = SelectedPageIndices();
+        if (pages.Count == 0 || _document is not { } document || _pageOpRunning)
+        {
+            return;
+        }
+        if (cut && pages.Count >= document.PageCount)
+        {
+            PageOpFailed?.Invoke(this, "Cannot cut every page of a document.");
+            return;
+        }
+
+        if (!cut)
+        {
+            var bytes = await Viewer.RunOnRenderThreadAsync(
+                PdfWorkPriority.Interactive, () => document.ExportPages(pages));
+            PageClipboard.Set(bytes, pages.Count);
+            return;
+        }
+
+        byte[]? cutBytes = null;
+        var deleted = pages.ToHashSet();
+        await RunPageOpAsync(d =>
+        {
+            cutBytes = d.ExportPages(pages);
+            d.DeletePages(pages);
+        }, p => BookmarkRemap.AfterDelete(p, deleted));
+        if (cutBytes is not null)
+        {
+            PageClipboard.Set(cutBytes, pages.Count);
+        }
+    }
+
+    /// <summary>Insert the page clipboard at <paramref name="atIndex"/> (default: after the selection / current page).</summary>
+    public async Task PastePagesAsync(int? atIndex = null)
+    {
+        if (!PageClipboard.HasPages || _document is null)
+        {
+            return;
+        }
+        var bytes = PageClipboard.Pdf!;
+        int at = atIndex ?? (SelectedPageIndices() is { Count: > 0 } sel ? sel[^1] + 1 : Viewer.CurrentPage + 1);
+        int inserted = 0;
+        await RunPageOpAsync(d => inserted = d.InsertPages(bytes, at),
+            p => BookmarkRemap.AfterInsert(p, at, inserted));
+    }
+
+    /// <summary>Insert all pages of another PDF file. Returns the number of pages inserted.</summary>
+    public async Task<int> InsertPdfFileAsync(string path, int atIndex)
+    {
+        int inserted = 0;
+        await RunPageOpAsync(d => inserted = d.InsertPagesFromFile(path, atIndex),
+            p => BookmarkRemap.AfterInsert(p, atIndex, inserted));
+        return inserted;
+    }
+
+    // Ctrl+C/X/V routing helpers for the shell: page ops only apply when the
+    // thumbnail list has keyboard focus (otherwise Ctrl+C means "copy text").
+    public bool TryCopyPages(bool cut)
+    {
+        if (!IsThumbListFocused() || ThumbList.SelectedItems.Count == 0)
+        {
+            return false;
+        }
+        _ = CopySelectedPagesAsync(cut);
+        return true;
+    }
+
+    public bool TryPastePages()
+    {
+        if (_document is null || !PageClipboard.HasPages)
+        {
+            return false;
+        }
+        _ = PastePagesAsync();
+        return true;
+    }
+
+    private bool IsThumbListFocused()
+    {
+        var focused = Microsoft.UI.Xaml.Input.FocusManager.GetFocusedElement(XamlRoot) as DependencyObject;
+        while (focused is not null)
+        {
+            if (ReferenceEquals(focused, ThumbList))
+            {
+                return true;
+            }
+            focused = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(focused);
+        }
+        return false;
+    }
+
+    // ---- sidebar input: drag-reorder, context menu, keys, external drops ----
+
+    private async void ThumbList_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args)
+    {
+        if (args.DropResult != Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move ||
+            _document is not { } document || args.Items.Count == 0)
+        {
+            return;
+        }
+
+        var moved = args.Items.OfType<ThumbnailItem>().ToList();
+        if (moved.Count == 0)
+        {
+            return;
+        }
+        // Original page indices of the dragged items, and the block's landing
+        // position in the reordered collection (= final ordering).
+        var movedIndices = moved.Select(m => m.PageIndex).OrderBy(i => i).ToList();
+        int destIndex = moved.Min(m => _thumbnails.IndexOf(m));
+
+        var map = BookmarkRemap.MovePermutation(document.PageCount, movedIndices, destIndex);
+        bool isNoOp = true;
+        for (int i = 0; i < map.Length && isNoOp; i++)
+        {
+            isNoOp = map[i] == i;
+        }
+        if (isNoOp)
+        {
+            return;
+        }
+
+        await RunPageOpAsync(d => d.MovePages(movedIndices, destIndex), p => map[p]);
+    }
+
+    private void ThumbList_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            e.Handled = true; // ours — don't let the window-level "open as tab" handler take it
+        }
+    }
+
+    private async void ThumbList_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            return;
+        }
+        e.Handled = true;
+
+        int at = DropIndexFromPosition(e.GetPosition(ThumbList));
+        var items = await e.DataView.GetStorageItemsAsync();
+        foreach (var item in items)
+        {
+            if (item is Windows.Storage.StorageFile file &&
+                file.FileType.Equals(".pdf", StringComparison.OrdinalIgnoreCase))
+            {
+                at += await InsertPdfFileAsync(file.Path, at); // keep multi-file order
+            }
+        }
+    }
+
+    /// <summary>Insertion index for a drop at a point in the (vertical) thumbnail list.</summary>
+    private int DropIndexFromPosition(Windows.Foundation.Point position)
+    {
+        for (int i = 0; i < _thumbnails.Count; i++)
+        {
+            if (ThumbList.ContainerFromIndex(i) is ListViewItem container)
+            {
+                var top = container.TransformToVisual(ThumbList).TransformPoint(new Windows.Foundation.Point(0, 0));
+                if (position.Y < top.Y + container.ActualHeight / 2)
+                {
+                    return i;
+                }
+            }
+        }
+        return _thumbnails.Count;
+    }
+
+    private void ThumbList_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Delete && ThumbList.SelectedItems.Count > 0)
+        {
+            _ = DeleteSelectedPagesAsync();
+            e.Handled = true;
+        }
+    }
+
+    private void ThumbList_RightTapped(object sender, Microsoft.UI.Xaml.Input.RightTappedRoutedEventArgs e)
+    {
+        if ((e.OriginalSource as FrameworkElement)?.DataContext is ThumbnailItem item &&
+            !ThumbList.SelectedItems.Contains(item))
+        {
+            ThumbList.SelectedIndex = item.PageIndex; // right-click targets what's under the cursor
+        }
+
+        int count = ThumbList.SelectedItems.Count;
+        if (count == 0)
+        {
+            return;
+        }
+        string pages = count == 1 ? "page" : $"{count} pages";
+        int insertAt = SelectedPageIndices() is { Count: > 0 } sel ? sel[^1] + 1 : _thumbnails.Count;
+
+        var menu = new MenuFlyout();
+        AddMenuAction(menu, $"Copy {pages}", Symbol.Copy, () => _ = CopySelectedPagesAsync(cut: false));
+        AddMenuAction(menu, $"Cut {pages}", Symbol.Cut, () => _ = CopySelectedPagesAsync(cut: true));
+        var paste = new MenuFlyoutItem
+        {
+            Text = PageClipboard.PageCount is > 1 and var n ? $"Paste {n} pages after" : "Paste after",
+            Icon = new SymbolIcon(Symbol.Paste),
+            IsEnabled = PageClipboard.HasPages,
+        };
+        paste.Click += (_, _) => _ = PastePagesAsync(insertAt);
+        menu.Items.Add(paste);
+        AddMenuAction(menu, "Insert PDF here…", Symbol.Add, () => _ = PickAndInsertPdfAsync(insertAt));
+        menu.Items.Add(new MenuFlyoutSeparator());
+        AddMenuAction(menu, $"Delete {pages}", Symbol.Delete, () => _ = DeleteSelectedPagesAsync());
+
+        menu.ShowAt(ThumbList, e.GetPosition(ThumbList));
+        e.Handled = true;
+    }
+
+    private static void AddMenuAction(MenuFlyout menu, string text, Symbol icon, Action action)
+    {
+        var item = new MenuFlyoutItem { Text = text, Icon = new SymbolIcon(icon) };
+        item.Click += (_, _) => action();
+        menu.Items.Add(item);
+    }
+
+    private async Task PickAndInsertPdfAsync(int atIndex)
+    {
+        var picker = new Windows.Storage.Pickers.FileOpenPicker();
+        picker.FileTypeFilter.Add(".pdf");
+        WinRT.Interop.InitializeWithWindow.Initialize(picker,
+            WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!));
+        var file = await picker.PickSingleFileAsync();
+        if (file is not null)
+        {
+            await InsertPdfFileAsync(file.Path, atIndex);
         }
     }
 

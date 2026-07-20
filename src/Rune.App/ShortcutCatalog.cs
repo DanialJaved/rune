@@ -54,6 +54,14 @@ internal static class ShortcutCatalog
             new("Command palette", "Ctrl+K"),
             new("Keyboard shortcuts", "F1"),
         ]),
+        new("Pages (thumbnail sidebar)",
+        [
+            new("Select pages", "Click / Ctrl / Shift"),
+            new("Reorder pages", "Drag"),
+            new("Copy / cut pages", "Ctrl+C / Ctrl+X"),
+            new("Paste pages (works across tabs)", "Ctrl+V"),
+            new("Delete pages", "Delete"),
+        ]),
         new("Vim keys (Settings toggle)",
         [
             new("Scroll", "j / k / h / l"),
