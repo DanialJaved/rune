@@ -2,7 +2,7 @@
 
 > A single-file brain-dump so a fresh session (human or AI) can understand
 > and continue this project without re-deriving context. Last updated for
-> **v0.3.0** (2026-07-19).
+> **v0.4.0** (2026-07-20).
 
 ---
 
@@ -57,8 +57,11 @@ src/
 
   Rune.Engine/          Document services (no UI dependency)
     PdfDocument.cs        Open/render/page-sizes/outline/links/properties (partial class)
-    PdfDocument.Annotations.cs  AddMarkup/AddNote/AddInk/GetAnnotations/RemoveAnnotation/SaveAs/IsDirty
-    RenderScheduler.cs    THE single render thread (see §4)
+    PdfDocument.Annotations.cs  AddMarkup/AddNote/AddInk/GetAnnotations/RemoveAnnotation/
+                          Capture+RestoreAnnotation (undo)/SaveAs/IsDirty
+    PdfDocument.Pages.cs  DeletePages/MovePages/ExportPages/InsertPages(FromFile)/RestoreMovedPages
+    RenderScheduler.cs    THE single render thread + priority op queue (see §4)
+    PageText.cs           Per-page text + char boxes → managed selection hit-testing
     PageLayout.cs         Immutable vertical-stack layout (zoom/rotation, min viewport w/h)
     Tiles.cs              TileKey + TileMath (MaxSingleTilePx = 1024 — see §7 gotcha)
     PageBitmap.cs         Pooled BGRA pixel buffer (ArrayPool)
@@ -66,22 +69,32 @@ src/
     OutlineItem.cs        TOC node model
     PdfLink.cs            Clickable-link model
     TextModels.cs         TextRect / TextSelection / SearchHit
-    DocumentSearch.cs     Full-document text search
-    AppState.cs           RecentFile/SessionState/AppSettings/AppState/AppStateStore
+    DocumentSearch.cs     Full-document text search (routes through the op queue)
+    UndoStack.cs          Bounded per-document undo/redo stack (generic)
+    BookmarkRemap.cs      Pure page-index remap math (delete/insert/move)
+    AppState.cs           RecentFile(+Bookmarks)/SessionState/AppSettings/AppState/AppStateStore
                           (namespace Rune.Services — physically here so it's unit-testable)
 
   Rune.App/             WinUI 3 shell
-    App.xaml(.cs)         Entry point; command-line file open; AppWindow icon
-    MainWindow.xaml(.cs)  Shell: TabView-in-titlebar, CommandBar toolbar, find bar,
-                          settings/palette/update/annotation wiring, drag-drop, homepage
+    App.xaml(.cs)         Entry point; command-line file open; AppWindow icon;
+                          merges Styles/Tokens.xaml + Styles/Controls.xaml
+    MainWindow.xaml(.cs)  Shell: TabView-in-titlebar, SLIM header + hamburger menu,
+                          floating zoom pill, find bar, presentation/shortcuts/bookmark/
+                          undo wiring, settings/palette/update, drag-drop, homepage grid
+    ShortcutCatalog.cs    Single source of truth for the F1 shortcuts overlay
+    Styles/Tokens.xaml, Styles/Controls.xaml   spacing scale + shared control styles
     Controls/
       PdfViewer.xaml(.cs)     The viewport: Win2D canvas, virtualized scroll, zoom,
-                              tiles, text selection, search, links, ink, night mode
-      DocumentView.xaml(.cs)  Per-tab: viewer + collapsible sidebar (thumbnails+outline),
-                              lazy document open, save-in-place
+                              tiles, text selection, search, links, ink, night mode,
+                              page-mutation refresh, annotation undo events
+      DocumentView.xaml(.cs)  Per-tab: viewer + sidebar (thumbnails/chapters/bookmarks
+                              switcher), page editing (reorder/delete/clipboard/insert),
+                              undo stack owner, lazy open, save-in-place
+      PresentationView.xaml(.cs) F5 fullscreen one-page-at-a-time overlay (tiled)
       CommandPalette.xaml(.cs) Ctrl+K fuzzy command palette
-      ThumbnailItem.cs, OutlineNode.cs, RecentCard.cs   bindable view-models
+      BookmarkItem.cs, AnnotationEdit.cs, ThumbnailItem.cs, OutlineNode.cs, RecentCard.cs
     Services/
+      PageClipboard.cs        App-wide page clipboard (serialized bytes, cross-tab)
       PrintService.cs         PrintManagerInterop + PrintDocument (live preview, page ranges)
       UpdateService.cs        GitHub-Releases self-update
       ThumbnailCache.cs       Homepage first-page thumbnails (disk-cached PNGs)
@@ -89,7 +102,7 @@ src/
     Assets/                   rune.ico + MSIX visual assets (generated)
 
 tests/
-  Rune.Tests/           xUnit — 50 tests against a generated corpus (see §6)
+  Rune.Tests/           xUnit — 93 tests against a generated corpus (see §6)
 
 tools/
   gen-corpus.ps1        Hand-authors the test PDFs (no PDF lib needed)
@@ -101,21 +114,33 @@ tools/
 ## 4. Architecture & rendering model (the important part)
 
 ```
-WinUI shell (tabs in title bar, CommandBar toolbar)
+WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
    └─ PdfViewer: Win2D CanvasVirtualControl inside a ScrollViewer
         └─ LRU tile cache (128 MB byte budget, ArrayPool buffers)
              └─ RenderScheduler: ONE dedicated thread
-                  └─ thin P/Invoke → pdfium.dll
+                  ├─ desired-tile list (visible > previews > prefetch)
+                  └─ priority op queue (Interactive > tiles > Thumbnail > Background)
+                       └─ thin P/Invoke → pdfium.dll
 ```
 
-- **PDFium is NOT thread-safe.** Every call is serialized through a single
-  dedicated render thread (`RenderScheduler`) plus a global lock
-  (`PdfiumLibrary.Lock`) as a backstop.
-- **RenderScheduler uses desired-state reconciliation, not a queue.** The UI
-  hands over the full prioritized "tiles I want right now" list
+- **PDFium is NOT thread-safe.** ALL PDFium work is serialized through the
+  single render thread (`RenderScheduler`), with the global lock
+  (`PdfiumLibrary.Lock`) as a backstop. **Nothing calls PDFium on the UI
+  thread anymore** — this was the v0.3 "random freeze" cause (v0.4 §9).
+- **Two kinds of render-thread work, interleaved by priority:** the
+  desired-tile list (reconciliation — see below) and one-off ops via
+  `RunAsync(PdfWorkPriority, …)`. Loop order each pass: Interactive op → front
+  desired tile → Thumbnail op → Background op. So selection/annotation edits
+  outrank tile rendering, and tiles outrank sidebar thumbnails and search.
+- **RenderScheduler uses desired-state reconciliation for tiles, not a queue.**
+  The UI hands over the full prioritized "tiles I want right now" list
   (`SetDesired`), replacing the previous list. The loop always renders the
   front-most missing tile. Scrolling past something simply drops it from the
   next list — no stale work, no cancellation bookkeeping.
+- **Text selection never touches PDFium on the pointer path.** Each visible
+  page's text + per-char boxes are extracted once (`PageText`, via
+  `FPDFText_GetCharBox`) and cached; hit-testing and range-rects are pure
+  managed lookups. Desired-tile recompute is coalesced (50 ms) during scroll.
 - **Progressive rendering:** each page draws white → stretched low-res preview
   (~216px, the "blurry-fast" pass) → crisp tiles at the exact current scale.
 - **Tiles:** pages ≤ 1024px render as one bitmap; larger pages split into a
@@ -127,44 +152,70 @@ WinUI shell (tabs in title bar, CommandBar toolbar)
   top-left "page points". `FPDF_PageToDevice` / `FPDF_DeviceToPage` convert
   (rotation-safe) — used for links, text, and all annotation geometry.
 - **State/persistence:** JSON at `%LOCALAPPDATA%\Rune\state.json` (recents,
-  session tabs+positions, settings). Thumbnails cached at
-  `%LOCALAPPDATA%\Rune\thumbnails\`. Migrates once from a legacy `\Folio` dir.
+  session tabs+positions, settings, **per-document bookmarks**). Thumbnails
+  cached at `%LOCALAPPDATA%\Rune\thumbnails\`. Migrates once from legacy `\Folio`.
+- **UI is GNOME-Papers-proportioned** but native Windows (Mica + Fluent):
+  one slim header row of flat icon buttons, everything else in a hamburger
+  `MenuFlyout`; a floating zoom pill bottom-right. Spacing/typography come from
+  `Styles/Tokens.xaml` + `Styles/Controls.xaml` (the only place new
+  spacing/size constants live) — no per-control magic numbers.
 
 ---
 
-## 5. Feature set (as shipped in v0.3.0)
+## 5. Feature set (as shipped in v0.4.0)
 
 - Tabs **in the title bar** (Chrome/Terminal style), lazy-loaded per tab
 - Continuous virtualized scroll; zoom 10–640% at cursor; fit-width/page; rotate
-- Thumbnails + table-of-contents sidebar (F9); internal & web links; back/forward
+- **Sidebar open by default** (Settings toggle) with a Papers-style bottom
+  switcher: **thumbnails / chapters (TOC) / bookmarks**; internal & web links;
+  back/forward
+- **Full keyboard navigation** (always on): arrows scroll/page, PageUp/Down,
+  Home/End, plus vim keys (Settings toggle)
 - Text selection & copy; find-in-document with highlight-all + hit stepping
 - **Annotations** (standard PDF annots via `FPDF_annot` + `FPDF_SaveAsCopy`):
   highlight / underline / strikeout from selection, sticky notes, and
-  **freehand ink** (pen color/width in the toolbar overflow). Right-click to
-  delete. Save (Ctrl+S, close→swap→reopen in place) / Save As (Ctrl+Shift+S).
-  Dirty tab marker `•` + save-on-close prompt.
-- **Night mode** (Ctrl+I): GPU `InvertEffect` at draw time — cheap toggle
+  **freehand ink** (pen color/width in the hamburger). Right-click to delete.
+  Save (Ctrl+S) / Save As (Ctrl+Shift+S). Dirty tab marker `•` + save prompt.
+- **Page editing** in the thumbnail sidebar: multi-select, drag-to-reorder,
+  Delete, **Ctrl+C/X/V page clipboard incl. across tabs**, drop an external
+  `.pdf` into the sidebar to insert its pages. Serialized-bytes clipboard.
+- **Undo / redo** (Ctrl+Z / Ctrl+Y): unified per-document stack over
+  annotations (spec-based re-create) and page ops (snapshot / inverse-permute).
+  Cleared on save-in-place + close. Dynamic menu labels.
+- **User bookmarks** (Ctrl+B): named, per-document, persisted; sidebar pane
+  with rename/delete/jump.
+- **Presentation mode** (F5): fullscreen one-page-at-a-time, arrows/Space/click
+  to advance, Esc/F5 to exit; lands the reader on the last shown page.
+- **Keyboard shortcuts overlay** (F1 / Ctrl+?): GNOME-style two-column window,
+  driven by `ShortcutCatalog` (single source of truth).
+- **Night mode** (Ctrl+I): GPU `InvertEffect`, one cached effect per viewer
 - **Command palette** (Ctrl+K): fuzzy filter + "Go to page N" + recents
-- **Recent-docs homepage**: up to 6 first-page thumbnail cards (Settings toggle)
+- **Recent-docs homepage**: clean grid of aspect-correct thumbnail cards with
+  theme-aware placeholders + empty state (thumbnails a Settings toggle)
 - Session restore; printing with preview + page ranges; document properties
 - **Self-update** from GitHub Releases (Settings toggle / "check now")
-- Vim-style keys (toggle in Settings): `j/k/h/l`, Space paging, `gg`/`G`, `n`
-- Toolbar is a stock **CommandBar** (Windows 11 Notepad pattern): uniform
-  buttons, auto-overflow on narrow windows, hidden on the start page
 
-### Keyboard shortcuts
+### Keyboard shortcuts (see `ShortcutCatalog.cs` for the authoritative list)
 | Action | Keys |
 |---|---|
 | Open / close tab | `Ctrl+O` / `Ctrl+W` |
-| Find / next / prev | `Ctrl+F` / `F3`,`n` / `Shift+F3`,`N` |
-| Command palette | `Ctrl+K` |
-| Zoom in/out/100%/fit page/fit width | `Ctrl++` / `Ctrl+-` / `Ctrl+1` / `Ctrl+0` / `Ctrl+2` |
-| Scroll / page | `j k h l` / `Space`,`Shift+Space` |
-| First / last page | `gg` / `G` |
+| Scroll / page up-down | `↑ ↓` / `PgUp PgDn`, `Space` `Shift+Space` |
+| Previous / next page | `← / →` (vim: `p` / `n`) |
+| First / last page | `Home` / `End` (vim: `gg` / `G`) |
 | Back / forward | `Alt+←` / `Alt+→` |
+| Find / next / prev | `Ctrl+F` / `F3` / `Shift+F3` |
+| Command palette / shortcuts | `Ctrl+K` / `F1` (or `Ctrl+?`) |
+| Zoom in/out/100%/fit page/fit width | `Ctrl++` / `Ctrl+-` / `Ctrl+1` / `Ctrl+0` / `Ctrl+2` |
 | Night / sidebar / rotate | `Ctrl+I` / `F9` / `Ctrl+R` |
+| Presentation / bookmark | `F5` / `Ctrl+B` |
 | Highlight / pen / save / save as | `Ctrl+H` / `Ctrl+E` / `Ctrl+S` / `Ctrl+Shift+S` |
+| Copy / cut / paste (text or pages) | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
+| Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
+
+Vim keys (`j k h l`, `gg`/`G`, `p`/`n`) are a Settings toggle. Page
+copy/cut/paste applies when the thumbnail sidebar has focus; otherwise
+`Ctrl+C` copies selected text.
 
 ---
 
@@ -177,7 +228,7 @@ dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
 # Run (accepts an optional PDF path; also --page N --zoom Z for scripted tests)
 src/Rune.App/bin/x64/Debug/net10.0-windows10.0.19041.0/win-x64/Rune.exe [file.pdf]
 
-# Test (50 tests)
+# Test (93 tests)
 dotnet test tests/Rune.Tests/Rune.Tests.csproj
 
 # Regenerate assets when needed
@@ -188,9 +239,16 @@ powershell -File tools/gen-icon.ps1       # icon + MSIX assets
 **Test corpus** (`tests/corpus/`, generated): `hello.pdf` (2pp smoke),
 `book-1000.pdf` (perf), `linked.pdf` (outline + internal/URI links),
 `corrupt.pdf` (must throw, never crash). Tests cover interop/render, rotation
-content, tile math, layout (incl. min-viewport-height), scheduler, outline,
-links, text/search, `AppState` persistence, and annotation round-trips
-(markup/note/ink → SaveAsCopy → reopen → subtype present).
+content, tile math, layout (incl. min-viewport-height), scheduler priorities +
+cancellation, `PageText` selection parity with PDFium, outline, links,
+text/search, `AppState` + bookmark persistence, `BookmarkRemap`, page editing
+(delete/move/export/insert round-trips), and undo/redo (annotation spec
+capture/restore, page snapshot restore, stack caps).
+
+**Verifying UI features** is scripted, not just tested — drive the running
+`Rune.exe` with `SetForegroundWindow`/`keybd_event` P/Invoke + `CopyFromScreen`,
+then Read the PNG (see §7). The reusable helper used this session lives in the
+session scratchpad (`shot.ps1` / `drive-rune.ps1`).
 
 ---
 
@@ -272,6 +330,19 @@ gh release create vX.Y.Z <zip> <msix> artifacts/rune-signing.cer --title "Rune v
   thumbnail homepage**; fixed the far-zoom-out **black box** (PageLayout
   min-viewport-height + vertical centering) and the stray **"Ctrl++" tooltip**
   (`KeyboardAcceleratorPlacementMode=Hidden`).
+- **v0.4.0** (2026-07-20) — big smoothness + UX release.
+  **Fixed:** the random freezes (all PDFium work moved off the UI thread onto
+  the render thread's priority op queue; selection hit-tests now pure managed
+  lookups via `PageText`; scroll recompute coalesced; night-mode effect
+  cached); the "page stuck to the left on open" bug (fit deferred until the
+  viewport is measured, no more 800×600 fallback). **Added:** always-on
+  arrow/PageUp/Home-End navigation; a **GNOME-Papers-style redesign** (slim
+  header + hamburger, floating zoom pill, redesigned sidebar with
+  thumbnails/chapters/bookmarks switcher, clean recents grid, centralized
+  tokens/styles); **presentation mode** (F5); **shortcuts overlay** (F1);
+  **user bookmarks** (Ctrl+B); **page editing** (reorder/delete/clipboard/
+  insert incl. cross-tab and external-PDF drop); **undo/redo** (Ctrl+Z/Y) over
+  annotations + page ops. 50 → 93 tests.
 
 ---
 
@@ -279,7 +350,7 @@ gh release create vX.Y.Z <zip> <msix> artifacts/rune-signing.cer --title "Rune v
 
 - Form filling
 - Digital signature verification
-- Page organizing (reorder / extract / delete pages)
+- Page **extract** to a new file (reorder/delete/insert already shipped in v0.4)
 - More formats (ePub, CBZ — would need MuPDF; note AGPL implications)
 - **Code signing** (Azure Trusted Signing ~$10/mo, or Microsoft Store) — the
   real fix for SAC/SmartScreen. **Deferred by user choice.**
