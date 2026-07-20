@@ -15,6 +15,21 @@ public sealed record AnnotationInfo(int Index, int Subtype, double X, double Y, 
     public bool IsNote => Subtype == PdfiumNative.AnnotText;
 }
 
+/// <summary>
+/// Everything needed to faithfully re-create one of Rune's annotation
+/// subtypes (markup/ink/note) — captured before a deletion so undo can
+/// rebuild it. All geometry is in PDF page space (bottom-left origin).
+/// </summary>
+public sealed record AnnotationSpec(
+    int PageIndex,
+    int Subtype,
+    IReadOnlyList<(float L, float B, float R, float T)> Quads,
+    IReadOnlyList<IReadOnlyList<(float X, float Y)>> InkStrokes,
+    (float L, float B, float R, float T) Rect,
+    (byte R, byte G, byte B, byte A) Color,
+    float BorderWidth,
+    string Contents);
+
 public sealed partial class PdfDocument
 {
     /// <summary>True when annotations were added/removed since open or last save.</summary>
@@ -298,6 +313,207 @@ public sealed partial class PdfDocument
         }
         IsDirty |= removed;
         return removed;
+    }
+
+    /// <summary>Removes the newest annotation on a page (undo of an add — ours are always appended).</summary>
+    public bool RemoveLastAnnotation(int pageIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+
+        bool removed = false;
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return false;
+            }
+            try
+            {
+                int count = PdfiumNative.GetAnnotCount(page);
+                if (count > 0)
+                {
+                    removed = PdfiumNative.RemoveAnnot(page, count - 1);
+                }
+            }
+            finally
+            {
+                PdfiumNative.ClosePage(page);
+            }
+        }
+        IsDirty |= removed;
+        return removed;
+    }
+
+    /// <summary>
+    /// Reads everything needed to re-create one of OUR annotation subtypes
+    /// (markup/ink/note) so a deletion can be undone. Returns null for
+    /// subtypes we can't faithfully rebuild (callers fall back to a page
+    /// snapshot). All geometry is in page space (bottom-left origin).
+    /// </summary>
+    public AnnotationSpec? CaptureAnnotation(int pageIndex, int annotIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return null;
+            }
+            try
+            {
+                IntPtr annot = PdfiumNative.GetAnnot(page, annotIndex);
+                if (annot == IntPtr.Zero)
+                {
+                    return null;
+                }
+                try
+                {
+                    int subtype = PdfiumNative.GetAnnotSubtype(annot);
+                    bool isMarkup = subtype is PdfiumNative.AnnotHighlight
+                        or PdfiumNative.AnnotUnderline or PdfiumNative.AnnotStrikeout;
+                    if (!isMarkup && subtype != PdfiumNative.AnnotInk && subtype != PdfiumNative.AnnotText)
+                    {
+                        return null;
+                    }
+
+                    PdfiumNative.GetAnnotRect(annot, out float l, out float t, out float r, out float b);
+                    PdfiumNative.GetAnnotColor(annot, out byte cr, out byte cg, out byte cb, out byte ca);
+
+                    var quads = new List<(float L, float B, float R, float T)>();
+                    if (isMarkup)
+                    {
+                        int quadCount = PdfiumNative.CountAnnotQuads(annot);
+                        for (int i = 0; i < quadCount; i++)
+                        {
+                            if (PdfiumNative.GetAnnotQuad(annot, i, out float ql, out float qb, out float qr, out float qt))
+                            {
+                                quads.Add((ql, qb, qr, qt));
+                            }
+                        }
+                    }
+
+                    var strokes = new List<IReadOnlyList<(float X, float Y)>>();
+                    if (subtype == PdfiumNative.AnnotInk)
+                    {
+                        int strokeCount = PdfiumNative.GetInkStrokeCount(annot);
+                        for (int i = 0; i < strokeCount; i++)
+                        {
+                            var points = PdfiumNative.GetInkStroke(annot, i);
+                            if (points.Length > 0)
+                            {
+                                strokes.Add(points);
+                            }
+                        }
+                    }
+
+                    return new AnnotationSpec(
+                        pageIndex, subtype, quads, strokes,
+                        (Math.Min(l, r), Math.Min(t, b), Math.Max(l, r), Math.Max(t, b)),
+                        (cr, cg, cb, ca == 0 ? (byte)255 : ca),
+                        PdfiumNative.GetAnnotBorderWidth(annot),
+                        PdfiumNative.GetAnnotString(annot, "Contents"));
+                }
+                finally
+                {
+                    PdfiumNative.CloseAnnot(annot);
+                }
+            }
+            finally
+            {
+                PdfiumNative.ClosePage(page);
+            }
+        }
+    }
+
+    /// <summary>Captures the newest annotation on a page (undo of an add — ours are always appended). Null if none/exotic.</summary>
+    public AnnotationSpec? CaptureLastAnnotation(int pageIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+
+        int lastIndex;
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return null;
+            }
+            try
+            {
+                lastIndex = PdfiumNative.GetAnnotCount(page) - 1;
+            }
+            finally
+            {
+                PdfiumNative.ClosePage(page);
+            }
+        }
+        return lastIndex < 0 ? null : CaptureAnnotation(pageIndex, lastIndex);
+    }
+
+    /// <summary>Re-creates an annotation from a captured spec (appended — becomes the page's last annotation).</summary>
+    public void AddAnnotationFromSpec(AnnotationSpec spec)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(spec.PageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(spec.PageIndex, PageCount);
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = PdfiumNative.LoadPage(_handle, spec.PageIndex);
+            if (page == IntPtr.Zero)
+            {
+                throw PdfiumNative.LastError();
+            }
+            try
+            {
+                IntPtr annot = PdfiumNative.CreateAnnot(page, spec.Subtype);
+                if (annot == IntPtr.Zero)
+                {
+                    throw new PdfiumException("Could not re-create the annotation.", 1);
+                }
+                try
+                {
+                    foreach (var (ql, qb, qr, qt) in spec.Quads)
+                    {
+                        PdfiumNative.AppendQuad(annot, ql, qb, qr, qt);
+                    }
+                    foreach (var stroke in spec.InkStrokes)
+                    {
+                        PdfiumNative.AddInkStroke(annot, [.. stroke]);
+                    }
+                    var (rl, rb, rr, rt) = spec.Rect;
+                    PdfiumNative.SetAnnotRect(annot, rl, rb, rr, rt);
+                    PdfiumNative.SetAnnotColor(annot, spec.Color.R, spec.Color.G, spec.Color.B, spec.Color.A);
+                    if (spec.BorderWidth > 0)
+                    {
+                        PdfiumNative.SetAnnotBorderWidth(annot, spec.BorderWidth);
+                    }
+                    if (!string.IsNullOrEmpty(spec.Contents))
+                    {
+                        PdfiumNative.SetAnnotString(annot, "Contents", spec.Contents);
+                    }
+                    PdfiumNative.SetAnnotPrintFlag(annot);
+                }
+                finally
+                {
+                    PdfiumNative.CloseAnnot(annot);
+                }
+            }
+            finally
+            {
+                PdfiumNative.ClosePage(page);
+            }
+        }
+        IsDirty = true;
     }
 
     /// <summary>

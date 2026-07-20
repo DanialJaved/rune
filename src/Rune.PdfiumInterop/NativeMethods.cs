@@ -220,6 +220,28 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FPDFAnnot_SetBorder(IntPtr annot, float horizontalRadius, float verticalRadius, float borderWidth);
 
+    // Read-back APIs (undo/redo captures annotations before deletion)
+
+    /// <summary>colorType: 0 = fill/stroke color, 1 = interior color.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetColor(IntPtr annot, int colorType, out uint r, out uint g, out uint b, out uint a);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern UIntPtr FPDFAnnot_CountAttachmentPoints(IntPtr annot);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetAttachmentPoints(IntPtr annot, UIntPtr quadIndex, out FS_QUADPOINTSF quadPoints);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAnnot_GetInkListCount(IntPtr annot);
+
+    /// <summary>Returns the point count of the path; fills buffer when large enough (or pass null/0 to size).</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAnnot_GetInkListPath(IntPtr annot, uint pathIndex, [Out] FS_POINTF[]? buffer, uint length);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetBorder(IntPtr annot, out float horizontalRadius, out float verticalRadius, out float borderWidth);
+
     // Annotation subtypes (fpdf_annot.h)
     internal const int FPDF_ANNOT_SUBTYPE_TEXT = 1;
     internal const int FPDF_ANNOT_SUBTYPE_HIGHLIGHT = 9;

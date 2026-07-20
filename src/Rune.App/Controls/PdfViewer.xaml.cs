@@ -124,6 +124,9 @@ public sealed partial class PdfViewer : UserControl
     /// <summary>Raised after any annotation edit (dirty state changed).</summary>
     public event EventHandler? DocumentEdited;
 
+    /// <summary>Raised after an annotation add/delete with its undo/redo actions (consumed by the undo stack).</summary>
+    public event EventHandler<AnnotationEditEventArgs>? AnnotationEdited;
+
     /// <summary>Raised when the user asks for a note at (pageIndex, x, y in top-left page points).</summary>
     public event EventHandler<(int PageIndex, double X, double Y)>? NoteRequested;
 
@@ -698,22 +701,25 @@ public sealed partial class PdfViewer : UserControl
 
         var document = _document;
         int page = selection.PageIndex;
+        var rects = selection.Rects;
         ClearSelectionState();
         Canvas.Invalidate();
 
+        AnnotationSpec? spec;
         try
         {
             // Semi-transparent yellow for highlights; solid red for line markup.
-            await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+            spec = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
             {
                 if (kind == MarkupKind.Highlight)
                 {
-                    document.AddMarkup(page, kind, selection.Rects, 255, 210, 0, 102);
+                    document.AddMarkup(page, kind, rects, 255, 210, 0, 102);
                 }
                 else
                 {
-                    document.AddMarkup(page, kind, selection.Rects, 220, 30, 30, 255);
+                    document.AddMarkup(page, kind, rects, 220, 30, 30, 255);
                 }
+                return document.CaptureLastAnnotation(page);
             });
         }
         catch
@@ -726,6 +732,23 @@ public sealed partial class PdfViewer : UserControl
         }
         InvalidatePage(page);
         DocumentEdited?.Invoke(this, EventArgs.Empty);
+        RaiseAnnotationAdded(kind.ToString().ToLowerInvariant(), page, spec);
+    }
+
+    /// <summary>Pushes an undoable "add annotation" edit (undo removes it; redo re-creates from spec).</summary>
+    private void RaiseAnnotationAdded(string label, int page, AnnotationSpec? spec)
+    {
+        if (spec is null)
+        {
+            return;
+        }
+        AnnotationEdited?.Invoke(this, new AnnotationEditEventArgs
+        {
+            Label = label,
+            PageIndex = page,
+            UndoAction = d => d.RemoveLastAnnotation(page),
+            RedoAction = d => d.AddAnnotationFromSpec(spec),
+        });
     }
 
     /// <summary>Adds a note (already collected by the shell) and refreshes the page.</summary>
@@ -736,10 +759,14 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
         var document = _document;
+        AnnotationSpec? spec;
         try
         {
-            await _scheduler.RunAsync(PdfWorkPriority.Interactive,
-                () => document.AddNote(pageIndex, x, y, text));
+            spec = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+            {
+                document.AddNote(pageIndex, x, y, text);
+                return document.CaptureLastAnnotation(pageIndex);
+            });
         }
         catch
         {
@@ -751,6 +778,7 @@ public sealed partial class PdfViewer : UserControl
         }
         InvalidatePage(pageIndex);
         DocumentEdited?.Invoke(this, EventArgs.Empty);
+        RaiseAnnotationAdded("note", pageIndex, spec);
     }
 
     private void ClearSelectionState()
@@ -884,23 +912,39 @@ public sealed partial class PdfViewer : UserControl
             }
             if (hit is not null)
             {
+                int annotIndex = hit.Index;
                 AddMenuItem(menu, hit.IsNote ? $"Delete note{FormatNotePreview(hit.Contents)}" : "Delete annotation",
                     Symbol.Delete, async () =>
                     {
-                        bool removed;
+                        (bool Removed, AnnotationSpec? Spec) result;
                         try
                         {
-                            removed = await _scheduler.RunAsync(
-                                PdfWorkPriority.Interactive, () => document.RemoveAnnotation(page, hit.Index));
+                            // Capture the annotation BEFORE deleting so undo can rebuild it.
+                            result = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+                            {
+                                var captured = document.CaptureAnnotation(page, annotIndex);
+                                bool ok = document.RemoveAnnotation(page, annotIndex);
+                                return (ok, captured);
+                            });
                         }
                         catch
                         {
                             return;
                         }
-                        if (removed && _document == document)
+                        if (result.Removed && _document == document)
                         {
                             InvalidatePage(page);
                             DocumentEdited?.Invoke(this, EventArgs.Empty);
+                            if (result.Spec is { } spec)
+                            {
+                                AnnotationEdited?.Invoke(this, new AnnotationEditEventArgs
+                                {
+                                    Label = spec.Subtype == Rune.PdfiumInterop.PdfiumNative.AnnotText ? "delete note" : "delete annotation",
+                                    PageIndex = page,
+                                    UndoAction = d => d.AddAnnotationFromSpec(spec),
+                                    RedoAction = d => d.RemoveLastAnnotation(page),
+                                });
+                            }
                         }
                     });
             }
@@ -1055,10 +1099,14 @@ public sealed partial class PdfViewer : UserControl
         _inkPoints.Clear();
         _inkPage = -1;
 
+        AnnotationSpec? spec;
         try
         {
-            await _scheduler.RunAsync(PdfWorkPriority.Interactive,
-                () => document.AddInk(page, stroke, cr, cg, cb, 255, width));
+            spec = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+            {
+                document.AddInk(page, stroke, cr, cg, cb, 255, width);
+                return document.CaptureLastAnnotation(page);
+            });
         }
         catch
         {
@@ -1071,6 +1119,7 @@ public sealed partial class PdfViewer : UserControl
         }
         InvalidatePage(page);
         DocumentEdited?.Invoke(this, EventArgs.Empty);
+        RaiseAnnotationAdded("ink", page, spec);
     }
 
     private void CancelInkStroke()

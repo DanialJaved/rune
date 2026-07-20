@@ -136,6 +136,17 @@
                             </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutSeparator />
+                        <MenuFlyoutItem x:Name="UndoMenuItem" Text="Undo" Click="UndoMenuItem_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="Ctrl+Z">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE7A7;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="RedoMenuItem" Text="Redo" Click="RedoMenuItem_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="Ctrl+Y">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE7A6;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
                         <MenuFlyoutItem x:Name="SaveMenuItem" Text="Save" Click="SaveButton_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="Ctrl+S">
                             <MenuFlyoutItem.Icon>
                                 <FontIcon Glyph="&#xE74E;" />
