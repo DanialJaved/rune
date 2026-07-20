@@ -761,6 +761,45 @@ public sealed partial class PdfViewer : UserControl
         _isSelecting = false;
     }
 
+    /// <summary>Stops tile production ahead of a page mutation (stale requests would be out of range).</summary>
+    internal void PreparePageMutation() => _scheduler.SetDesired([]);
+
+    /// <summary>
+    /// Rebuilds every page-derived cache after pages were deleted/moved/
+    /// inserted: sizes, layout (preserving the scroll fraction), tiles,
+    /// previews, links, text maps, selection, and search are all stale.
+    /// </summary>
+    internal void HandleDocumentMutated()
+    {
+        if (_document is null)
+        {
+            return;
+        }
+
+        _pageSizes = [.. Enumerable.Range(0, _document.PageCount).Select(_document.GetPageSize)];
+        _links.Clear();
+        _linksRequested.Clear();
+        ClearPageTextCache();
+        ClearSelectionState();
+        _searchByPage.Clear();
+        _activeHit = null;
+        ClearCaches();
+
+        double fraction = _layout is { TotalHeight: > 0 } ? Scroller.VerticalOffset / _layout.TotalHeight : 0;
+        RebuildLayout();
+        if (_layout is not null)
+        {
+            Scroller.ChangeView(null, fraction * _layout.TotalHeight, null, disableAnimation: true);
+        }
+        _currentPage = Math.Clamp(_currentPage, 0, Math.Max(0, _document.PageCount - 1));
+
+        Canvas.Invalidate();
+        UpdateDesiredTiles();
+        UpdateCurrentPage();
+        PrefetchVisiblePageData();
+        CurrentPageChanged?.Invoke(this, _currentPage);
+    }
+
     /// <summary>Drops one page's cached tiles + preview and re-renders it (after an edit).</summary>
     public void InvalidatePage(int pageIndex)
     {

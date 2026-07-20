@@ -23,10 +23,18 @@
                 <ListView
                     x:Name="ThumbList"
                     Grid.Row="0"
-                    SelectionMode="Single"
+                    SelectionMode="Extended"
                     Padding="4,8"
+                    CanDragItems="True"
+                    CanReorderItems="True"
+                    AllowDrop="True"
                     ContainerContentChanging="ThumbList_ContainerContentChanging"
-                    SelectionChanged="ThumbList_SelectionChanged">
+                    SelectionChanged="ThumbList_SelectionChanged"
+                    DragItemsCompleted="ThumbList_DragItemsCompleted"
+                    DragOver="ThumbList_DragOver"
+                    Drop="ThumbList_Drop"
+                    RightTapped="ThumbList_RightTapped"
+                    KeyDown="ThumbList_KeyDown">
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="controls:ThumbnailItem">
                             <StackPanel HorizontalAlignment="Center" Spacing="4" Padding="0,6">

@@ -229,6 +229,26 @@ internal static partial class NativeMethods
 
     internal const int FPDF_ANNOT_FLAG_PRINT = 1 << 2;
 
+    // ---- Page organization (fpdf_edit.h / fpdf_ppo.h) ----
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFPage_Delete(IntPtr document, int pageIndex);
+
+    /// <summary>Copies pages (by 0-based index array) from src into dest at destIndex. Pass null indices to copy all.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_ImportPagesByIndex(IntPtr destDoc, IntPtr srcDoc, [In] int[]? pageIndices, uint length, int destIndex);
+
+    /// <summary>Experimental: moves pages so the block starts at destPageIndex in the final ordering.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_MovePages(IntPtr document, [In] int[] pageIndices, uint pageIndicesLen, int destPageIndex);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDF_CreateNewDocument();
+
+    /// <summary>The buffer must stay valid (pinned) for the whole life of the returned document.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDF_LoadMemDocument64(IntPtr dataBuf, UIntPtr size, [MarshalAs(UnmanagedType.LPStr)] string? password);
+
     // ---- Saving (fpdf_save.h) ----
 
     [StructLayout(LayoutKind.Sequential)]

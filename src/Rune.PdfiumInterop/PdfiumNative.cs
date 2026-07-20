@@ -99,6 +99,30 @@ public static class PdfiumNative
     public static void SetAnnotPrintFlag(IntPtr annot)
         => NativeMethods.FPDFAnnot_SetFlags(annot, NativeMethods.FPDF_ANNOT_FLAG_PRINT);
 
+    // ---- Page organization ----
+
+    public static void DeletePage(IntPtr document, int pageIndex)
+        => NativeMethods.FPDFPage_Delete(document, pageIndex);
+
+    /// <summary>Copies the given pages of src into dest at destIndex (all pages when indices is null).</summary>
+    public static bool ImportPagesByIndex(IntPtr destDoc, IntPtr srcDoc, int[]? pageIndices, int destIndex)
+        => NativeMethods.FPDF_ImportPagesByIndex(
+            destDoc, srcDoc, pageIndices, (uint)(pageIndices?.Length ?? 0), destIndex) != 0;
+
+    /// <summary>
+    /// Moves pages so the block starts at destIndex in the final ordering.
+    /// Throws EntryPointNotFoundException on pdfium builds without the
+    /// experimental export — callers fall back to export+delete+import.
+    /// </summary>
+    public static bool MovePages(IntPtr document, int[] pageIndices, int destIndex)
+        => NativeMethods.FPDF_MovePages(document, pageIndices, (uint)pageIndices.Length, destIndex) != 0;
+
+    public static IntPtr CreateNewDocument() => NativeMethods.FPDF_CreateNewDocument();
+
+    /// <summary>Opens a document over a caller-pinned buffer (pin for the document's whole life).</summary>
+    public static IntPtr LoadMemDocument(IntPtr pinnedData, long size, string? password)
+        => NativeMethods.FPDF_LoadMemDocument64(pinnedData, (UIntPtr)size, password);
+
     // ---- Saving ----
 
     /// <summary>Writes a full (non-incremental) copy of the document to the stream.</summary>

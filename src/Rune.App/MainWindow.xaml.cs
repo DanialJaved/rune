@@ -210,6 +210,15 @@ public sealed partial class MainWindow : Window
         view.Viewer.DocumentEdited += (_, _) => UpdateDirtyIndicator(view);
         view.Viewer.NoteRequested += Viewer_NoteRequested;
         view.BookmarksChanged += (_, _) => PersistBookmarks(view);
+        view.PagesEdited += (_, _) =>
+        {
+            UpdateDirtyIndicator(view);
+            if (view == CurrentView)
+            {
+                UpdateToolbarForActive(); // page count / current page changed
+            }
+        };
+        view.PageOpFailed += (_, message) => ShowError(message);
         view.Loaded2 += (_, _) => { if (view == CurrentView) { UpdateToolbarForActive(); } };
 
         // Tabs are strip-only (they live in the title bar); the view itself
@@ -1276,8 +1285,12 @@ public sealed partial class MainWindow : Window
             }
         }, requiresDocument: false);
 
-        // Ctrl+C must fall through to focused text boxes (find box, page box).
+        // Ctrl+C/X/V must fall through to focused text boxes (find box, page box).
         AddAccelerator(VirtualKey.C, VirtualKeyModifiers.Control, CopySelection, skipWhenTextInputFocused: true);
+        AddAccelerator(VirtualKey.X, VirtualKeyModifiers.Control,
+            () => CurrentView?.TryCopyPages(cut: true), skipWhenTextInputFocused: true);
+        AddAccelerator(VirtualKey.V, VirtualKeyModifiers.Control,
+            () => CurrentView?.TryPastePages(), skipWhenTextInputFocused: true);
     }
 
     private void AddAccelerator(
@@ -1613,6 +1626,11 @@ public sealed partial class MainWindow : Window
 
     private void CopySelection()
     {
+        // Sidebar-focused Ctrl+C means "copy PAGES"; otherwise copy text.
+        if (CurrentView is { } view && view.TryCopyPages(cut: false))
+        {
+            return;
+        }
         string text = _activeViewer?.SelectedText ?? "";
         if (!string.IsNullOrEmpty(text))
         {
