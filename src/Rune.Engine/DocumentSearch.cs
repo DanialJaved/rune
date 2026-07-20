@@ -14,13 +14,21 @@ public sealed class DocumentSearch
     private readonly string _query;
     private readonly bool _matchCase;
     private readonly bool _wholeWord;
+    private readonly IPdfWorkQueue? _workQueue;
 
-    public DocumentSearch(PdfDocument document, string query, bool matchCase = false, bool wholeWord = false)
+    /// <param name="workQueue">
+    /// When provided (the app passes the viewer's render scheduler), each page
+    /// is searched at Background priority so the sweep never starves visible
+    /// tile rendering for the shared PDFium lock. Tests pass null (thread pool).
+    /// </param>
+    public DocumentSearch(PdfDocument document, string query, bool matchCase = false, bool wholeWord = false,
+        IPdfWorkQueue? workQueue = null)
     {
         _document = document;
         _query = query;
         _matchCase = matchCase;
         _wholeWord = wholeWord;
+        _workQueue = workQueue;
     }
 
     /// <summary>
@@ -46,8 +54,12 @@ public sealed class DocumentSearch
             cancellationToken.ThrowIfCancellationRequested();
 
             int p = page;
-            var hits = await Task.Run(() => _document.SearchPage(p, _query, _matchCase, _wholeWord), cancellationToken)
-                                 .ConfigureAwait(false);
+            var hits = _workQueue is null
+                ? await Task.Run(() => _document.SearchPage(p, _query, _matchCase, _wholeWord), cancellationToken)
+                            .ConfigureAwait(false)
+                : await _workQueue.RunAsync(PdfWorkPriority.Background,
+                            () => _document.SearchPage(p, _query, _matchCase, _wholeWord))
+                            .ConfigureAwait(false);
 
             if (hits.Count > 0)
             {

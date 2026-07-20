@@ -10,25 +10,32 @@ public sealed partial class PdfDocument : IDisposable
 {
     private readonly FileAccessAdapter _fileAccess;
     private IntPtr _handle;
-    private readonly (float Width, float Height)[] _pageSizes;
+    private (float Width, float Height)[] _pageSizes;
 
     public string FilePath { get; }
-    public int PageCount { get; }
+    public int PageCount { get; private set; }
 
     private PdfDocument(string path, FileAccessAdapter fileAccess, IntPtr handle)
     {
         FilePath = path;
         _fileAccess = fileAccess;
         _handle = handle;
+        _pageSizes = [];
+        ReadPageMetricsLocked(); // Open holds the lock around this ctor
+    }
 
-        // Page sizes come from the page tree without loading pages, so this
-        // stays fast even for multi-thousand-page documents. Sizes are in
-        // PDF points (1/72 inch) and already account for the page's /Rotate.
-        PageCount = PdfiumNative.GetPageCount(handle);
+    /// <summary>
+    /// (Re)reads page count and sizes — cheap (page tree only, no page loads).
+    /// Caller must hold <see cref="PdfiumLibrary.Lock"/>. Sizes are in PDF
+    /// points (1/72 inch) and already account for each page's /Rotate.
+    /// </summary>
+    private void ReadPageMetricsLocked()
+    {
+        PageCount = PdfiumNative.GetPageCount(_handle);
         _pageSizes = new (float, float)[PageCount];
         for (int i = 0; i < PageCount; i++)
         {
-            if (!PdfiumNative.TryGetPageSize(handle, i, out float w, out float h) || w <= 0 || h <= 0)
+            if (!PdfiumNative.TryGetPageSize(_handle, i, out float w, out float h) || w <= 0 || h <= 0)
             {
                 (w, h) = (612f, 792f); // broken page entry: pretend US Letter
             }
@@ -330,6 +337,37 @@ public sealed partial class PdfDocument : IDisposable
             var (px, py) = PdfiumNative.DeviceToPage(page, w, h, (int)Math.Round(localX), (int)Math.Round(localY));
             return PdfiumNative.TextCharIndexAtPos(textPage, px, py, tolerance);
         }, -1);
+
+    /// <summary>
+    /// Extracts a page's full text plus one box per character (top-left-origin
+    /// page points) in a single pass, so the UI can hit-test selections without
+    /// coming back to PDFium. One-time cost per page; cached by the viewer.
+    /// </summary>
+    public PageText GetPageText(int pageIndex) =>
+        WithPageAndText(pageIndex, (page, textPage, w, h) =>
+        {
+            int count = PdfiumNative.TextCountChars(textPage);
+            if (count <= 0)
+            {
+                return PageText.Empty(pageIndex);
+            }
+
+            string text = PdfiumNative.TextGetText(textPage, 0, count);
+            var boxes = new TextRect[count];
+            for (int i = 0; i < count; i++)
+            {
+                if (!PdfiumNative.TextGetCharBox(textPage, i, out double l, out double r, out double b, out double t))
+                {
+                    continue; // no geometry: leave a zero box (skipped by hit-tests)
+                }
+                // Page space (bottom-left origin) → top-left-origin points.
+                var (x1, y1) = PdfiumNative.PageToDevice(page, w, h, 0, l, t);
+                var (x2, y2) = PdfiumNative.PageToDevice(page, w, h, 0, r, b);
+                boxes[i] = new TextRect(
+                    Math.Min(x1, x2), Math.Min(y1, y2), Math.Abs(x2 - x1), Math.Abs(y2 - y1));
+            }
+            return new PageText(pageIndex, text, boxes);
+        }, PageText.Empty(pageIndex));
 
     /// <summary>Builds a selection over a char range, with text and highlight rects (top-left points).</summary>
     public TextSelection GetSelection(int pageIndex, int anchorChar, int focusChar)

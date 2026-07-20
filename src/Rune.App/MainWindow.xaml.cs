@@ -45,6 +45,10 @@ public sealed partial class MainWindow : Window
 
         RegisterAccelerators();
         ((UIElement)Content).KeyDown += Content_KeyDown;
+        // Tunneling handler: navigation keys must reach the document even when
+        // focus sits on the tab strip or a toolbar button (those controls eat
+        // arrow keys in the bubbling phase for their own focus movement).
+        ((UIElement)Content).PreviewKeyDown += Content_PreviewKeyDown;
         BuildInkOptionsFlyout();
         PopulateRecents();
 
@@ -186,6 +190,11 @@ public sealed partial class MainWindow : Window
         var viewer = view.Viewer;
         _state.Remember(view.FilePath, view.DisplayName,
             viewer.CurrentPage, viewer.Zoom, viewer.ViewRotation, viewer.ScrollFraction);
+        // The open view owns the truth about bookmarks while it lives.
+        if (_state.FindRecent(view.FilePath) is { } entry)
+        {
+            entry.Bookmarks = view.GetBookmarks();
+        }
     }
 
     // ---------------------------------------------------------------- tabs
@@ -194,11 +203,29 @@ public sealed partial class MainWindow : Window
     {
         var view = new DocumentView(path);
         _pendingRestore[view] = restore;
+        view.OpenSidebarOnLoad = _state.Settings.SidebarOpenByDefault;
         view.Viewer.LinkActivated += Viewer_LinkActivated;
         view.Viewer.NightMode = _state.Settings.NightMode;
         view.Viewer.SetInkStyle(_state.Settings.InkColor, _state.Settings.InkWidth);
         view.Viewer.DocumentEdited += (_, _) => UpdateDirtyIndicator(view);
         view.Viewer.NoteRequested += Viewer_NoteRequested;
+        view.BookmarksChanged += (_, _) => PersistBookmarks(view);
+        view.PagesEdited += (_, _) =>
+        {
+            UpdateDirtyIndicator(view);
+            if (view == CurrentView)
+            {
+                UpdateToolbarForActive(); // page count / current page changed
+            }
+        };
+        view.PageOpFailed += (_, message) => ShowError(message);
+        view.UndoStateChanged += (_, _) =>
+        {
+            if (view == CurrentView)
+            {
+                UpdateUndoMenu();
+            }
+        };
         view.Loaded2 += (_, _) => { if (view == CurrentView) { UpdateToolbarForActive(); } };
 
         // Tabs are strip-only (they live in the title bar); the view itself
@@ -254,6 +281,10 @@ public sealed partial class MainWindow : Window
         _pendingRestore.Remove(view, out var restore);
         await view.EnsureLoadedAsync(restore);
 
+        if (view.LoadError is null)
+        {
+            view.LoadBookmarks(_state.FindRecent(view.FilePath)?.Bookmarks ?? []);
+        }
         if (view.LoadError is { } error && view == CurrentView)
         {
             ShowError(error);
@@ -261,6 +292,35 @@ public sealed partial class MainWindow : Window
         if (view == CurrentView)
         {
             UpdateToolbarForActive();
+        }
+    }
+
+    /// <summary>Writes a view's bookmarks into the recents entry (creating one if needed) and saves.</summary>
+    private void PersistBookmarks(DocumentView view)
+    {
+        var entry = _state.FindRecent(view.FilePath);
+        if (entry is null)
+        {
+            CaptureState(view); // creates the recents entry with the current position
+            entry = _state.FindRecent(view.FilePath);
+        }
+        if (entry is not null)
+        {
+            entry.Bookmarks = view.GetBookmarks();
+            _store.Save(_state);
+        }
+    }
+
+    private void ToggleBookmark()
+    {
+        if (CurrentView is not { IsDocumentLoaded: true, LoadError: null } view || _activeViewer is null)
+        {
+            return;
+        }
+        view.ToggleBookmark(_activeViewer.CurrentPage);
+        if (view.IsPaneOpen)
+        {
+            view.ShowBookmarksPane(); // show the result where it landed
         }
     }
 
@@ -337,9 +397,10 @@ public sealed partial class MainWindow : Window
         bool hasTabs = Tabs.TabItems.Count > 0;
         StartPage.Visibility = hasTabs ? Visibility.Collapsed : Visibility.Visible;
         DocHost.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
-        // The document toolbar is meaningless on the start page (and would show
-        // stale page/zoom from the last-closed tab), so hide it there.
+        // The document header + zoom pill are meaningless on the start page
+        // (and would show stale page/zoom from the last-closed tab).
         Toolbar.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
+        ZoomPill.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
         if (!hasTabs)
         {
             Title = "Rune";
@@ -355,7 +416,6 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.CurrentPageChanged -= Viewer_CurrentPageChanged;
             _activeViewer.ZoomChanged -= Viewer_ZoomChanged;
-            _activeViewer.HistoryChanged -= Viewer_HistoryChanged;
         }
 
         _activeViewer = CurrentView?.Viewer;
@@ -364,7 +424,6 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.CurrentPageChanged += Viewer_CurrentPageChanged;
             _activeViewer.ZoomChanged += Viewer_ZoomChanged;
-            _activeViewer.HistoryChanged += Viewer_HistoryChanged;
         }
 
         if (CurrentView is { } view)
@@ -385,21 +444,12 @@ public sealed partial class MainWindow : Window
         _suppressPageBox = true;
         PageBox.Value = pageIndex + 1;
         _suppressPageBox = false;
-        int count = _activeViewer?.PageCount ?? 0;
-        PrevButton.IsEnabled = pageIndex > 0;
-        NextButton.IsEnabled = pageIndex < count - 1;
     }
 
     private void Viewer_ZoomChanged(object? sender, double zoom)
     {
         ZoomLabel.Text = $"{Math.Round(zoom * 100)}%";
         UpdateFitToggles();
-    }
-
-    private void Viewer_HistoryChanged(object? sender, EventArgs e)
-    {
-        BackButton.IsEnabled = _activeViewer?.CanGoBack ?? false;
-        ForwardButton.IsEnabled = _activeViewer?.CanGoForward ?? false;
     }
 
     private void UpdateToolbarForActive()
@@ -410,13 +460,19 @@ public sealed partial class MainWindow : Window
 
         foreach (var control in new Control[]
                  {
-                     SidebarButton, PageBox, ZoomInButton, ZoomOutButton,
-                     FitWidthButton, FitPageButton, RotateButton,
-                     NightButton, InkButton, PrintButton,
-                     SaveButton, SaveAsButton, PropertiesButton, InkOptionsButton,
+                     SidebarButton, PageBox, FindButton, InkButton, NightButton,
+                     ZoomInButton, ZoomOutButton, ZoomLabelButton,
                  })
         {
             control.IsEnabled = ready;
+        }
+        foreach (var item in new MenuFlyoutItemBase[]
+                 {
+                     SaveMenuItem, SaveAsMenuItem, PrintMenuItem, RotateMenuItem,
+                     PropertiesMenuItem, InkOptionsMenuItem, PresentMenuItem,
+                 })
+        {
+            item.IsEnabled = ready;
         }
 
         if (viewer is null)
@@ -430,14 +486,11 @@ public sealed partial class MainWindow : Window
         PageBox.Value = viewer.CurrentPage + 1;
         _suppressPageBox = false;
         PageCountLabel.Text = $"of {viewer.PageCount}";
-        PrevButton.IsEnabled = viewer.CurrentPage > 0;
-        NextButton.IsEnabled = viewer.CurrentPage < viewer.PageCount - 1;
         ZoomLabel.Text = $"{Math.Round(viewer.Zoom * 100)}%";
         SidebarButton.IsChecked = view!.IsPaneOpen;
         InkButton.IsChecked = viewer.IsInkMode;
-        BackButton.IsEnabled = viewer.CanGoBack;
-        ForwardButton.IsEnabled = viewer.CanGoForward;
         UpdateFitToggles();
+        UpdateUndoMenu();
     }
 
     private void SetInkMode(bool on)
@@ -458,10 +511,11 @@ public sealed partial class MainWindow : Window
         ("Thin", 1.5), ("Medium", 2.5), ("Thick", 4.5),
     ];
 
-    /// <summary>Builds the pen color/width picker for the overflow "Pen color & width" button.</summary>
+    /// <summary>(Re)fills the "Pen color and width" submenu in the main menu.</summary>
     private void BuildInkOptionsFlyout()
     {
-        var flyout = new MenuFlyout();
+        var flyout = InkOptionsMenuItem;
+        flyout.Items.Clear();
         flyout.Items.Add(new MenuFlyoutItem { Text = "Pen color", IsEnabled = false });
         foreach (var (name, hex) in InkColors)
         {
@@ -497,8 +551,6 @@ public sealed partial class MainWindow : Window
             };
             flyout.Items.Add(item);
         }
-
-        InkOptionsButton.Flyout = flyout;
     }
 
     private void ApplyInkStyleToAll()
@@ -536,23 +588,6 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void Recent_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button { Tag: string path })
-        {
-            if (File.Exists(path))
-            {
-                OpenOrActivate(path);
-            }
-            else
-            {
-                ShowError($"File not found: {path}");
-                _state.Recents.RemoveAll(r => r.Path == path);
-                PopulateRecents();
-            }
-        }
-    }
-
     private void SidebarButton_Click(object sender, RoutedEventArgs e)
     {
         if (CurrentView is { IsDocumentLoaded: true } view)
@@ -562,13 +597,9 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void PrevButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoToPage((_activeViewer?.CurrentPage ?? 1) - 1);
-    private void NextButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoToPage((_activeViewer?.CurrentPage ?? -1) + 1);
     private void ZoomInButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomIn();
     private void ZoomOutButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomOut();
     private void RotateButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.RotateClockwise();
-    private void BackButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoBack();
-    private void ForwardButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.GoForward();
     private void FitWidthButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitWidth);
     private void FitPageButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitPage);
     private void SaveButton_Click(object sender, RoutedEventArgs e) => _ = SaveActiveAsync();
@@ -576,6 +607,65 @@ public sealed partial class MainWindow : Window
     private void PropertiesButton_Click(object sender, RoutedEventArgs e) => _ = ShowPropertiesAsync();
     private void UpdatesButton_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
     private void InkButton_Click(object sender, RoutedEventArgs e) => SetInkMode(InkButton.IsChecked == true);
+    private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
+    private void PresentMenuItem_Click(object sender, RoutedEventArgs e) => TogglePresentation();
+    private void UndoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.UndoAsync();
+    private void RedoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.RedoAsync();
+
+    /// <summary>Reflects the active view's undo/redo availability and labels onto the menu.</summary>
+    private void UpdateUndoMenu()
+    {
+        var view = CurrentView;
+        UndoMenuItem.IsEnabled = view?.CanUndo == true;
+        RedoMenuItem.IsEnabled = view?.CanRedo == true;
+        UndoMenuItem.Text = view?.UndoLabel is { } u ? $"Undo {u}" : "Undo";
+        RedoMenuItem.Text = view?.RedoLabel is { } r ? $"Redo {r}" : "Redo";
+    }
+
+    // ---------------------------------------------------------------- presentation
+
+    private void TogglePresentation()
+    {
+        if (Presentation.IsActive)
+        {
+            ExitPresentation();
+            return;
+        }
+        if (_activeViewer is not { } viewer ||
+            CurrentView is not { IsDocumentLoaded: true, LoadError: null })
+        {
+            return;
+        }
+
+        Presentation.ExitRequested -= Presentation_ExitRequested;
+        Presentation.ExitRequested += Presentation_ExitRequested;
+        Presentation.Show(viewer, _state.Settings.NightMode);
+        AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.FullScreen);
+    }
+
+    private void Presentation_ExitRequested(object? sender, EventArgs e) => ExitPresentation();
+
+    private void ExitPresentation()
+    {
+        if (!Presentation.IsActive)
+        {
+            return;
+        }
+        int page = Presentation.CurrentPage;
+        Presentation.Hide();
+        AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.Default);
+        // Land the reading view on the page the show ended on.
+        _activeViewer?.GoToPage(page);
+    }
+
+    private void ZoomPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuFlyoutItem { Tag: string factor } &&
+            double.TryParse(factor, System.Globalization.CultureInfo.InvariantCulture, out double zoom))
+        {
+            _activeViewer?.SetZoom(zoom);
+        }
+    }
 
     private void SetFitMode(FitMode mode)
     {
@@ -588,8 +678,8 @@ public sealed partial class MainWindow : Window
 
     private void UpdateFitToggles()
     {
-        FitWidthButton.IsChecked = _activeViewer?.FitMode == FitMode.FitWidth;
-        FitPageButton.IsChecked = _activeViewer?.FitMode == FitMode.FitPage;
+        FitWidthItem.IsChecked = _activeViewer?.FitMode == FitMode.FitWidth;
+        FitPageItem.IsChecked = _activeViewer?.FitMode == FitMode.FitPage;
     }
 
     private void PageBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -803,6 +893,7 @@ public sealed partial class MainWindow : Window
             MinWidth = 160,
         };
         var restoreCheck = new CheckBox { Content = "Reopen last session at startup", IsChecked = _state.Settings.RestoreSession };
+        var sidebarCheck = new CheckBox { Content = "Show the sidebar when a document opens", IsChecked = _state.Settings.SidebarOpenByDefault };
         var thumbsCheck = new CheckBox { Content = "Show recent documents as thumbnails on the start page", IsChecked = _state.Settings.ShowRecentThumbnails };
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
         var updateCheck = new CheckBox { Content = "Check for updates automatically", IsChecked = _state.Settings.AutoCheckUpdates };
@@ -814,6 +905,7 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(new TextBlock { Text = "Theme", Opacity = 0.7 });
         panel.Children.Add(themeBox);
         panel.Children.Add(restoreCheck);
+        panel.Children.Add(sidebarCheck);
         panel.Children.Add(thumbsCheck);
         panel.Children.Add(vimCheck);
         panel.Children.Add(updateCheck);
@@ -839,6 +931,7 @@ public sealed partial class MainWindow : Window
         {
             _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
             _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
+            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
             _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
             _state.Settings.VimKeys = vimCheck.IsChecked == true;
             _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
@@ -846,6 +939,71 @@ public sealed partial class MainWindow : Window
             _store.Save(_state);
             PopulateRecents(); // reflect the thumbnails toggle immediately
         }
+    }
+
+    // ---------------------------------------------------------------- shortcuts overlay
+
+    private void ShortcutsMenuItem_Click(object sender, RoutedEventArgs e) => _ = ShowShortcutsAsync();
+
+    /// <summary>GNOME-style two-column shortcuts window, fed by <see cref="ShortcutCatalog"/>.</summary>
+    private async Task ShowShortcutsAsync()
+    {
+        var grid = new Grid { ColumnSpacing = 40, MinWidth = 620 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var columns = new[] { new StackPanel { Spacing = 20 }, new StackPanel { Spacing = 20 } };
+        Grid.SetColumn(columns[1], 1);
+        grid.Children.Add(columns[0]);
+        grid.Children.Add(columns[1]);
+
+        var strongStyle = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"];
+        var captionStyle = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+        var keyBackground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["ControlFillColorDefaultBrush"];
+
+        // Flow groups into whichever column is currently shorter.
+        var weight = new int[2];
+        foreach (var group in ShortcutCatalog.Groups)
+        {
+            int target = weight[0] <= weight[1] ? 0 : 1;
+            var panel = new StackPanel { Spacing = 6 };
+            panel.Children.Add(new TextBlock { Text = group.Title, Style = strongStyle });
+            foreach (var shortcut in group.Shortcuts)
+            {
+                var row = new Grid { ColumnSpacing = 12 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var name = new TextBlock
+                {
+                    Text = shortcut.Name,
+                    Opacity = 0.85,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                };
+                var keys = new Border
+                {
+                    Background = keyBackground,
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(7, 3, 7, 3),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Child = new TextBlock { Text = shortcut.Keys, Style = captionStyle },
+                };
+                Grid.SetColumn(keys, 1);
+                row.Children.Add(name);
+                row.Children.Add(keys);
+                panel.Children.Add(row);
+            }
+            columns[target].Children.Add(panel);
+            weight[target] += group.Shortcuts.Length + 2;
+        }
+
+        await new ContentDialog
+        {
+            Title = "Keyboard shortcuts",
+            Content = new ScrollViewer { Content = grid, MaxHeight = 540 },
+            CloseButtonText = "Close",
+            XamlRoot = Content.XamlRoot,
+        }.ShowAsync();
     }
 
     // ---------------------------------------------------------------- updates
@@ -949,6 +1107,7 @@ public sealed partial class MainWindow : Window
         var commands = new List<PaletteCommand>
         {
             new("Open file…", "Ctrl+O", () => OpenButton_Click(this, null!)),
+            new("Keyboard shortcuts", "F1", () => _ = ShowShortcutsAsync()),
             new("Settings", "", () => SettingsButton_Click(this, null!)),
             new("Check for updates", "", () => _ = CheckForUpdatesAsync(userInitiated: true)),
         };
@@ -966,6 +1125,10 @@ public sealed partial class MainWindow : Window
                 new("Document properties", "Ctrl+D", () => _ = ShowPropertiesAsync()),
                 new("Toggle night mode", "Ctrl+I", ToggleNightMode),
                 new("Toggle sidebar", "F9", () => SidebarButton_Click(this, null!)),
+                new("Presentation mode", "F5", TogglePresentation),
+                new("Bookmark this page", "Ctrl+B", ToggleBookmark),
+                new("Undo", "Ctrl+Z", () => _ = CurrentView?.UndoAsync()),
+                new("Redo", "Ctrl+Y", () => _ = CurrentView?.RedoAsync()),
                 new("Next page", "", () => viewer.GoToPage(viewer.CurrentPage + 1)),
                 new("Previous page", "", () => viewer.GoToPage(viewer.CurrentPage - 1)),
                 new("First page", "gg", () => viewer.GoToPage(0, recordHistory: true)),
@@ -1023,30 +1186,29 @@ public sealed partial class MainWindow : Window
 
     private readonly ThumbnailCache _thumbnails = new();
 
+    /// <summary>How many cards the homepage grid shows (page-1 thumbnails are cached to disk).</summary>
+    private const int MaxRecentCards = 18;
+
     private void PopulateRecents()
     {
-        var recents = _state.Recents.Take(AppState.MaxRecents).ToList();
-        RecentsList.ItemsSource = recents;
-        RecentsHeader.Visibility = recents.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        PopulateRecentThumbnails(recents);
-    }
+        var recents = _state.Recents.Take(MaxRecentCards).ToList();
+        bool any = recents.Count > 0;
+        RecentsHeader.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+        RecentThumbs.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+        EmptyState.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
 
-    private void PopulateRecentThumbnails(List<RecentFile> recents)
-    {
-        bool show = _state.Settings.ShowRecentThumbnails && recents.Count > 0;
-        RecentThumbsSection.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        if (!show)
-        {
-            RecentThumbs.ItemsSource = null;
-            return;
-        }
-
-        var cards = recents.Take(6).Select(r => new RecentCard(r.Path, r.DisplayName)).ToList();
+        var cards = recents.Select(r => new RecentCard(r.Path, r.DisplayName)).ToList();
         RecentThumbs.ItemsSource = cards;
 
-        foreach (var card in cards)
+        // With thumbnails disabled the cards keep their document glyph; with
+        // them enabled each card swaps its glyph for the page-1 render as the
+        // (disk-cached) bitmap arrives.
+        if (_state.Settings.ShowRecentThumbnails)
         {
-            _ = LoadThumbnailAsync(card);
+            foreach (var card in cards)
+            {
+                _ = LoadThumbnailAsync(card);
+            }
         }
     }
 
@@ -1116,11 +1278,28 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control, () => _ = SaveActiveAsync());
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => _ = SaveAsActiveAsync());
 
+        // Moved off the old CommandBar buttons when the header was slimmed down.
+        AddAccelerator(VirtualKey.F9, VirtualKeyModifiers.None, () => SidebarButton_Click(this, null!));
+        AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control, () => _activeViewer?.RotateClockwise());
+        AddAccelerator(VirtualKey.B, VirtualKeyModifiers.Control, ToggleBookmark);
+        AddAccelerator(VirtualKey.Z, VirtualKeyModifiers.Control, () => _ = CurrentView?.UndoAsync());
+        AddAccelerator(VirtualKey.Y, VirtualKeyModifiers.Control, () => _ = CurrentView?.RedoAsync());
+
         // Available even with no document open.
+        AddAccelerator(VirtualKey.O, VirtualKeyModifiers.Control, () => OpenButton_Click(this, null!), requiresDocument: false);
         AddAccelerator(VirtualKey.K, VirtualKeyModifiers.Control, ShowPalette, requiresDocument: false);
+        AddAccelerator(VirtualKey.F1, VirtualKeyModifiers.None, () => _ = ShowShortcutsAsync(), requiresDocument: false);
+        // Ctrl+? — GNOME's other shortcuts-window binding (Shift+/ = ? on US layouts).
+        AddAccelerator((VirtualKey)0xBF, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
+            () => _ = ShowShortcutsAsync(), requiresDocument: false);
+        AddAccelerator(VirtualKey.F5, VirtualKeyModifiers.None, TogglePresentation);
         AddAccelerator(VirtualKey.Escape, VirtualKeyModifiers.None, () =>
         {
-            if (Palette.IsOpen)
+            if (Presentation.IsActive)
+            {
+                ExitPresentation();
+            }
+            else if (Palette.IsOpen)
             {
                 Palette.Hide();
             }
@@ -1130,8 +1309,12 @@ public sealed partial class MainWindow : Window
             }
         }, requiresDocument: false);
 
-        // Ctrl+C must fall through to focused text boxes (find box, page box).
+        // Ctrl+C/X/V must fall through to focused text boxes (find box, page box).
         AddAccelerator(VirtualKey.C, VirtualKeyModifiers.Control, CopySelection, skipWhenTextInputFocused: true);
+        AddAccelerator(VirtualKey.X, VirtualKeyModifiers.Control,
+            () => CurrentView?.TryCopyPages(cut: true), skipWhenTextInputFocused: true);
+        AddAccelerator(VirtualKey.V, VirtualKeyModifiers.Control,
+            () => CurrentView?.TryPastePages(), skipWhenTextInputFocused: true);
     }
 
     private void AddAccelerator(
@@ -1161,15 +1344,30 @@ public sealed partial class MainWindow : Window
 
     private void Content_KeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (e.Handled || !_state.Settings.VimKeys || _activeViewer is null ||
-            Palette.IsOpen || IsTextInputFocused())
+        if (e.Handled || _activeViewer is null || Palette.IsOpen || IsTextInputFocused())
         {
             return;
         }
 
-        bool shift = Microsoft.UI.Input.InputKeyboardSource
-            .GetKeyStateForCurrentThread(VirtualKey.Shift)
-            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        bool shift = IsKeyDown(VirtualKey.Shift);
+        if (IsKeyDown(VirtualKey.Control) || IsKeyDown(VirtualKey.Menu))
+        {
+            return; // modified combos belong to the KeyboardAccelerators
+        }
+
+        // Space pages here in the BUBBLING phase (not PreviewKeyDown) so a
+        // focused button keeps its Space-to-activate accessibility behavior.
+        if (e.Key == VirtualKey.Space)
+        {
+            _activeViewer.ScrollByViewport(shift ? -0.9 : +0.9);
+            e.Handled = true;
+            return;
+        }
+
+        if (!_state.Settings.VimKeys)
+        {
+            return;
+        }
 
         switch (e.Key)
         {
@@ -1186,10 +1384,18 @@ public sealed partial class MainWindow : Window
                 _activeViewer.ScrollHorizontally(+1);
                 break;
             case VirtualKey.N:
-                StepHit(shift ? -1 : +1);
+                // Next search hit while a search is active, else next page.
+                if (_searchHits.Count > 0)
+                {
+                    StepHit(shift ? -1 : +1);
+                }
+                else if (!shift)
+                {
+                    _activeViewer.GoToPage(_activeViewer.CurrentPage + 1);
+                }
                 break;
-            case VirtualKey.Space:
-                _activeViewer.ScrollByViewport(shift ? -0.9 : +0.9);
+            case VirtualKey.P:
+                _activeViewer.GoToPage(_activeViewer.CurrentPage - 1);
                 break;
             case VirtualKey.G when shift:
                 _activeViewer.GoToPage(_activeViewer.PageCount - 1, recordHistory: true);
@@ -1211,6 +1417,94 @@ public sealed partial class MainWindow : Window
         }
         e.Handled = true;
     }
+
+    /// <summary>
+    /// Standard navigation — always on, matching Evince/GNOME Papers: arrows
+    /// scroll/page, PageUp/Down step viewports, Home/End jump. Tunneling so
+    /// the tab strip and toolbar can't swallow the keys; text inputs and the
+    /// sidebar's own lists are explicitly excluded.
+    /// </summary>
+    private void Content_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Handled)
+        {
+            return;
+        }
+
+        // Presentation mode owns the keyboard while active (Esc/F5 exit via
+        // their accelerators).
+        if (Presentation.IsActive)
+        {
+            switch (e.Key)
+            {
+                case VirtualKey.Right:
+                case VirtualKey.Down:
+                case VirtualKey.Space:
+                case VirtualKey.PageDown:
+                    Presentation.Next();
+                    e.Handled = true;
+                    break;
+                case VirtualKey.Left:
+                case VirtualKey.Up:
+                case VirtualKey.PageUp:
+                    Presentation.Prev();
+                    e.Handled = true;
+                    break;
+            }
+            return;
+        }
+
+        if (_activeViewer is null || Palette.IsOpen || IsTextInputFocused())
+        {
+            return;
+        }
+        if (IsKeyDown(VirtualKey.Control) || IsKeyDown(VirtualKey.Menu))
+        {
+            return;
+        }
+        // Sidebar thumbnails/outline/bookmarks keep their own arrow navigation.
+        if (FocusManager.GetFocusedElement(Content.XamlRoot)
+            is Microsoft.UI.Xaml.Controls.Primitives.SelectorItem or TreeViewItem)
+        {
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case VirtualKey.Up:
+                _activeViewer.ScrollByLines(-3);
+                break;
+            case VirtualKey.Down:
+                _activeViewer.ScrollByLines(+3);
+                break;
+            case VirtualKey.Left:
+                _activeViewer.GoToPage(_activeViewer.CurrentPage - 1);
+                break;
+            case VirtualKey.Right:
+                _activeViewer.GoToPage(_activeViewer.CurrentPage + 1);
+                break;
+            case VirtualKey.PageUp:
+                _activeViewer.ScrollByViewport(-0.9);
+                break;
+            case VirtualKey.PageDown:
+                _activeViewer.ScrollByViewport(+0.9);
+                break;
+            case VirtualKey.Home:
+                _activeViewer.GoToPage(0, recordHistory: true);
+                break;
+            case VirtualKey.End:
+                _activeViewer.GoToPage(_activeViewer.PageCount - 1, recordHistory: true);
+                break;
+            default:
+                return;
+        }
+        e.Handled = true;
+    }
+
+    private static bool IsKeyDown(VirtualKey key) =>
+        Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(key)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
     private void CloseCurrentTab()
     {
@@ -1298,7 +1592,10 @@ public sealed partial class MainWindow : Window
         {
             await Task.Delay(200, cts.Token); // debounce rapid typing
             bool matchCase = MatchCaseButton.IsChecked == true;
-            var search = new DocumentSearch(document, query, matchCase, wholeWord: false);
+            // Route each page's search through the viewer's render thread at
+            // Background priority: visible tiles always outrank the sweep.
+            var search = new DocumentSearch(document, query, matchCase, wholeWord: false,
+                workQueue: viewer.WorkQueue);
 
             await search.RunAsync(
                 onPageHits: hits => DispatcherQueue.TryEnqueue(() =>
@@ -1353,6 +1650,11 @@ public sealed partial class MainWindow : Window
 
     private void CopySelection()
     {
+        // Sidebar-focused Ctrl+C means "copy PAGES"; otherwise copy text.
+        if (CurrentView is { } view && view.TryCopyPages(cut: false))
+        {
+            return;
+        }
         string text = _activeViewer?.SelectedText ?? "";
         if (!string.IsNullOrEmpty(text))
         {

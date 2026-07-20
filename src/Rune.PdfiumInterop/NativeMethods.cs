@@ -220,6 +220,28 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FPDFAnnot_SetBorder(IntPtr annot, float horizontalRadius, float verticalRadius, float borderWidth);
 
+    // Read-back APIs (undo/redo captures annotations before deletion)
+
+    /// <summary>colorType: 0 = fill/stroke color, 1 = interior color.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetColor(IntPtr annot, int colorType, out uint r, out uint g, out uint b, out uint a);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern UIntPtr FPDFAnnot_CountAttachmentPoints(IntPtr annot);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetAttachmentPoints(IntPtr annot, UIntPtr quadIndex, out FS_QUADPOINTSF quadPoints);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAnnot_GetInkListCount(IntPtr annot);
+
+    /// <summary>Returns the point count of the path; fills buffer when large enough (or pass null/0 to size).</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAnnot_GetInkListPath(IntPtr annot, uint pathIndex, [Out] FS_POINTF[]? buffer, uint length);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetBorder(IntPtr annot, out float horizontalRadius, out float verticalRadius, out float borderWidth);
+
     // Annotation subtypes (fpdf_annot.h)
     internal const int FPDF_ANNOT_SUBTYPE_TEXT = 1;
     internal const int FPDF_ANNOT_SUBTYPE_HIGHLIGHT = 9;
@@ -228,6 +250,26 @@ internal static partial class NativeMethods
     internal const int FPDF_ANNOT_SUBTYPE_STRIKEOUT = 12;
 
     internal const int FPDF_ANNOT_FLAG_PRINT = 1 << 2;
+
+    // ---- Page organization (fpdf_edit.h / fpdf_ppo.h) ----
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFPage_Delete(IntPtr document, int pageIndex);
+
+    /// <summary>Copies pages (by 0-based index array) from src into dest at destIndex. Pass null indices to copy all.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_ImportPagesByIndex(IntPtr destDoc, IntPtr srcDoc, [In] int[]? pageIndices, uint length, int destIndex);
+
+    /// <summary>Experimental: moves pages so the block starts at destPageIndex in the final ordering.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_MovePages(IntPtr document, [In] int[] pageIndices, uint pageIndicesLen, int destPageIndex);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDF_CreateNewDocument();
+
+    /// <summary>The buffer must stay valid (pinned) for the whole life of the returned document.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDF_LoadMemDocument64(IntPtr dataBuf, UIntPtr size, [MarshalAs(UnmanagedType.LPStr)] string? password);
 
     // ---- Saving (fpdf_save.h) ----
 
@@ -263,6 +305,10 @@ internal static partial class NativeMethods
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FPDFText_GetCharIndexAtPos(IntPtr textPage, double x, double y, double xTolerance, double yTolerance);
+
+    /// <summary>Bounding box of one character in page space. NOTE the parameter order: left, right, bottom, top.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_GetCharBox(IntPtr textPage, int index, out double left, out double right, out double bottom, out double top);
 
     /// <summary>Number of distinct rectangles covering the given char range (multi-line selections span several).</summary>
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]

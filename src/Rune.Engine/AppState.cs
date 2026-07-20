@@ -3,6 +3,13 @@ using System.Text.Json.Serialization;
 
 namespace Rune.Services;
 
+/// <summary>A user bookmark inside one document.</summary>
+public sealed class BookmarkEntry
+{
+    public int PageIndex { get; set; }
+    public string Name { get; set; } = "";
+}
+
 /// <summary>A file the user has opened, with the reading position to restore.</summary>
 public sealed class RecentFile
 {
@@ -13,6 +20,9 @@ public sealed class RecentFile
     public double Zoom { get; set; }
     public int Rotation { get; set; }
     public double ScrollFraction { get; set; }
+
+    /// <summary>User bookmarks (Ctrl+B); old state files deserialize to empty.</summary>
+    public List<BookmarkEntry> Bookmarks { get; set; } = [];
 }
 
 /// <summary>What was open last time, so a restart can reopen it.</summary>
@@ -46,6 +56,9 @@ public sealed class AppSettings
     /// <summary>Show a thumbnail grid of recent documents on the start page.</summary>
     public bool ShowRecentThumbnails { get; set; } = true;
 
+    /// <summary>Open the sidebar (thumbnails/chapters/bookmarks) when a document loads.</summary>
+    public bool SidebarOpenByDefault { get; set; } = true;
+
     /// <summary>Ink pen color as #RRGGBB (default red).</summary>
     public string InkColor { get; set; } = "#E22222";
 
@@ -68,6 +81,7 @@ public sealed class AppState
     /// <summary>Records/updates a file's position and moves it to the top of recents.</summary>
     public void Remember(string path, string displayName, int pageIndex, double zoom, int rotation, double scrollFraction)
     {
+        var existing = FindRecent(path);
         Recents.RemoveAll(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
         Recents.Insert(0, new RecentFile
         {
@@ -78,10 +92,24 @@ public sealed class AppState
             Zoom = zoom,
             Rotation = rotation,
             ScrollFraction = scrollFraction,
+            Bookmarks = existing?.Bookmarks ?? [],
         });
-        if (Recents.Count > MaxRecents)
+        TrimRecents();
+    }
+
+    /// <summary>
+    /// Evicts past <see cref="MaxRecents"/>, but never an entry that carries
+    /// bookmarks — silently losing bookmarks because other files were opened
+    /// would be a betrayal.
+    /// </summary>
+    private void TrimRecents()
+    {
+        for (int i = Recents.Count - 1; i >= MaxRecents; i--)
         {
-            Recents.RemoveRange(MaxRecents, Recents.Count - MaxRecents);
+            if (Recents[i].Bookmarks.Count == 0)
+            {
+                Recents.RemoveAt(i);
+            }
         }
     }
 }
