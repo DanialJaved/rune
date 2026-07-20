@@ -61,6 +61,7 @@ internal static class ShortcutCatalog
             new("Copy / cut pages", "Ctrl+C / Ctrl+X"),
             new("Paste pages (works across tabs)", "Ctrl+V"),
             new("Delete pages", "Delete"),
+            new("Undo / redo", "Ctrl+Z / Ctrl+Y"),
         ]),
         new("Vim keys (Settings toggle)",
         [

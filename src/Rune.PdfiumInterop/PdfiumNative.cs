@@ -38,6 +38,57 @@ public static class PdfiumNative
     public static bool SetAnnotBorderWidth(IntPtr annot, float width)
         => NativeMethods.FPDFAnnot_SetBorder(annot, 0, 0, width) != 0;
 
+    // ---- Annotation read-back (undo/redo capture) ----
+
+    public static bool GetAnnotColor(IntPtr annot, out byte r, out byte g, out byte b, out byte a)
+    {
+        bool ok = NativeMethods.FPDFAnnot_GetColor(annot, 0, out uint ur, out uint ug, out uint ub, out uint ua) != 0;
+        (r, g, b, a) = ((byte)ur, (byte)ug, (byte)ub, (byte)ua);
+        return ok;
+    }
+
+    public static int CountAnnotQuads(IntPtr annot)
+        => (int)NativeMethods.FPDFAnnot_CountAttachmentPoints(annot);
+
+    /// <summary>One markup quad in page space: (left, bottom, right, top).</summary>
+    public static bool GetAnnotQuad(IntPtr annot, int quadIndex, out float left, out float bottom, out float right, out float top)
+    {
+        if (NativeMethods.FPDFAnnot_GetAttachmentPoints(annot, (UIntPtr)quadIndex, out var q) != 0)
+        {
+            left = Math.Min(Math.Min(q.X1, q.X2), Math.Min(q.X3, q.X4));
+            right = Math.Max(Math.Max(q.X1, q.X2), Math.Max(q.X3, q.X4));
+            bottom = Math.Min(Math.Min(q.Y1, q.Y2), Math.Min(q.Y3, q.Y4));
+            top = Math.Max(Math.Max(q.Y1, q.Y2), Math.Max(q.Y3, q.Y4));
+            return true;
+        }
+        left = bottom = right = top = 0;
+        return false;
+    }
+
+    public static int GetInkStrokeCount(IntPtr annot)
+        => (int)NativeMethods.FPDFAnnot_GetInkListCount(annot);
+
+    /// <summary>Points of one ink stroke, in page space. Empty on failure.</summary>
+    public static (float X, float Y)[] GetInkStroke(IntPtr annot, int strokeIndex)
+    {
+        uint count = NativeMethods.FPDFAnnot_GetInkListPath(annot, (uint)strokeIndex, null, 0);
+        if (count == 0)
+        {
+            return [];
+        }
+        var buffer = new NativeMethods.FS_POINTF[count];
+        NativeMethods.FPDFAnnot_GetInkListPath(annot, (uint)strokeIndex, buffer, count);
+        var points = new (float, float)[count];
+        for (int i = 0; i < count; i++)
+        {
+            points[i] = (buffer[i].X, buffer[i].Y);
+        }
+        return points;
+    }
+
+    public static float GetAnnotBorderWidth(IntPtr annot)
+        => NativeMethods.FPDFAnnot_GetBorder(annot, out _, out _, out float width) != 0 ? width : 0f;
+
     public static IntPtr CreateAnnot(IntPtr page, int subtype) => NativeMethods.FPDFPage_CreateAnnot(page, subtype);
 
     public static int GetAnnotCount(IntPtr page) => NativeMethods.FPDFPage_GetAnnotCount(page);

@@ -207,6 +207,42 @@ public sealed partial class PdfDocument
         }
     }
 
+    /// <summary>
+    /// Undoes a <see cref="MovePages"/>: scatters the (now contiguous) block
+    /// back to the pages' original, possibly non-contiguous positions. A
+    /// scatter is not expressible as one FPDF_MovePages call, so it runs as a
+    /// series of single-page moves guided by the permutation model.
+    /// </summary>
+    public void RestoreMovedPages(IReadOnlyList<int> movedIndices, int destIndex)
+    {
+        var sorted = NormalizeIndices(movedIndices);
+        if (sorted.Count == 0)
+        {
+            return;
+        }
+        destIndex = Math.Clamp(destIndex, 0, PageCount - sorted.Count);
+
+        // order[newIdx] = originalIdx describes the CURRENT (post-move) order.
+        var map = BookmarkRemap.MovePermutation(PageCount, sorted, destIndex);
+        var order = new int[PageCount];
+        for (int oldIndex = 0; oldIndex < map.Length; oldIndex++)
+        {
+            order[map[oldIndex]] = oldIndex;
+        }
+
+        var current = new List<int>(order);
+        foreach (int original in sorted)
+        {
+            int position = current.IndexOf(original);
+            if (position != original)
+            {
+                MovePages([position], original);
+                current.RemoveAt(position);
+                current.Insert(original, original);
+            }
+        }
+    }
+
     /// <summary>Distinct, sorted, in-range page indices.</summary>
     private List<int> NormalizeIndices(IReadOnlyList<int> pageIndices)
     {

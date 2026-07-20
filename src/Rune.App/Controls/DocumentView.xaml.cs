@@ -45,6 +45,15 @@ public sealed partial class DocumentView : UserControl
         BookmarkList.ItemsSource = _bookmarks;
 
         ViewerControl.CurrentPageChanged += (_, page) => SyncThumbnailSelection(page);
+        ViewerControl.AnnotationEdited += (_, e) => PushEdit(new DocumentEdit
+        {
+            Label = e.Label,
+            IsPageMutation = false,
+            PageIndex = e.PageIndex,
+            SnapshotBytes = 0,
+            UndoAction = e.UndoAction,
+            RedoAction = e.RedoAction,
+        });
     }
 
     public bool IsPaneOpen
@@ -91,6 +100,7 @@ public sealed partial class DocumentView : UserControl
 
     public void Close()
     {
+        ClearUndoHistory();
         Viewer.SetDocument(null);
         var document = _document;
         _document = null;
@@ -138,7 +148,10 @@ public sealed partial class DocumentView : UserControl
         }
         finally
         {
-            // Reopen whatever now lives at FilePath (swapped or original).
+            // Reopen whatever now lives at FilePath (swapped or original). The
+            // reopen gives every page a fresh identity, so undo edits recorded
+            // against the old document no longer apply — drop the history.
+            ClearUndoHistory();
             _document = await Task.Run(() => PdfDocument.Open(FilePath));
             Viewer.SetDocument(_document);
             Viewer.RestoreView(zoom, rotation, fraction);
@@ -288,12 +301,13 @@ public sealed partial class DocumentView : UserControl
     /// Runs one page mutation on the render thread, then rebuilds every
     /// page-derived cache and remaps bookmarks. One op at a time — the
     /// sidebar is a live view of the document and re-entrancy would race it.
+    /// Returns true when the op ran without error.
     /// </summary>
-    private async Task RunPageOpAsync(Action<PdfDocument> op, Func<int, int?>? remapBookmark)
+    private async Task<bool> RunPageOpAsync(Action<PdfDocument> op, Func<int, int?>? remapBookmark)
     {
         if (_pageOpRunning || _document is not { } document)
         {
-            return;
+            return false;
         }
         _pageOpRunning = true;
         try
@@ -305,11 +319,13 @@ public sealed partial class DocumentView : UserControl
                 return true;
             });
             AfterPageMutation(remapBookmark);
+            return true;
         }
         catch (Exception ex) when (ex is Rune.PdfiumInterop.PdfiumException or InvalidOperationException)
         {
             AfterPageMutation(null); // resync the UI; metrics may have moved
             PageOpFailed?.Invoke(this, ex.Message);
+            return false;
         }
         finally
         {
@@ -359,8 +375,54 @@ public sealed partial class DocumentView : UserControl
             PageOpFailed?.Invoke(this, "Cannot delete every page of a document.");
             return;
         }
+        await DeletePagesWithUndoAsync(pages, cut: false);
+    }
+
+    /// <summary>Shared delete/cut: snapshots each victim page so undo re-inserts it at its original index.</summary>
+    private async Task DeletePagesWithUndoAsync(List<int> pages, bool cut)
+    {
         var deleted = pages.ToHashSet();
-        await RunPageOpAsync(d => d.DeletePages(pages), p => BookmarkRemap.AfterDelete(p, deleted));
+        var before = GetBookmarks();
+        byte[][]? snapshots = null;
+        byte[]? clipboardBytes = null;
+
+        bool ok = await RunPageOpAsync(d =>
+        {
+            snapshots = [.. pages.Select(p => d.ExportPages([p]))]; // per-page, for undo restore
+            if (cut)
+            {
+                clipboardBytes = d.ExportPages(pages); // whole selection in one PDF, in order
+            }
+            d.DeletePages(pages);
+        }, p => BookmarkRemap.AfterDelete(p, deleted));
+
+        if (!ok || snapshots is null)
+        {
+            return;
+        }
+        if (cut && clipboardBytes is not null)
+        {
+            PageClipboard.Set(clipboardBytes, pages.Count);
+        }
+
+        var origIndices = pages.ToList();
+        var pageSnapshots = snapshots;
+        PushEdit(new DocumentEdit
+        {
+            Label = pages.Count == 1 ? (cut ? "cut page" : "delete page") : $"{(cut ? "cut" : "delete")} {pages.Count} pages",
+            IsPageMutation = true,
+            SnapshotBytes = pageSnapshots.Sum(s => (long)s.Length),
+            BookmarksBefore = before,
+            BookmarksAfter = GetBookmarks(),
+            UndoAction = d =>
+            {
+                for (int i = 0; i < origIndices.Count; i++)
+                {
+                    d.InsertPages(pageSnapshots[i], origIndices[i]); // ascending — positions line up
+                }
+            },
+            RedoAction = d => d.DeletePages(origIndices),
+        });
     }
 
     /// <summary>Copy (or cut) the selected pages into the app-wide page clipboard.</summary>
@@ -385,17 +447,7 @@ public sealed partial class DocumentView : UserControl
             return;
         }
 
-        byte[]? cutBytes = null;
-        var deleted = pages.ToHashSet();
-        await RunPageOpAsync(d =>
-        {
-            cutBytes = d.ExportPages(pages);
-            d.DeletePages(pages);
-        }, p => BookmarkRemap.AfterDelete(p, deleted));
-        if (cutBytes is not null)
-        {
-            PageClipboard.Set(cutBytes, pages.Count);
-        }
+        await DeletePagesWithUndoAsync(pages, cut: true);
     }
 
     /// <summary>Insert the page clipboard at <paramref name="atIndex"/> (default: after the selection / current page).</summary>
@@ -407,18 +459,176 @@ public sealed partial class DocumentView : UserControl
         }
         var bytes = PageClipboard.Pdf!;
         int at = atIndex ?? (SelectedPageIndices() is { Count: > 0 } sel ? sel[^1] + 1 : Viewer.CurrentPage + 1);
-        int inserted = 0;
-        await RunPageOpAsync(d => inserted = d.InsertPages(bytes, at),
-            p => BookmarkRemap.AfterInsert(p, at, inserted));
+        await InsertBytesWithUndoAsync(bytes, at, "paste");
     }
 
     /// <summary>Insert all pages of another PDF file. Returns the number of pages inserted.</summary>
     public async Task<int> InsertPdfFileAsync(string path, int atIndex)
     {
+        byte[] bytes;
+        try
+        {
+            bytes = await Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Interactive, () =>
+            {
+                using var src = PdfDocument.Open(path);
+                return src.ExportPages([.. Enumerable.Range(0, src.PageCount)]);
+            });
+        }
+        catch (Exception ex) when (ex is Rune.PdfiumInterop.PdfiumException or IOException)
+        {
+            PageOpFailed?.Invoke(this, ex.Message);
+            return 0;
+        }
+        return await InsertBytesWithUndoAsync(bytes, atIndex, "insert PDF");
+    }
+
+    /// <summary>Insert a serialized PDF at an index with a matching undo (delete the inserted block).</summary>
+    private async Task<int> InsertBytesWithUndoAsync(byte[] bytes, int at, string verb)
+    {
+        var before = GetBookmarks();
         int inserted = 0;
-        await RunPageOpAsync(d => inserted = d.InsertPagesFromFile(path, atIndex),
-            p => BookmarkRemap.AfterInsert(p, atIndex, inserted));
+        bool ok = await RunPageOpAsync(d => inserted = d.InsertPages(bytes, at),
+            p => BookmarkRemap.AfterInsert(p, at, inserted));
+        if (!ok || inserted == 0)
+        {
+            return inserted;
+        }
+
+        int insertedCount = inserted;
+        PushEdit(new DocumentEdit
+        {
+            Label = insertedCount == 1 ? $"{verb} page" : $"{verb} {insertedCount} pages",
+            IsPageMutation = true,
+            SnapshotBytes = bytes.Length,
+            BookmarksBefore = before,
+            BookmarksAfter = GetBookmarks(),
+            UndoAction = d => d.DeletePages([.. Enumerable.Range(at, insertedCount)]),
+            RedoAction = d => d.InsertPages(bytes, at),
+        });
         return inserted;
+    }
+
+    // ---------------------------------------------------------------- undo / redo
+
+    /// <summary>One undoable edit: an annotation change, or a page mutation with bookmark snapshots.</summary>
+    private sealed class DocumentEdit : IUndoableEdit
+    {
+        public required string Label { get; init; }
+        public long SnapshotBytes { get; init; }
+        public required Action<PdfDocument> UndoAction { get; init; }
+        public required Action<PdfDocument> RedoAction { get; init; }
+        public bool IsPageMutation { get; init; }
+        public int PageIndex { get; init; } // annotation edits: the page to refresh
+        public IReadOnlyList<Rune.Services.BookmarkEntry>? BookmarksBefore { get; init; }
+        public IReadOnlyList<Rune.Services.BookmarkEntry>? BookmarksAfter { get; init; }
+    }
+
+    private readonly UndoStack<DocumentEdit> _undoStack = new();
+
+    /// <summary>Raised whenever undo/redo availability or labels change.</summary>
+    public event EventHandler? UndoStateChanged;
+
+    public bool CanUndo => _undoStack.CanUndo;
+    public bool CanRedo => _undoStack.CanRedo;
+    public string? UndoLabel => _undoStack.UndoLabel;
+    public string? RedoLabel => _undoStack.RedoLabel;
+
+    private void PushEdit(DocumentEdit edit)
+    {
+        _undoStack.Push(edit);
+        UndoStateChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public async Task UndoAsync()
+    {
+        if (_pageOpRunning)
+        {
+            return;
+        }
+        var edit = _undoStack.PopUndo();
+        if (edit is not null)
+        {
+            await ApplyEditAsync(edit, edit.UndoAction, edit.BookmarksBefore);
+        }
+    }
+
+    public async Task RedoAsync()
+    {
+        if (_pageOpRunning)
+        {
+            return;
+        }
+        var edit = _undoStack.PopRedo();
+        if (edit is not null)
+        {
+            await ApplyEditAsync(edit, edit.RedoAction, edit.BookmarksAfter);
+        }
+    }
+
+    private async Task ApplyEditAsync(DocumentEdit edit, Action<PdfDocument> action,
+        IReadOnlyList<Rune.Services.BookmarkEntry>? bookmarks)
+    {
+        if (_document is not { } document)
+        {
+            return;
+        }
+        _pageOpRunning = true;
+        try
+        {
+            if (edit.IsPageMutation)
+            {
+                Viewer.PreparePageMutation();
+            }
+            await Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Interactive, () =>
+            {
+                action(document);
+                return true;
+            });
+
+            if (edit.IsPageMutation)
+            {
+                Viewer.HandleDocumentMutated();
+                PopulateThumbnails(document.PageCount);
+                _ = PopulateOutlineAsync(document);
+                if (bookmarks is not null)
+                {
+                    SetBookmarks(bookmarks);
+                }
+                RefreshPaneVisibility();
+                SyncThumbnailSelection(Viewer.CurrentPage);
+            }
+            else
+            {
+                Viewer.InvalidatePage(edit.PageIndex);
+            }
+            PagesEdited?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex) when (ex is Rune.PdfiumInterop.PdfiumException or InvalidOperationException)
+        {
+            PageOpFailed?.Invoke(this, ex.Message);
+        }
+        finally
+        {
+            _pageOpRunning = false;
+            UndoStateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    private void SetBookmarks(IReadOnlyList<Rune.Services.BookmarkEntry> entries)
+    {
+        _bookmarks.Clear();
+        foreach (var entry in entries.OrderBy(b => b.PageIndex))
+        {
+            _bookmarks.Add(new BookmarkItem(entry.PageIndex, entry.Name));
+        }
+        BookmarksChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Drops the undo history — page identity is invalidated after a save-in-place reopen or close.</summary>
+    public void ClearUndoHistory()
+    {
+        _undoStack.Clear();
+        UndoStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     // Ctrl+C/X/V routing helpers for the shell: page ops only apply when the
@@ -488,7 +698,21 @@ public sealed partial class DocumentView : UserControl
             return;
         }
 
-        await RunPageOpAsync(d => d.MovePages(movedIndices, destIndex), p => map[p]);
+        var before = GetBookmarks();
+        bool ok = await RunPageOpAsync(d => d.MovePages(movedIndices, destIndex), p => map[p]);
+        if (ok)
+        {
+            PushEdit(new DocumentEdit
+            {
+                Label = movedIndices.Count == 1 ? "move page" : $"move {movedIndices.Count} pages",
+                IsPageMutation = true,
+                SnapshotBytes = 0, // moves store no snapshot — the inverse is a permutation
+                BookmarksBefore = before,
+                BookmarksAfter = GetBookmarks(),
+                UndoAction = d => d.RestoreMovedPages(movedIndices, destIndex),
+                RedoAction = d => d.MovePages(movedIndices, destIndex),
+            });
+        }
     }
 
     private void ThumbList_DragOver(object sender, DragEventArgs e)

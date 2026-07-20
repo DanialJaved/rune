@@ -219,6 +219,13 @@ public sealed partial class MainWindow : Window
             }
         };
         view.PageOpFailed += (_, message) => ShowError(message);
+        view.UndoStateChanged += (_, _) =>
+        {
+            if (view == CurrentView)
+            {
+                UpdateUndoMenu();
+            }
+        };
         view.Loaded2 += (_, _) => { if (view == CurrentView) { UpdateToolbarForActive(); } };
 
         // Tabs are strip-only (they live in the title bar); the view itself
@@ -483,6 +490,7 @@ public sealed partial class MainWindow : Window
         SidebarButton.IsChecked = view!.IsPaneOpen;
         InkButton.IsChecked = viewer.IsInkMode;
         UpdateFitToggles();
+        UpdateUndoMenu();
     }
 
     private void SetInkMode(bool on)
@@ -601,6 +609,18 @@ public sealed partial class MainWindow : Window
     private void InkButton_Click(object sender, RoutedEventArgs e) => SetInkMode(InkButton.IsChecked == true);
     private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
     private void PresentMenuItem_Click(object sender, RoutedEventArgs e) => TogglePresentation();
+    private void UndoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.UndoAsync();
+    private void RedoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.RedoAsync();
+
+    /// <summary>Reflects the active view's undo/redo availability and labels onto the menu.</summary>
+    private void UpdateUndoMenu()
+    {
+        var view = CurrentView;
+        UndoMenuItem.IsEnabled = view?.CanUndo == true;
+        RedoMenuItem.IsEnabled = view?.CanRedo == true;
+        UndoMenuItem.Text = view?.UndoLabel is { } u ? $"Undo {u}" : "Undo";
+        RedoMenuItem.Text = view?.RedoLabel is { } r ? $"Redo {r}" : "Redo";
+    }
 
     // ---------------------------------------------------------------- presentation
 
@@ -1107,6 +1127,8 @@ public sealed partial class MainWindow : Window
                 new("Toggle sidebar", "F9", () => SidebarButton_Click(this, null!)),
                 new("Presentation mode", "F5", TogglePresentation),
                 new("Bookmark this page", "Ctrl+B", ToggleBookmark),
+                new("Undo", "Ctrl+Z", () => _ = CurrentView?.UndoAsync()),
+                new("Redo", "Ctrl+Y", () => _ = CurrentView?.RedoAsync()),
                 new("Next page", "", () => viewer.GoToPage(viewer.CurrentPage + 1)),
                 new("Previous page", "", () => viewer.GoToPage(viewer.CurrentPage - 1)),
                 new("First page", "gg", () => viewer.GoToPage(0, recordHistory: true)),
@@ -1260,6 +1282,8 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.F9, VirtualKeyModifiers.None, () => SidebarButton_Click(this, null!));
         AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control, () => _activeViewer?.RotateClockwise());
         AddAccelerator(VirtualKey.B, VirtualKeyModifiers.Control, ToggleBookmark);
+        AddAccelerator(VirtualKey.Z, VirtualKeyModifiers.Control, () => _ = CurrentView?.UndoAsync());
+        AddAccelerator(VirtualKey.Y, VirtualKeyModifiers.Control, () => _ = CurrentView?.RedoAsync());
 
         // Available even with no document open.
         AddAccelerator(VirtualKey.O, VirtualKeyModifiers.Control, () => OpenButton_Click(this, null!), requiresDocument: false);
