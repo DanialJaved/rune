@@ -69,7 +69,17 @@ public sealed partial class PdfViewer : UserControl
     private bool _pendingFit;
     private (double Zoom, int Rotation, double Fraction)? _pendingRestore;
 
-    private bool ViewportReady => Scroller.ViewportWidth > 50 && Scroller.ViewportHeight > 50;
+    // ScrollViewer.ViewportWidth/Height are refreshed during the ScrollViewer's
+    // OWN arrange pass, which runs *after* its SizeChanged event. Reading them
+    // inside SizeChanged therefore yields the previous size — which laid the
+    // document out against a stale width (page left-aligned, stale tiles) every
+    // time the sidebar toggled. SizeChanged hands us the authoritative new size,
+    // so we prefer it for the duration of that handler only.
+    private Size _sizeChangedViewport;
+    private double ViewportW => _sizeChangedViewport.Width > 0 ? _sizeChangedViewport.Width : Scroller.ViewportWidth;
+    private double ViewportH => _sizeChangedViewport.Height > 0 ? _sizeChangedViewport.Height : Scroller.ViewportHeight;
+
+    private bool ViewportReady => ViewportW > 50 && ViewportH > 50;
 
     // Link hit-testing: per-page links, extracted lazily off the UI thread.
     private readonly Dictionary<int, IReadOnlyList<PdfLink>> _links = [];
@@ -410,8 +420,8 @@ public sealed partial class PdfViewer : UserControl
             _pendingFit = true; // never fit against a guessed viewport size
             return;
         }
-        double usableWidth = Scroller.ViewportWidth - 2 * PageLayout.Margin;
-        double usableHeight = Scroller.ViewportHeight - 2 * PageLayout.Margin;
+        double usableWidth = ViewportW - 2 * PageLayout.Margin;
+        double usableHeight = ViewportH - 2 * PageLayout.Margin;
 
         var size = _pageSizes[Math.Clamp(_currentPage, 0, _pageSizes.Length - 1)];
         double pageW = _rotation % 2 == 0 ? size.Width : size.Height;
@@ -534,41 +544,57 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        _layout = new PageLayout(_pageSizes, _zoom, _rotation, Scroller.ViewportWidth, Scroller.ViewportHeight);
+        _layout = new PageLayout(_pageSizes, _zoom, _rotation, ViewportW, ViewportH);
         Canvas.Width = _layout.TotalWidth;
         Canvas.Height = _layout.TotalHeight;
+        // Pages just moved (re-centered / re-scaled). Without this, whatever the
+        // virtual canvas already painted stays on screen as ghost fragments —
+        // only newly-invalidated regions would be redrawn.
+        Canvas.Invalidate();
     }
 
     private void Scroller_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (!ViewportReady)
+        // Use the size the event carries, not the ScrollViewer's own (still
+        // stale) ViewportWidth/Height — see _sizeChangedViewport.
+        _sizeChangedViewport = e.NewSize;
+        try
         {
-            return;
-        }
+            if (!ViewportReady)
+            {
+                return;
+            }
 
-        if (_pendingRestore is { } restore)
-        {
-            // A session position arrived before the first measure; replay it
-            // now that the viewport is real (zoom → layout → scroll ordering).
-            _pendingRestore = null;
-            _pendingFit = false;
-            RestoreView(restore.Zoom, restore.Rotation, restore.Fraction);
+            if (_pendingRestore is { } restore)
+            {
+                // A session position arrived before the first measure; replay it
+                // now that the viewport is real (zoom → layout → scroll ordering).
+                _pendingRestore = null;
+                _pendingFit = false;
+                RestoreView(restore.Zoom, restore.Rotation, restore.Fraction);
+            }
+            else if (_pendingFit)
+            {
+                _pendingFit = false;
+                ApplyFitMode();
+            }
+            else if (_fitMode != FitMode.None)
+            {
+                ApplyFitMode();
+            }
+            else
+            {
+                // Free zoom: keep the zoom, but re-centre for the new width.
+                RebuildLayout();
+            }
+            UpdateDesiredTiles();
+            PrefetchVisiblePageData();
         }
-        else if (_pendingFit)
+        finally
         {
-            _pendingFit = false;
-            ApplyFitMode();
+            // Later calls must read the live (by then correct) viewport.
+            _sizeChangedViewport = default;
         }
-        else if (_fitMode != FitMode.None)
-        {
-            ApplyFitMode();
-        }
-        else
-        {
-            RebuildLayout();
-        }
-        UpdateDesiredTiles();
-        PrefetchVisiblePageData();
     }
 
     private bool _rebasingZoom;
