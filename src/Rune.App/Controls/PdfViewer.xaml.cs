@@ -129,6 +129,9 @@ public sealed partial class PdfViewer : UserControl
 
     /// <summary>Raised after a rotation, with the new quarter-turn count (0–3).</summary>
     public event EventHandler<int>? RotationChanged;
+
+    /// <summary>Raised when the user presses to start drawing, so transient UI (the pen panel) can get out of the way.</summary>
+    public event EventHandler? InkStrokeStarted;
     public event EventHandler? HistoryChanged;
 
     /// <summary>Raised when the user clicks an external (URI) link. The shell decides whether to open it.</summary>
@@ -1101,6 +1104,10 @@ public sealed partial class PdfViewer : UserControl
 
     private void BeginInkStroke(Point docPoint, Pointer pointer)
     {
+        // Raised before the rotation guard: the user pressed to draw, so the
+        // pen panel should get out of the way either way.
+        InkStrokeStarted?.Invoke(this, EventArgs.Empty);
+
         if (_layout is null || _document is null || _rotation != 0)
         {
             return; // ink geometry only tracked for the unrotated view

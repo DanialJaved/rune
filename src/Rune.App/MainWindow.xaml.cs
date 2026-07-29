@@ -49,7 +49,7 @@ public sealed partial class MainWindow : Window
         // focus sits on the tab strip or a toolbar button (those controls eat
         // arrow keys in the bubbling phase for their own focus movement).
         ((UIElement)Content).PreviewKeyDown += Content_PreviewKeyDown;
-        BuildInkOptionsFlyout();
+        // The pen panel is built lazily on first use (BuildInkFlyout).
         PopulateRecents();
 
         Activated += MainWindow_FirstActivated;
@@ -449,6 +449,7 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.CurrentPageChanged -= Viewer_CurrentPageChanged;
             _activeViewer.ZoomChanged -= Viewer_ZoomChanged;
+            _activeViewer.InkStrokeStarted -= Viewer_InkStrokeStarted;
         }
 
         _activeViewer = CurrentView?.Viewer;
@@ -457,6 +458,7 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.CurrentPageChanged += Viewer_CurrentPageChanged;
             _activeViewer.ZoomChanged += Viewer_ZoomChanged;
+            _activeViewer.InkStrokeStarted += Viewer_InkStrokeStarted;
         }
 
         if (CurrentView is { } view)
@@ -479,6 +481,9 @@ public sealed partial class MainWindow : Window
         _suppressPageBox = false;
     }
 
+    /// <summary>Drawing started — get the pen panel out of the way.</summary>
+    private void Viewer_InkStrokeStarted(object? sender, EventArgs e) => _inkFlyout?.Hide();
+
     private void Viewer_ZoomChanged(object? sender, double zoom)
     {
         ZoomLabel.Text = $"{Math.Round(zoom * 100)}%";
@@ -495,14 +500,15 @@ public sealed partial class MainWindow : Window
                  {
                      SidebarButton, PageBox, FindButton, InkButton, NightButton,
                      ZoomInButton, ZoomOutButton, ZoomLabelButton,
+                     FitWidthButton, FitPageButton, RotateLeftButton, RotateRightButton,
                  })
         {
             control.IsEnabled = ready;
         }
         foreach (var item in new MenuFlyoutItemBase[]
                  {
-                     SaveMenuItem, SaveAsMenuItem, PrintMenuItem, RotateMenuItem,
-                     PropertiesMenuItem, InkOptionsMenuItem, PresentMenuItem,
+                     SaveMenuItem, SaveAsMenuItem, PrintMenuItem,
+                     PropertiesMenuItem, PresentMenuItem,
                  })
         {
             item.IsEnabled = ready;
@@ -532,6 +538,10 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.IsInkMode = on;
             InkButton.IsChecked = on;
+            if (!on)
+            {
+                _inkFlyout?.Hide(); // covers Ctrl+E while the panel is open
+            }
         }
     }
 
@@ -544,45 +554,151 @@ public sealed partial class MainWindow : Window
         ("Thin", 1.5), ("Medium", 2.5), ("Thick", 4.5),
     ];
 
-    /// <summary>(Re)fills the "Pen color and width" submenu in the main menu.</summary>
-    private void BuildInkOptionsFlyout()
+    // Pen options live on the pen button itself. A plain Flyout, not a
+    // MenuFlyout: a MenuFlyout dismisses the moment any item is clicked, and we
+    // want the panel to stay put while the user tries colours and widths.
+    private Flyout? _inkFlyout;
+    private readonly List<(string Hex, Border Check)> _inkColorChecks = [];
+    private readonly List<(double Width, Border Check)> _inkWidthChecks = [];
+
+    /// <summary>Builds the pen panel once; later calls only move the check marks.</summary>
+    private Flyout BuildInkFlyout()
     {
-        var flyout = InkOptionsMenuItem;
-        flyout.Items.Clear();
-        flyout.Items.Add(new MenuFlyoutItem { Text = "Pen color", IsEnabled = false });
+        var panel = new StackPanel { Spacing = 10, MinWidth = 190 };
+        var caption = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+
+        panel.Children.Add(new TextBlock { Text = "Pen colour", Style = caption, Opacity = 0.7 });
+
+        var colorRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         foreach (var (name, hex) in InkColors)
         {
-            var item = new ToggleMenuFlyoutItem
+            // A ring around the swatch marks the selection; white/black inner
+            // stroke keeps it visible on both light and dark swatches.
+            var check = new Border
             {
-                Text = name,
-                IsChecked = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase),
-                Icon = new FontIcon { Glyph = "", Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(hex)) },
+                Width = 12,
+                Height = 12,
+                CornerRadius = new CornerRadius(6),
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White),
+                BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Black),
+                BorderThickness = new Thickness(1),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase)
+                    ? Visibility.Visible : Visibility.Collapsed,
             };
-            item.Click += (_, _) =>
+            var swatch = new Button
+            {
+                Style = (Style)Application.Current.Resources["InkSwatchButtonStyle"],
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(hex)),
+                Content = check,
+            };
+            ToolTipService.SetToolTip(swatch, name);
+            swatch.Click += (_, _) =>
             {
                 _state.Settings.InkColor = hex;
                 _store.Save(_state);
                 ApplyInkStyleToAll();
             };
-            flyout.Items.Add(item);
+            _inkColorChecks.Add((hex, check));
+            colorRow.Children.Add(swatch);
         }
+        panel.Children.Add(colorRow);
 
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        flyout.Items.Add(new MenuFlyoutItem { Text = "Width", IsEnabled = false });
+        panel.Children.Add(new TextBlock { Text = "Width", Style = caption, Opacity = 0.7 });
+
+        var widthRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         foreach (var (name, width) in InkWidths)
         {
-            var item = new ToggleMenuFlyoutItem
+            // Show the actual stroke thickness — reads faster than a label.
+            var preview = new Border
             {
-                Text = name,
-                IsChecked = Math.Abs(_state.Settings.InkWidth - width) < 0.01,
+                Width = 30,
+                Height = width * 2,
+                CornerRadius = new CornerRadius(width),
+                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorPrimaryBrush"],
+                VerticalAlignment = VerticalAlignment.Center,
             };
-            item.Click += (_, _) =>
+            var check = new Border
+            {
+                Height = 2,
+                Margin = new Thickness(0, 0, 0, 2),
+                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"],
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Visibility = Math.Abs(_state.Settings.InkWidth - width) < 0.01
+                    ? Visibility.Visible : Visibility.Collapsed,
+            };
+            var cell = new Grid();
+            cell.Children.Add(preview);
+            cell.Children.Add(check);
+
+            var button = new Button
+            {
+                Style = (Style)Application.Current.Resources["InkWidthButtonStyle"],
+                Content = cell,
+            };
+            ToolTipService.SetToolTip(button, name);
+            button.Click += (_, _) =>
             {
                 _state.Settings.InkWidth = width;
                 _store.Save(_state);
                 ApplyInkStyleToAll();
             };
-            flyout.Items.Add(item);
+            _inkWidthChecks.Add((width, check));
+            widthRow.Children.Add(button);
+        }
+        panel.Children.Add(widthRow);
+
+        panel.Children.Add(new Border
+        {
+            Height = 1,
+            Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+        });
+
+        var stop = new Button
+        {
+            Content = "Stop drawing",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        ToolTipService.SetToolTip(stop, "Ctrl+E");
+        stop.Click += (_, _) =>
+        {
+            SetInkMode(false);
+            _inkFlyout?.Hide();
+        };
+        panel.Children.Add(stop);
+
+        return new Flyout
+        {
+            Content = panel,
+            Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Bottom,
+        };
+    }
+
+    /// <summary>Opens the pen panel anchored under the pen button.</summary>
+    private void ShowInkOptions()
+    {
+        _inkFlyout ??= BuildInkFlyout();
+        _inkFlyout.ShowAt(InkButton);
+    }
+
+    private bool IsInkFlyoutOpen => _inkFlyout?.IsOpen == true;
+
+    /// <summary>
+    /// Moves the check marks to match the current settings. Deliberately NOT a
+    /// rebuild: replacing the visual tree of an open flyout closes it.
+    /// </summary>
+    private void RefreshInkFlyoutChecks()
+    {
+        foreach (var (hex, check) in _inkColorChecks)
+        {
+            check.Visibility = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase)
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
+        foreach (var (width, check) in _inkWidthChecks)
+        {
+            check.Visibility = Math.Abs(_state.Settings.InkWidth - width) < 0.01
+                ? Visibility.Visible : Visibility.Collapsed;
         }
     }
 
@@ -592,7 +708,7 @@ public sealed partial class MainWindow : Window
         {
             view.Viewer.SetInkStyle(_state.Settings.InkColor, _state.Settings.InkWidth);
         }
-        BuildInkOptionsFlyout(); // refresh checkmarks
+        RefreshInkFlyoutChecks();
     }
 
     private static Color HexToColor(string hex)
@@ -633,13 +749,27 @@ public sealed partial class MainWindow : Window
     private void ZoomInButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomIn();
     private void ZoomOutButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomOut();
     private void RotateButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.RotateClockwise();
+    private void RotateLeftButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.RotateCounterClockwise();
     private void FitWidthButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitWidth);
     private void FitPageButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitPage);
     private void SaveButton_Click(object sender, RoutedEventArgs e) => _ = SaveActiveAsync();
     private void SaveAsButton_Click(object sender, RoutedEventArgs e) => _ = SaveAsActiveAsync();
     private void PropertiesButton_Click(object sender, RoutedEventArgs e) => _ = ShowPropertiesAsync();
     private void UpdatesButton_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
-    private void InkButton_Click(object sender, RoutedEventArgs e) => SetInkMode(InkButton.IsChecked == true);
+    /// <summary>
+    /// The pen button turns drawing ON and shows the options; it never turns it
+    /// off, so clicking it again just brings the panel back. Stop drawing via
+    /// Esc, Ctrl+E, or the panel's own button.
+    ///
+    /// (A ToggleButton flips IsChecked before Click fires, so a click while ink
+    /// is already on would momentarily uncheck it — SetInkMode(true) puts it
+    /// back within the same synchronous handler, so no wrong frame is drawn.)
+    /// </summary>
+    private void InkButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetInkMode(true);
+        ShowInkOptions();
+    }
     private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
     private void PresentMenuItem_Click(object sender, RoutedEventArgs e) => TogglePresentation();
     private void UndoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.UndoAsync();
@@ -709,10 +839,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>Keeps the header toggles and the zoom-pill menu items in step.</summary>
     private void UpdateFitToggles()
     {
-        FitWidthItem.IsChecked = _activeViewer?.FitMode == FitMode.FitWidth;
-        FitPageItem.IsChecked = _activeViewer?.FitMode == FitMode.FitPage;
+        bool fitWidth = _activeViewer?.FitMode == FitMode.FitWidth;
+        bool fitPage = _activeViewer?.FitMode == FitMode.FitPage;
+        FitWidthButton.IsChecked = fitWidth;
+        FitPageButton.IsChecked = fitPage;
+        FitWidthItem.IsChecked = fitWidth;   // ToggleMenuFlyoutItem.IsChecked is bool,
+        FitPageItem.IsChecked = fitPage;     // ToggleButton.IsChecked is bool? — assign separately
     }
 
     private void PageBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -1377,6 +1512,8 @@ public sealed partial class MainWindow : Window
         // Moved off the old CommandBar buttons when the header was slimmed down.
         AddAccelerator(VirtualKey.F9, VirtualKeyModifiers.None, () => SidebarButton_Click(this, null!));
         AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control, () => _activeViewer?.RotateClockwise());
+        AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
+            () => _activeViewer?.RotateCounterClockwise());
         AddAccelerator(VirtualKey.B, VirtualKeyModifiers.Control, ToggleBookmark);
         AddAccelerator(VirtualKey.Z, VirtualKeyModifiers.Control, () => _ = CurrentView?.UndoAsync());
         AddAccelerator(VirtualKey.Y, VirtualKeyModifiers.Control, () => _ = CurrentView?.RedoAsync());
@@ -1389,6 +1526,7 @@ public sealed partial class MainWindow : Window
         AddAccelerator((VirtualKey)0xBF, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
             () => _ = ShowShortcutsAsync(), requiresDocument: false);
         AddAccelerator(VirtualKey.F5, VirtualKeyModifiers.None, TogglePresentation);
+        // Escape peels off one layer at a time, outermost first.
         AddAccelerator(VirtualKey.Escape, VirtualKeyModifiers.None, () =>
         {
             if (Presentation.IsActive)
@@ -1399,9 +1537,17 @@ public sealed partial class MainWindow : Window
             {
                 Palette.Hide();
             }
-            else
+            else if (IsInkFlyoutOpen)
+            {
+                _inkFlyout?.Hide(); // close the panel but keep drawing
+            }
+            else if (FindBar.Visibility == Visibility.Visible)
             {
                 HideFindBar();
+            }
+            else if (_activeViewer?.IsInkMode == true)
+            {
+                SetInkMode(false); // finally, leave drawing mode
             }
         }, requiresDocument: false);
 

@@ -54,7 +54,14 @@
             Height="{StaticResource HeaderHeight}"
             Padding="8,0"
             ColumnSpacing="2">
+            <!-- Left group = view state (sidebar, page, fit, rotate);
+                 right group = actions (find, pen, night, menu). -->
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
@@ -95,9 +102,57 @@
                     Opacity="0.7" />
             </StackPanel>
 
+            <Border Grid.Column="2" Style="{StaticResource HeaderSeparatorStyle}" Margin="8,0,4,0" />
+
+            <ToggleButton
+                x:Name="FitWidthButton"
+                Grid.Column="3"
+                Style="{StaticResource IconToggleButtonStyle}"
+                Click="FitWidthButton_Click"
+                IsEnabled="False"
+                ToolTipService.ToolTip="Fit width (Ctrl+2)">
+                <FontIcon Glyph="&#xE9A6;" FontSize="{StaticResource IconGlyphSize}" />
+            </ToggleButton>
+            <ToggleButton
+                x:Name="FitPageButton"
+                Grid.Column="4"
+                Style="{StaticResource IconToggleButtonStyle}"
+                Click="FitPageButton_Click"
+                IsEnabled="False"
+                ToolTipService.ToolTip="Fit page (Ctrl+0)">
+                <FontIcon Glyph="&#xE9A6;" FontSize="{StaticResource IconGlyphSize}" RenderTransformOrigin="0.5,0.5">
+                    <FontIcon.RenderTransform>
+                        <RotateTransform Angle="90" />
+                    </FontIcon.RenderTransform>
+                </FontIcon>
+            </ToggleButton>
+            <Button
+                x:Name="RotateLeftButton"
+                Grid.Column="5"
+                Style="{StaticResource IconButtonStyle}"
+                Click="RotateLeftButton_Click"
+                IsEnabled="False"
+                ToolTipService.ToolTip="Rotate left (Ctrl+Shift+R)">
+                <!-- Mirrored rotate-right glyph, so the pair always matches. -->
+                <FontIcon Glyph="&#xE7AD;" FontSize="{StaticResource IconGlyphSize}" RenderTransformOrigin="0.5,0.5">
+                    <FontIcon.RenderTransform>
+                        <ScaleTransform ScaleX="-1" />
+                    </FontIcon.RenderTransform>
+                </FontIcon>
+            </Button>
+            <Button
+                x:Name="RotateRightButton"
+                Grid.Column="6"
+                Style="{StaticResource IconButtonStyle}"
+                Click="RotateButton_Click"
+                IsEnabled="False"
+                ToolTipService.ToolTip="Rotate right (Ctrl+R)">
+                <FontIcon Glyph="&#xE7AD;" FontSize="{StaticResource IconGlyphSize}" />
+            </Button>
+
             <Button
                 x:Name="FindButton"
-                Grid.Column="3"
+                Grid.Column="8"
                 Style="{StaticResource IconButtonStyle}"
                 Click="FindButton_Click"
                 IsEnabled="False"
@@ -106,7 +161,7 @@
             </Button>
             <ToggleButton
                 x:Name="InkButton"
-                Grid.Column="4"
+                Grid.Column="9"
                 Style="{StaticResource IconToggleButtonStyle}"
                 Click="InkButton_Click"
                 IsEnabled="False"
@@ -115,7 +170,7 @@
             </ToggleButton>
             <ToggleButton
                 x:Name="NightButton"
-                Grid.Column="5"
+                Grid.Column="10"
                 Style="{StaticResource IconToggleButtonStyle}"
                 Click="NightButton_Click"
                 IsEnabled="False"
@@ -124,7 +179,7 @@
             </ToggleButton>
             <Button
                 x:Name="MenuButton"
-                Grid.Column="6"
+                Grid.Column="11"
                 Style="{StaticResource IconButtonStyle}"
                 ToolTipService.ToolTip="Menu">
                 <FontIcon Glyph="&#xE700;" FontSize="{StaticResource IconGlyphSize}" />
@@ -163,16 +218,6 @@
                             </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutSeparator />
-                        <MenuFlyoutItem x:Name="RotateMenuItem" Text="Rotate" Click="RotateButton_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="Ctrl+R">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE7AD;" />
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutSubItem x:Name="InkOptionsMenuItem" Text="Pen color and width" IsEnabled="False">
-                            <MenuFlyoutSubItem.Icon>
-                                <FontIcon Glyph="&#xE790;" />
-                            </MenuFlyoutSubItem.Icon>
-                        </MenuFlyoutSubItem>
                         <MenuFlyoutItem x:Name="PresentMenuItem" Text="Presentation" Click="PresentMenuItem_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="F5">
                             <MenuFlyoutItem.Icon>
                                 <FontIcon Glyph="&#xE7F4;" />
