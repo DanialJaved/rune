@@ -931,7 +931,8 @@ public sealed partial class DocumentView : UserControl
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = XamlRoot,
         };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(box.Text))
+        if (await Rune.Services.DialogHost.ShowAsync(dialog) == ContentDialogResult.Primary &&
+            !string.IsNullOrWhiteSpace(box.Text))
         {
             item.Name = box.Text.Trim();
             BookmarksChanged?.Invoke(this, EventArgs.Empty);

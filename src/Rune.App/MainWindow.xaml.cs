@@ -61,22 +61,46 @@ public sealed partial class MainWindow : Window
 
     private async void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
-        if (_closeApproved)
+        try
         {
-            return;
+            if (_closeApproved || AllDocumentViews().All(v => !v.IsDirty))
+            {
+                return;
+            }
+
+            args.Cancel = true; // must be set before any await
+            if (await EnsureSafeToCloseAsync())
+            {
+                _closeApproved = true;
+                Close();
+            }
         }
+        catch (Exception ex)
+        {
+            // async void: an escape here would kill the app mid-close.
+            ErrorLog.Default.Write("AppWindow_Closing", ex);
+            ShowError($"Couldn't close cleanly: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Prompts for unsaved documents and saves them if asked. Returns false when
+    /// the user cancelled or a save failed — i.e. it is NOT safe to close.
+    /// Shared by window close and the self-update path (which also ends in Close).
+    /// </summary>
+    private async Task<bool> EnsureSafeToCloseAsync()
+    {
         var dirty = AllDocumentViews().Where(v => v.IsDirty).ToList();
         if (dirty.Count == 0)
         {
-            return;
+            return true;
         }
 
-        args.Cancel = true; // must be set before any await
         var choice = await PromptSaveChangesAsync(
             dirty.Count == 1 ? dirty[0].DisplayName : $"{dirty.Count} documents");
         if (choice is null)
         {
-            return;
+            return false; // cancelled
         }
         if (choice == true)
         {
@@ -89,12 +113,11 @@ public sealed partial class MainWindow : Window
                 catch (Exception ex)
                 {
                     ShowError($"Save failed: {ex.Message}");
-                    return;
+                    return false;
                 }
             }
         }
-        _closeApproved = true;
-        Close();
+        return true;
     }
 
     private void ApplyTheme(string theme)
@@ -127,8 +150,18 @@ public sealed partial class MainWindow : Window
             return;
         }
         _sessionRestored = true;
-        await RestoreSessionAsync();
-        await CheckForUpdatesAsync(userInitiated: false);
+        try
+        {
+            await RestoreSessionAsync();
+            await CheckForUpdatesAsync(userInitiated: false);
+        }
+        catch (Exception ex)
+        {
+            // async void: this is the app's most dangerous one — an escape here
+            // kills the process during startup.
+            ErrorLog.Default.Write("FirstActivated", ex);
+            ShowError($"Startup problem: {ex.Message}");
+        }
     }
 
     private async Task RestoreSessionAsync()
@@ -367,7 +400,7 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = Content.XamlRoot,
         };
-        return await dialog.ShowAsync() switch
+        return await ShowDialogAsync(dialog) switch
         {
             ContentDialogResult.Primary => true,
             ContentDialogResult.Secondary => false,
@@ -709,7 +742,7 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Close,
             XamlRoot = Content.XamlRoot,
         };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary)
         {
             await Launcher.LaunchUriAsync(parsed);
         }
@@ -754,7 +787,7 @@ public sealed partial class MainWindow : Window
             XamlRoot = Content.XamlRoot,
         };
 
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(box.Text))
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(box.Text))
         {
             view.Viewer.AddNote(at.PageIndex, at.X, at.Y, box.Text.Trim());
         }
@@ -875,13 +908,12 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(row);
         }
 
-        await new ContentDialog
+        await ShowDialogAsync(new ContentDialog
         {
             Title = view.DisplayName,
             Content = new ScrollViewer { Content = panel, MaxHeight = 420 },
             CloseButtonText = "Close",
-            XamlRoot = Content.XamlRoot,
-        }.ShowAsync();
+        });
     }
 
     private async void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -898,8 +930,34 @@ public sealed partial class MainWindow : Window
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
         var updateCheck = new CheckBox { Content = "Check for updates automatically", IsChecked = _state.Settings.AutoCheckUpdates };
 
+        // Applies the dialog's controls to settings. Shared by Save and by the
+        // "check now" button, which treats itself as an implicit Save so the
+        // user's in-flight edits aren't discarded when the dialog closes.
+        void ApplySettings()
+        {
+            _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
+            _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
+            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
+            _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
+            _state.Settings.VimKeys = vimCheck.IsChecked == true;
+            _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
+            ApplyTheme(_state.Settings.Theme);
+            _store.Save(_state);
+            PopulateRecents(); // reflect the thumbnails toggle immediately
+        }
+
+        // This button lives INSIDE the Settings dialog, so running the check
+        // here would try to open the update dialog while Settings is still up —
+        // WinUI allows only one ContentDialog at a time, and the resulting throw
+        // used to kill the app. Close Settings first, run the check after.
+        bool checkAfterClosing = false;
+        ContentDialog? dialog = null;
         var checkNowButton = new Button { Content = "Check for updates now" };
-        checkNowButton.Click += async (_, _) => await CheckForUpdatesAsync(userInitiated: true);
+        checkNowButton.Click += (_, _) =>
+        {
+            checkAfterClosing = true;
+            dialog?.Hide();
+        };
 
         var panel = new StackPanel { Spacing = 12 };
         panel.Children.Add(new TextBlock { Text = "Theme", Opacity = 0.7 });
@@ -917,27 +975,22 @@ public sealed partial class MainWindow : Window
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
         });
 
-        var dialog = new ContentDialog
+        dialog = new ContentDialog
         {
             Title = "Settings",
             Content = panel,
             PrimaryButtonText = "Save",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = Content.XamlRoot,
         };
 
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary || checkAfterClosing)
         {
-            _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
-            _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
-            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
-            _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
-            _state.Settings.VimKeys = vimCheck.IsChecked == true;
-            _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
-            ApplyTheme(_state.Settings.Theme);
-            _store.Save(_state);
-            PopulateRecents(); // reflect the thumbnails toggle immediately
+            ApplySettings();
+        }
+        if (checkAfterClosing)
+        {
+            await CheckForUpdatesAsync(userInitiated: true); // Settings is closed by now
         }
     }
 
@@ -997,22 +1050,29 @@ public sealed partial class MainWindow : Window
             weight[target] += group.Shortcuts.Length + 2;
         }
 
-        await new ContentDialog
+        await ShowDialogAsync(new ContentDialog
         {
             Title = "Keyboard shortcuts",
             Content = new ScrollViewer { Content = grid, MaxHeight = 540 },
             CloseButtonText = "Close",
-            XamlRoot = Content.XamlRoot,
-        }.ShowAsync();
+        });
     }
 
     // ---------------------------------------------------------------- updates
 
     private readonly UpdateService _updater = new();
 
-    /// <summary>Runs on launch (rate-limited) and from the Settings/palette "check now".</summary>
+    /// <summary>True while a check is running, so two can never overlap.</summary>
+    private bool _updateCheckRunning;
+
+    /// <summary>Runs on launch (rate-limited) and from the Settings/menu/palette "check now".</summary>
     private async Task CheckForUpdatesAsync(bool userInitiated)
     {
+        if (_updateCheckRunning)
+        {
+            return; // a check is already in flight — its dialog is the one to show
+        }
+
         if (!userInitiated)
         {
             if (!_state.Settings.AutoCheckUpdates ||
@@ -1020,28 +1080,49 @@ public sealed partial class MainWindow : Window
             {
                 return;
             }
+            // Don't burn the 24h rate limit on a check whose result we'd have to
+            // suppress anyway because the user is busy in another dialog.
+            if (DialogHost.IsOpen)
+            {
+                return;
+            }
         }
 
-        _state.Settings.LastUpdateCheckUtc = DateTime.UtcNow;
-        _store.Save(_state);
-
-        var update = await _updater.CheckAsync();
-        if (update is null)
+        _updateCheckRunning = true;
+        try
         {
+            _state.Settings.LastUpdateCheckUtc = DateTime.UtcNow;
+            _store.Save(_state);
+
+            var update = await _updater.CheckAsync();
+            if (update is null)
+            {
+                if (userInitiated)
+                {
+                    await ShowDialogAsync(new ContentDialog
+                    {
+                        Title = "You're up to date",
+                        Content = $"Rune {UpdateService.CurrentVersion.ToString(3)} is the latest version.",
+                        CloseButtonText = "OK",
+                    });
+                }
+                return;
+            }
+
+            await ShowUpdateDialogAsync(update);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Default.Write("CheckForUpdates", ex);
             if (userInitiated)
             {
-                await new ContentDialog
-                {
-                    Title = "You're up to date",
-                    Content = $"Rune {UpdateService.CurrentVersion.ToString(3)} is the latest version.",
-                    CloseButtonText = "OK",
-                    XamlRoot = Content.XamlRoot,
-                }.ShowAsync();
+                ShowError($"Couldn't check for updates: {ex.Message}");
             }
-            return;
         }
-
-        await ShowUpdateDialogAsync(update);
+        finally
+        {
+            _updateCheckRunning = false;
+        }
     }
 
     private async Task ShowUpdateDialogAsync(UpdateInfo update)
@@ -1060,17 +1141,25 @@ public sealed partial class MainWindow : Window
             PrimaryButtonText = portable ? "Download and install" : "Open releases page",
             CloseButtonText = "Later",
             DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = Content.XamlRoot,
         };
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary)
         {
             return;
         }
 
         if (portable)
         {
-            bool ok = await _updater.DownloadAndApplyAsync(update);
+            // Settle unsaved work BEFORE downloading: installing ends with
+            // Close(), and going straight there would discard annotations
+            // silently. Asking first also means cancelling leaves nothing
+            // downloaded and no updater process spawned.
+            if (!await EnsureSafeToCloseAsync())
+            {
+                return;
+            }
+
+            var (ok, error) = await _updater.DownloadAndApplyAsync(update);
             if (ok)
             {
                 _closeApproved = true;
@@ -1078,7 +1167,8 @@ public sealed partial class MainWindow : Window
             }
             else
             {
-                await OpenReleasesPageFallbackAsync("Rune couldn't update in place (its folder may be read-only). Opening the releases page instead.");
+                await OpenReleasesPageFallbackAsync(
+                    $"Rune couldn't install the update automatically ({error ?? "unknown error"}). Opening the releases page instead.");
             }
         }
         else
@@ -1089,15 +1179,17 @@ public sealed partial class MainWindow : Window
 
     private async Task OpenReleasesPageFallbackAsync(string message)
     {
-        await new ContentDialog
+        var result = await ShowDialogAsync(new ContentDialog
         {
             Title = "Manual update needed",
             Content = message,
             PrimaryButtonText = "Open releases page",
             CloseButtonText = "Cancel",
-            XamlRoot = Content.XamlRoot,
-        }.ShowAsync();
-        await Windows.System.Launcher.LaunchUriAsync(new Uri(_updater.ReleasesPageUrl));
+        });
+        if (result == ContentDialogResult.Primary)
+        {
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(_updater.ReleasesPageUrl));
+        }
     }
 
     // ---------------------------------------------------------------- command palette
@@ -1694,5 +1786,20 @@ public sealed partial class MainWindow : Window
     {
         ErrorBar.Message = message;
         ErrorBar.IsOpen = true;
+    }
+
+    /// <summary>Surfaces a background/unhandled failure (called by App's safety net).</summary>
+    internal void ReportBackgroundError(string message) =>
+        ShowError($"Something went wrong: {message}");
+
+    /// <summary>
+    /// Shows a dialog through <see cref="DialogHost"/> so two can never overlap,
+    /// filling in XamlRoot centrally. Every ContentDialog in this window goes
+    /// through here.
+    /// </summary>
+    private Task<ContentDialogResult> ShowDialogAsync(ContentDialog dialog)
+    {
+        dialog.XamlRoot ??= Content.XamlRoot;
+        return DialogHost.ShowAsync(dialog);
     }
 }
