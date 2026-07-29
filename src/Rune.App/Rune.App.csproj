@@ -10,7 +10,15 @@
     <ApplicationIcon>Assets\rune.ico</ApplicationIcon>
     <Version>0.4.1</Version>
     <Platforms>x64;ARM64</Platforms>
+    <!-- The RID must follow Platform, or a multi-arch Store bundle builds the
+         ARM64 leg with win-x64 and fails (NETSDK1032). -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' And '$(Platform)' == 'ARM64'">win-arm64</RuntimeIdentifier>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <!-- Both must be restored so a multi-arch bundle can resolve either leg. -->
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <!-- mspdbcmf.exe ships with the VS C++ workload, which isn't installed here;
+         symbol packages are optional for Store submission. -->
+    <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
     <UseWinUI>true</UseWinUI>
     <EnableMsixTooling>true</EnableMsixTooling>
     <!-- Default: unpackaged self-contained exe (dev + portable zip).

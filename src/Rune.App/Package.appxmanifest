@@ -5,14 +5,18 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap rescap">
 
+  <!-- Identity is assigned by Partner Center and must match EXACTLY, or the
+       upload is rejected. The Store re-signs the package, so Publisher here is
+       the Store publisher ID, not Rune's self-signed cert (that one is still
+       used for the portable MSIX published on GitHub Releases). -->
   <Identity
-    Name="DanialJaved.Rune"
-    Publisher="CN=Rune"
+    Name="Danimite.RunePDFReader"
+    Publisher="CN=513DE1BC-C862-44F8-AEAD-F60E359F4BBF"
     Version="0.4.1.0" />
 
   <Properties>
-    <DisplayName>Rune</DisplayName>
-    <PublisherDisplayName>Danial Javed</PublisherDisplayName>
+    <DisplayName>Rune PDF Reader</DisplayName>
+    <PublisherDisplayName>Danimite</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
@@ -27,7 +31,7 @@
   <Applications>
     <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
       <uap:VisualElements
-        DisplayName="Rune"
+        DisplayName="Rune PDF Reader"
         Description="A fast, free, modern PDF reader for Windows"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.scale-200.png"

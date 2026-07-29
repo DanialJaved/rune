@@ -120,3 +120,11 @@ The debug build is an unpackaged self-contained exe — just run it.
 ## License
 
 [GPLv3](LICENSE) — free forever, and derivatives stay free. Built on PDFium (BSD-3-Clause/Apache-2.0), Win2D (MIT), the Windows App SDK, and .NET (MIT); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+### A note on the Microsoft Store
+
+Rune is also published on the Microsoft Store, where it is covered by the Store's Standard Application License Terms. Those terms are generally considered incompatible with the GPL, so this deserves an explicit word:
+
+Rune's own source is written entirely by its copyright holder, and its dependencies are permissively licensed (PDFium is BSD-3-Clause/Apache-2.0, Win2D and .NET are MIT) — there is no third-party copyleft code in it. As the sole copyright holder I can distribute my own work under whatever terms I choose, and I choose to make it available both under the GPLv3 here and through the Store for people who want automatic updates and one-click installation.
+
+**This does not change anything about the GPLv3 grant.** The source in this repository is, and will remain, GPLv3: you may use, study, modify and redistribute it under those terms. The Store listing is an additional distribution channel, not a replacement, and every release is always available here as a portable download.
