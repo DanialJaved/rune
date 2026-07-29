@@ -50,6 +50,11 @@ public sealed partial class MainWindow : Window
         // arrow keys in the bubbling phase for their own focus movement).
         ((UIElement)Content).PreviewKeyDown += Content_PreviewKeyDown;
         // The pen panel is built lazily on first use (BuildInkFlyout).
+
+        // Packaged/Store builds don't self-update — the Store does. Hide the
+        // entry point entirely rather than offer a link out to GitHub.
+        UpdatesMenuItem.Visibility = UpdateService.UpdatesSupported
+            ? Visibility.Visible : Visibility.Collapsed;
         PopulateRecents();
 
         Activated += MainWindow_FirstActivated;
@@ -1091,7 +1096,13 @@ public sealed partial class MainWindow : Window
         var sidebarCheck = new CheckBox { Content = "Show the sidebar when a document opens", IsChecked = _state.Settings.SidebarOpenByDefault };
         var thumbsCheck = new CheckBox { Content = "Show recent documents as thumbnails on the start page", IsChecked = _state.Settings.ShowRecentThumbnails };
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
-        var updateCheck = new CheckBox { Content = "Check for updates automatically", IsChecked = _state.Settings.AutoCheckUpdates };
+        var updateCheck = new CheckBox
+        {
+            Content = "Check for updates automatically",
+            IsChecked = _state.Settings.AutoCheckUpdates,
+            // Meaningless in a Store build — the Store updates the app.
+            Visibility = UpdateService.UpdatesSupported ? Visibility.Visible : Visibility.Collapsed,
+        };
 
         // Applies the dialog's controls to settings. Shared by Save and by the
         // "check now" button, which treats itself as an implicit Save so the
@@ -1115,7 +1126,11 @@ public sealed partial class MainWindow : Window
         // used to kill the app. Close Settings first, run the check after.
         bool checkAfterClosing = false;
         ContentDialog? dialog = null;
-        var checkNowButton = new Button { Content = "Check for updates now" };
+        var checkNowButton = new Button
+        {
+            Content = "Check for updates now",
+            Visibility = UpdateService.UpdatesSupported ? Visibility.Visible : Visibility.Collapsed,
+        };
         checkNowButton.Click += (_, _) =>
         {
             checkAfterClosing = true;
@@ -1231,6 +1246,10 @@ public sealed partial class MainWindow : Window
     /// <summary>Runs on launch (rate-limited) and from the Settings/menu/palette "check now".</summary>
     private async Task CheckForUpdatesAsync(bool userInitiated)
     {
+        if (!UpdateService.UpdatesSupported)
+        {
+            return; // packaged/Store build — the Store handles updates
+        }
         if (_updateCheckRunning)
         {
             return; // a check is already in flight — its dialog is the one to show
@@ -1364,8 +1383,11 @@ public sealed partial class MainWindow : Window
             new("Open file…", "Ctrl+O", () => OpenButton_Click(this, null!)),
             new("Keyboard shortcuts", "F1", () => _ = ShowShortcutsAsync()),
             new("Settings", "", () => SettingsButton_Click(this, null!)),
-            new("Check for updates", "", () => _ = CheckForUpdatesAsync(userInitiated: true)),
         };
+        if (UpdateService.UpdatesSupported)
+        {
+            commands.Add(new PaletteCommand("Check for updates", "", () => _ = CheckForUpdatesAsync(userInitiated: true)));
+        }
 
         if (_activeViewer is { } viewer && CurrentView is { IsDocumentLoaded: true, LoadError: null })
         {

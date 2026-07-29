@@ -104,6 +104,17 @@ public sealed class UpdateService
     }
 
     /// <summary>
+    /// Whether Rune should offer updates at all.
+    ///
+    /// False for packaged (MSIX/Store) builds: the Store owns updates there, the
+    /// install directory is read-only, and pointing a Store user at GitHub
+    /// Releases would send them outside the Store for a competing build — which
+    /// Store policy forbids. Gating here also means a Store build makes no
+    /// network requests whatsoever.
+    /// </summary>
+    public static bool UpdatesSupported => IsPortable();
+
+    /// <summary>
     /// Downloads and extracts the update, then launches a detached script that
     /// waits for this process to exit, copies the new files over the app
     /// directory, and relaunches Rune.
