@@ -560,6 +560,7 @@ public sealed partial class MainWindow : Window
     private Flyout? _inkFlyout;
     private readonly List<(string Hex, Border Check)> _inkColorChecks = [];
     private readonly List<(double Width, Border Check)> _inkWidthChecks = [];
+    private readonly List<Border> _inkWidthPreviews = [];
 
     /// <summary>Builds the pen panel once; later calls only move the check marks.</summary>
     private Flyout BuildInkFlyout()
@@ -587,11 +588,21 @@ public sealed partial class MainWindow : Window
                 Visibility = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase)
                     ? Visibility.Visible : Visibility.Collapsed,
             };
+            // The colour lives in the button's CONTENT, not its Background:
+            // Button's hover/pressed visual states override Background, which
+            // made the swatch turn white under the cursor.
+            var dot = new Border
+            {
+                Width = 26,
+                Height = 26,
+                CornerRadius = new CornerRadius(13),
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(hex)),
+                Child = check,
+            };
             var swatch = new Button
             {
                 Style = (Style)Application.Current.Resources["InkSwatchButtonStyle"],
-                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(hex)),
-                Content = check,
+                Content = dot,
             };
             ToolTipService.SetToolTip(swatch, name);
             swatch.Click += (_, _) =>
@@ -610,25 +621,36 @@ public sealed partial class MainWindow : Window
         var widthRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         foreach (var (name, width) in InkWidths)
         {
-            // Show the actual stroke thickness — reads faster than a label.
+            // Show the actual stroke thickness, in the actual pen colour.
+            // (Don't reach into Application.Current.Resources for a theme brush
+            // here: that returns the dark-theme value regardless of the active
+            // theme, which rendered these white-on-white in light mode.)
             var preview = new Border
             {
                 Width = 30,
                 Height = width * 2,
                 CornerRadius = new CornerRadius(width),
-                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorPrimaryBrush"],
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(_state.Settings.InkColor)),
                 VerticalAlignment = VerticalAlignment.Center,
             };
+            _inkWidthPreviews.Add(preview);
             var check = new Border
             {
                 Height = 2,
-                Margin = new Thickness(0, 0, 0, 2),
-                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentFillColorDefaultBrush"],
+                Width = 18,
+                CornerRadius = new CornerRadius(1),
+                Margin = new Thickness(0, 0, 0, 3),
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                    new Windows.UI.ViewManagement.UISettings().GetColorValue(
+                        Windows.UI.ViewManagement.UIColorType.Accent)),
+                HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 Visibility = Math.Abs(_state.Settings.InkWidth - width) < 0.01
                     ? Visibility.Visible : Visibility.Collapsed,
             };
-            var cell = new Grid();
+            // Fixed height: without it the Grid shrinks to the preview line, so
+            // the bottom-aligned selection bar would land on top of it.
+            var cell = new Grid { Height = 30 };
             cell.Children.Add(preview);
             cell.Children.Add(check);
 
@@ -699,6 +721,12 @@ public sealed partial class MainWindow : Window
         {
             check.Visibility = Math.Abs(_state.Settings.InkWidth - width) < 0.01
                 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        // Width previews follow the chosen colour.
+        var inkBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(_state.Settings.InkColor));
+        foreach (var preview in _inkWidthPreviews)
+        {
+            preview.Background = inkBrush;
         }
     }
 
