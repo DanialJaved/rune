@@ -9,7 +9,8 @@ New-Item -ItemType Directory -Force $corpusDir | Out-Null
 function New-SimplePdf {
     param(
         [string]$Path,
-        [string[][]]$Pages   # one string[] of text lines per page
+        [string[][]]$Pages,        # one string[] of text lines per page
+        [string]$MediaBox = '0 0 612 792'   # default US Letter portrait
     )
 
     $objects = New-Object System.Collections.Generic.List[string]
@@ -24,13 +25,17 @@ function New-SimplePdf {
 
     for ($i = 0; $i -lt $pageCount; $i++) {
         $contentsRef = 5 + 2 * $i
-        $objects.Add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents $contentsRef 0 R >>")
+        $objects.Add("<< /Type /Page /Parent 2 0 R /MediaBox [$MediaBox] /Resources << /Font << /F1 3 0 R >> >> /Contents $contentsRef 0 R >>")
 
         $lines = $Pages[$i] | ForEach-Object {
             $escaped = $_ -replace '([\\()])', '\$1'
             "($escaped) Tj T*"
         }
-        $stream = "BT /F1 24 Tf 72 720 Td 18 TL " + ($lines -join ' ') + " ET"
+        # Start one line below the top of THIS page — a hardcoded y would fall
+        # off the page on anything shorter than US Letter (e.g. 540pt slides).
+        $pageTop = [double](($MediaBox -split '\s+')[3])
+        $textY = [math]::Round($pageTop - 72)
+        $stream = "BT /F1 24 Tf 72 $textY Td 18 TL " + ($lines -join ' ') + " ET"
         $objects.Add("<< /Length $($stream.Length) >>`nstream`n$stream`nendstream")
     }
 
@@ -65,6 +70,14 @@ function New-SimplePdf {
 New-SimplePdf -Path (Join-Path $corpusDir 'hello.pdf') -Pages @(
     , @('Hello from Rune!')
     , @('Page two.')
+)
+
+# A 4:3 landscape deck (720x540 pt) — the shape a PowerPoint export takes.
+# Regression fixture for thumbnails being letterboxed in portrait boxes.
+New-SimplePdf -Path (Join-Path $corpusDir 'slides.pdf') -MediaBox '0 0 720 540' -Pages @(
+    , @('Slide one')
+    , @('Slide two')
+    , @('Slide three')
 )
 
 # 1000-page "book" for performance testing (open time, mid-document render,

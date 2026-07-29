@@ -126,6 +126,9 @@ public sealed partial class PdfViewer : UserControl
 
     public event EventHandler<int>? CurrentPageChanged;
     public event EventHandler<double>? ZoomChanged;
+
+    /// <summary>Raised after a rotation, with the new quarter-turn count (0–3).</summary>
+    public event EventHandler<int>? RotationChanged;
     public event EventHandler? HistoryChanged;
 
     /// <summary>Raised when the user clicks an external (URI) link. The shell decides whether to open it.</summary>
@@ -343,7 +346,7 @@ public sealed partial class PdfViewer : UserControl
             _pendingFit = false;
             return; // replayed on the first real SizeChanged
         }
-        _rotation = ((rotation % 4) + 4) % 4;
+        _rotation = ViewRotationMath.Normalize(rotation);
         _fitMode = FitMode.None;
         SetZoom(zoom <= 0 ? 1.0 : zoom);
         if (_layout is not null)
@@ -439,9 +442,24 @@ public sealed partial class PdfViewer : UserControl
         SetZoom(zoom, viewportAnchor: new Point(0, 0), fitMode: _fitMode);
     }
 
-    public void RotateClockwise()
+    public void RotateClockwise() => Rotate(+1);
+
+    public void RotateCounterClockwise() => Rotate(-1);
+
+    /// <summary>
+    /// Rotates the view by whole quarter turns (negative = counter-clockwise).
+    /// Everything derived from page geometry is dropped and rebuilt — that
+    /// invalidation is load-bearing (it is the fix for the v0.2 "rotate shows
+    /// blank pages" bug), so keep it together.
+    /// </summary>
+    public void Rotate(int quarterTurns)
     {
-        _rotation = (_rotation + 1) % 4;
+        int next = ViewRotationMath.Normalize(_rotation + quarterTurns);
+        if (next == _rotation)
+        {
+            return;
+        }
+        _rotation = next;
 
         // Selection, search highlights, and link rects are all in unrotated
         // text coordinates — stale after rotation. Drop them.
@@ -472,6 +490,7 @@ public sealed partial class PdfViewer : UserControl
         }
         Canvas.Invalidate();
         UpdateDesiredTiles();
+        RotationChanged?.Invoke(this, _rotation);
     }
 
     // ---------------------------------------------------------------- navigation

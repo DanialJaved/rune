@@ -45,6 +45,7 @@ public sealed partial class DocumentView : UserControl
         BookmarkList.ItemsSource = _bookmarks;
 
         ViewerControl.CurrentPageChanged += (_, page) => SyncThumbnailSelection(page);
+        ViewerControl.RotationChanged += (_, rotation) => OnViewRotated(rotation);
         ViewerControl.AnnotationEdited += (_, e) => PushEdit(new DocumentEdit
         {
             Label = e.Label,
@@ -93,7 +94,7 @@ public sealed partial class DocumentView : UserControl
             IsPaneOpen = true;
         }
 
-        PopulateThumbnails(_document.PageCount);
+        PopulateThumbnails(_document);
         _ = PopulateOutlineAsync(_document);
         Loaded2?.Invoke(this, EventArgs.Empty);
     }
@@ -155,45 +156,87 @@ public sealed partial class DocumentView : UserControl
             _document = await Task.Run(() => PdfDocument.Open(FilePath));
             Viewer.SetDocument(_document);
             Viewer.RestoreView(zoom, rotation, fraction);
-            PopulateThumbnails(_document.PageCount);
+            PopulateThumbnails(_document);
             _ = PopulateOutlineAsync(_document);
         }
     }
 
     // ---------------------------------------------------------------- thumbnails
 
-    private void PopulateThumbnails(int pageCount)
+    /// <summary>
+    /// Rebuilds the strip, giving each item its page's dimensions so every box
+    /// is correctly shaped before any bitmap arrives. <c>GetPageSize</c> is a
+    /// pure array read (no PDFium call), so this is safe on the UI thread — but
+    /// it must run *after* the viewer has re-read page metrics following a page
+    /// mutation, or it will index past the end.
+    /// </summary>
+    private void PopulateThumbnails(PdfDocument document)
     {
+        int rotation = Viewer.ViewRotation;
         _thumbnails.Clear();
-        for (int i = 0; i < pageCount; i++)
+        for (int i = 0; i < document.PageCount; i++)
         {
-            _thumbnails.Add(new ThumbnailItem(i));
+            var (ptWidth, ptHeight) = document.GetPageSize(i);
+            _thumbnails.Add(new ThumbnailItem(i, ptWidth, ptHeight, rotation));
+        }
+    }
+
+    /// <summary>Re-shapes and re-renders thumbnails after the view is rotated.</summary>
+    private void OnViewRotated(int rotation)
+    {
+        foreach (var item in _thumbnails)
+        {
+            item.SetRotation(rotation); // resizes the box and clears the stale render
+        }
+        // Only re-render what's on screen; the rest come back through
+        // virtualization as the user scrolls to them.
+        foreach (var item in _thumbnails)
+        {
+            if (ThumbList.ContainerFromItem(item) is not null)
+            {
+                _ = RenderThumbnailAsync(item);
+            }
         }
     }
 
     // Lazily render a thumbnail as its container is realized (list virtualization).
-    // Runs on the render thread at Thumbnail priority: visible tiles always win,
-    // so scrolling the sidebar can't make the document stutter.
-    private async void ThumbList_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    private void ThumbList_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
     {
         if (args.InRecycleQueue || args.Item is not ThumbnailItem item || item.IsRendered || _document is null)
         {
             return;
         }
+        _ = RenderThumbnailAsync(item);
+    }
 
-        var document = _document;
+    /// <summary>
+    /// Renders one thumbnail on the render thread at Thumbnail priority —
+    /// visible tiles always win, so scrolling the sidebar can't make the
+    /// document stutter.
+    /// </summary>
+    private async Task RenderThumbnailAsync(ThumbnailItem item)
+    {
+        if (_document is not { } document)
+        {
+            return;
+        }
+
         int pageIndex = item.PageIndex;
+        int rotation = Viewer.ViewRotation;
         try
         {
             var bmp = await Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Thumbnail, () =>
             {
                 // Render at 1.5x the 168-DIP display width so thumbnails stay
-                // crisp on the typical 125-150% display scale.
-                var (ptWidth, _) = document.GetPageSize(pageIndex);
-                float scale = 252f / Math.Max(1f, ptWidth);
-                return document.RenderPage(pageIndex, scale);
+                // crisp on the typical 125-150% display scale. Scale off the
+                // rotated width so a rotated page still fills the box.
+                var (ptWidth, ptHeight) = document.GetPageSize(pageIndex);
+                float acrossPt = ViewRotationMath.SwapsAxes(rotation) ? ptHeight : ptWidth;
+                float scale = 252f / Math.Max(1f, acrossPt);
+                return document.RenderPage(pageIndex, scale, rotation);
             });
-            if (_document == document)
+            // Drop the result if the document or rotation moved on while we waited.
+            if (_document == document && Viewer.ViewRotation == rotation)
             {
                 item.Image = ToBitmap(bmp);
             }
@@ -341,7 +384,7 @@ public sealed partial class DocumentView : UserControl
         }
 
         Viewer.HandleDocumentMutated();
-        PopulateThumbnails(document.PageCount);
+        PopulateThumbnails(document);
         _ = PopulateOutlineAsync(document);
 
         if (remapBookmark is not null && _bookmarks.Count > 0)
@@ -588,7 +631,7 @@ public sealed partial class DocumentView : UserControl
             if (edit.IsPageMutation)
             {
                 Viewer.HandleDocumentMutated();
-                PopulateThumbnails(document.PageCount);
+                PopulateThumbnails(document);
                 _ = PopulateOutlineAsync(document);
                 if (bookmarks is not null)
                 {

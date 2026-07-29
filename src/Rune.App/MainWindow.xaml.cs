@@ -1325,6 +1325,10 @@ public sealed partial class MainWindow : Window
             stream.Seek(0);
             await bitmap.SetSourceAsync(stream);
         }
+        // The card sizes its page box from the bitmap's pixel dimensions, which
+        // are only known once decoding finishes. SetSourceAsync normally
+        // completes after decode; re-assign on ImageOpened in case it doesn't.
+        bitmap.ImageOpened += (_, _) => card.Thumbnail = bitmap;
         card.Thumbnail = bitmap;
     }
 

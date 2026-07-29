@@ -254,11 +254,18 @@
                                             HorizontalAlignment="Center"
                                             VerticalAlignment="Center"
                                             Visibility="{x:Bind ShowPlaceholder, Mode=OneWay}" />
-                                        <Image
-                                            Source="{x:Bind Thumbnail, Mode=OneWay}"
-                                            Stretch="Uniform"
-                                            Margin="1"
-                                            Visibility="{x:Bind HasThumbnail, Mode=OneWay}" />
+                                        <!-- Bordered box sized to the page's own aspect ratio: a
+                                             white page on a light card has no visible edge without it. -->
+                                        <Border
+                                            Width="{x:Bind ImageWidth, Mode=OneWay}"
+                                            Height="{x:Bind ImageHeight, Mode=OneWay}"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center"
+                                            BorderThickness="1"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            Visibility="{x:Bind HasThumbnail, Mode=OneWay}">
+                                            <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Fill" />
+                                        </Border>
                                     </Grid>
                                     <TextBlock Text="{x:Bind DisplayName}" MaxWidth="168" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
                                     <TextBlock Text="{x:Bind Folder}" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.5" MaxWidth="168" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Margin="0,-4,0,0" />

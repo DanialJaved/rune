@@ -38,13 +38,16 @@
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="controls:ThumbnailItem">
                             <StackPanel HorizontalAlignment="Center" Spacing="4" Padding="0,6">
+                                <!-- Height follows the page's own aspect ratio (see
+                                     ThumbnailItem.BoxHeight), so landscape and 4:3
+                                     slides aren't letterboxed in a portrait box. -->
                                 <Border
                                     BorderThickness="1"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     CornerRadius="4"
-                                    Background="White"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     Width="{StaticResource SidebarThumbWidth}"
-                                    MinHeight="210">
+                                    Height="{x:Bind BoxHeight, Mode=OneWay}">
                                     <Image Source="{x:Bind Image, Mode=OneWay}" Stretch="Uniform" />
                                 </Border>
                                 <TextBlock
