@@ -58,14 +58,15 @@ Press `F1` in the app for the full list. The essentials:
 | Find / next / previous | `Ctrl+F` / `F3` / `Shift+F3` |
 | Command palette / shortcuts | `Ctrl+K` / `F1` |
 | Zoom in / out / 100% / fit page / fit width | `Ctrl++` / `Ctrl+-` / `Ctrl+1` / `Ctrl+0` / `Ctrl+2` |
-| Night mode / sidebar / rotate | `Ctrl+I` / `F9` / `Ctrl+R` |
+| Night mode / sidebar | `Ctrl+I` / `F9` |
+| Rotate right / left | `Ctrl+R` / `Ctrl+Shift+R` |
 | Presentation / bookmark page | `F5` / `Ctrl+B` |
 | Highlight / pen / save / save as | `Ctrl+H` / `Ctrl+E` / `Ctrl+S` / `Ctrl+Shift+S` |
 | Copy / cut / paste (text or pages) | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
 
-Vim-style keys (`j k h l`, `gg`/`G`, `p`/`n`) can be enabled in Settings. Right-click a selection for underline/strikeout, or anywhere to add a note. Pen color and width are in the menu. In the thumbnail sidebar, `Ctrl+C`/`X`/`V` copy/cut/paste **pages**; elsewhere they act on selected text.
+Vim-style keys (`j k h l`, `gg`/`G`, `p`/`n`) can be enabled in Settings. Right-click a selection for underline/strikeout, or anywhere to add a note. Pen colour and width appear when you click the pen. In the thumbnail sidebar, `Ctrl+C`/`X`/`V` copy/cut/paste **pages**; elsewhere they act on selected text.
 
 ## Install
 

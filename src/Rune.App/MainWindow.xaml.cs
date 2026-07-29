@@ -49,7 +49,7 @@ public sealed partial class MainWindow : Window
         // focus sits on the tab strip or a toolbar button (those controls eat
         // arrow keys in the bubbling phase for their own focus movement).
         ((UIElement)Content).PreviewKeyDown += Content_PreviewKeyDown;
-        BuildInkOptionsFlyout();
+        // The pen panel is built lazily on first use (BuildInkFlyout).
         PopulateRecents();
 
         Activated += MainWindow_FirstActivated;
@@ -61,22 +61,46 @@ public sealed partial class MainWindow : Window
 
     private async void AppWindow_Closing(Microsoft.UI.Windowing.AppWindow sender, Microsoft.UI.Windowing.AppWindowClosingEventArgs args)
     {
-        if (_closeApproved)
+        try
         {
-            return;
+            if (_closeApproved || AllDocumentViews().All(v => !v.IsDirty))
+            {
+                return;
+            }
+
+            args.Cancel = true; // must be set before any await
+            if (await EnsureSafeToCloseAsync())
+            {
+                _closeApproved = true;
+                Close();
+            }
         }
+        catch (Exception ex)
+        {
+            // async void: an escape here would kill the app mid-close.
+            ErrorLog.Default.Write("AppWindow_Closing", ex);
+            ShowError($"Couldn't close cleanly: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Prompts for unsaved documents and saves them if asked. Returns false when
+    /// the user cancelled or a save failed — i.e. it is NOT safe to close.
+    /// Shared by window close and the self-update path (which also ends in Close).
+    /// </summary>
+    private async Task<bool> EnsureSafeToCloseAsync()
+    {
         var dirty = AllDocumentViews().Where(v => v.IsDirty).ToList();
         if (dirty.Count == 0)
         {
-            return;
+            return true;
         }
 
-        args.Cancel = true; // must be set before any await
         var choice = await PromptSaveChangesAsync(
             dirty.Count == 1 ? dirty[0].DisplayName : $"{dirty.Count} documents");
         if (choice is null)
         {
-            return;
+            return false; // cancelled
         }
         if (choice == true)
         {
@@ -89,12 +113,11 @@ public sealed partial class MainWindow : Window
                 catch (Exception ex)
                 {
                     ShowError($"Save failed: {ex.Message}");
-                    return;
+                    return false;
                 }
             }
         }
-        _closeApproved = true;
-        Close();
+        return true;
     }
 
     private void ApplyTheme(string theme)
@@ -127,8 +150,18 @@ public sealed partial class MainWindow : Window
             return;
         }
         _sessionRestored = true;
-        await RestoreSessionAsync();
-        await CheckForUpdatesAsync(userInitiated: false);
+        try
+        {
+            await RestoreSessionAsync();
+            await CheckForUpdatesAsync(userInitiated: false);
+        }
+        catch (Exception ex)
+        {
+            // async void: this is the app's most dangerous one — an escape here
+            // kills the process during startup.
+            ErrorLog.Default.Write("FirstActivated", ex);
+            ShowError($"Startup problem: {ex.Message}");
+        }
     }
 
     private async Task RestoreSessionAsync()
@@ -367,7 +400,7 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = Content.XamlRoot,
         };
-        return await dialog.ShowAsync() switch
+        return await ShowDialogAsync(dialog) switch
         {
             ContentDialogResult.Primary => true,
             ContentDialogResult.Secondary => false,
@@ -416,6 +449,7 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.CurrentPageChanged -= Viewer_CurrentPageChanged;
             _activeViewer.ZoomChanged -= Viewer_ZoomChanged;
+            _activeViewer.InkStrokeStarted -= Viewer_InkStrokeStarted;
         }
 
         _activeViewer = CurrentView?.Viewer;
@@ -424,6 +458,7 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.CurrentPageChanged += Viewer_CurrentPageChanged;
             _activeViewer.ZoomChanged += Viewer_ZoomChanged;
+            _activeViewer.InkStrokeStarted += Viewer_InkStrokeStarted;
         }
 
         if (CurrentView is { } view)
@@ -446,6 +481,9 @@ public sealed partial class MainWindow : Window
         _suppressPageBox = false;
     }
 
+    /// <summary>Drawing started — get the pen panel out of the way.</summary>
+    private void Viewer_InkStrokeStarted(object? sender, EventArgs e) => _inkFlyout?.Hide();
+
     private void Viewer_ZoomChanged(object? sender, double zoom)
     {
         ZoomLabel.Text = $"{Math.Round(zoom * 100)}%";
@@ -462,14 +500,15 @@ public sealed partial class MainWindow : Window
                  {
                      SidebarButton, PageBox, FindButton, InkButton, NightButton,
                      ZoomInButton, ZoomOutButton, ZoomLabelButton,
+                     FitWidthButton, FitPageButton, RotateLeftButton, RotateRightButton,
                  })
         {
             control.IsEnabled = ready;
         }
         foreach (var item in new MenuFlyoutItemBase[]
                  {
-                     SaveMenuItem, SaveAsMenuItem, PrintMenuItem, RotateMenuItem,
-                     PropertiesMenuItem, InkOptionsMenuItem, PresentMenuItem,
+                     SaveMenuItem, SaveAsMenuItem, PrintMenuItem,
+                     PropertiesMenuItem, PresentMenuItem,
                  })
         {
             item.IsEnabled = ready;
@@ -499,6 +538,10 @@ public sealed partial class MainWindow : Window
         {
             _activeViewer.IsInkMode = on;
             InkButton.IsChecked = on;
+            if (!on)
+            {
+                _inkFlyout?.Hide(); // covers Ctrl+E while the panel is open
+            }
         }
     }
 
@@ -511,45 +554,179 @@ public sealed partial class MainWindow : Window
         ("Thin", 1.5), ("Medium", 2.5), ("Thick", 4.5),
     ];
 
-    /// <summary>(Re)fills the "Pen color and width" submenu in the main menu.</summary>
-    private void BuildInkOptionsFlyout()
+    // Pen options live on the pen button itself. A plain Flyout, not a
+    // MenuFlyout: a MenuFlyout dismisses the moment any item is clicked, and we
+    // want the panel to stay put while the user tries colours and widths.
+    private Flyout? _inkFlyout;
+    private readonly List<(string Hex, Border Check)> _inkColorChecks = [];
+    private readonly List<(double Width, Border Check)> _inkWidthChecks = [];
+    private readonly List<Border> _inkWidthPreviews = [];
+
+    /// <summary>Builds the pen panel once; later calls only move the check marks.</summary>
+    private Flyout BuildInkFlyout()
     {
-        var flyout = InkOptionsMenuItem;
-        flyout.Items.Clear();
-        flyout.Items.Add(new MenuFlyoutItem { Text = "Pen color", IsEnabled = false });
+        var panel = new StackPanel { Spacing = 10, MinWidth = 190 };
+        var caption = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+
+        panel.Children.Add(new TextBlock { Text = "Pen colour", Style = caption, Opacity = 0.7 });
+
+        var colorRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         foreach (var (name, hex) in InkColors)
         {
-            var item = new ToggleMenuFlyoutItem
+            // A ring around the swatch marks the selection; white/black inner
+            // stroke keeps it visible on both light and dark swatches.
+            var check = new Border
             {
-                Text = name,
-                IsChecked = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase),
-                Icon = new FontIcon { Glyph = "", Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(hex)) },
+                Width = 12,
+                Height = 12,
+                CornerRadius = new CornerRadius(6),
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White),
+                BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Black),
+                BorderThickness = new Thickness(1),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase)
+                    ? Visibility.Visible : Visibility.Collapsed,
             };
-            item.Click += (_, _) =>
+            // The colour lives in the button's CONTENT, not its Background:
+            // Button's hover/pressed visual states override Background, which
+            // made the swatch turn white under the cursor.
+            var dot = new Border
+            {
+                Width = 26,
+                Height = 26,
+                CornerRadius = new CornerRadius(13),
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(hex)),
+                Child = check,
+            };
+            var swatch = new Button
+            {
+                Style = (Style)Application.Current.Resources["InkSwatchButtonStyle"],
+                Content = dot,
+            };
+            ToolTipService.SetToolTip(swatch, name);
+            swatch.Click += (_, _) =>
             {
                 _state.Settings.InkColor = hex;
                 _store.Save(_state);
                 ApplyInkStyleToAll();
             };
-            flyout.Items.Add(item);
+            _inkColorChecks.Add((hex, check));
+            colorRow.Children.Add(swatch);
         }
+        panel.Children.Add(colorRow);
 
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        flyout.Items.Add(new MenuFlyoutItem { Text = "Width", IsEnabled = false });
+        panel.Children.Add(new TextBlock { Text = "Width", Style = caption, Opacity = 0.7 });
+
+        var widthRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         foreach (var (name, width) in InkWidths)
         {
-            var item = new ToggleMenuFlyoutItem
+            // Show the actual stroke thickness, in the actual pen colour.
+            // (Don't reach into Application.Current.Resources for a theme brush
+            // here: that returns the dark-theme value regardless of the active
+            // theme, which rendered these white-on-white in light mode.)
+            var preview = new Border
             {
-                Text = name,
-                IsChecked = Math.Abs(_state.Settings.InkWidth - width) < 0.01,
+                Width = 30,
+                Height = width * 2,
+                CornerRadius = new CornerRadius(width),
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(_state.Settings.InkColor)),
+                VerticalAlignment = VerticalAlignment.Center,
             };
-            item.Click += (_, _) =>
+            _inkWidthPreviews.Add(preview);
+            var check = new Border
+            {
+                Height = 2,
+                Width = 18,
+                CornerRadius = new CornerRadius(1),
+                Margin = new Thickness(0, 0, 0, 3),
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                    new Windows.UI.ViewManagement.UISettings().GetColorValue(
+                        Windows.UI.ViewManagement.UIColorType.Accent)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Visibility = Math.Abs(_state.Settings.InkWidth - width) < 0.01
+                    ? Visibility.Visible : Visibility.Collapsed,
+            };
+            // Fixed height: without it the Grid shrinks to the preview line, so
+            // the bottom-aligned selection bar would land on top of it.
+            var cell = new Grid { Height = 30 };
+            cell.Children.Add(preview);
+            cell.Children.Add(check);
+
+            var button = new Button
+            {
+                Style = (Style)Application.Current.Resources["InkWidthButtonStyle"],
+                Content = cell,
+            };
+            ToolTipService.SetToolTip(button, name);
+            button.Click += (_, _) =>
             {
                 _state.Settings.InkWidth = width;
                 _store.Save(_state);
                 ApplyInkStyleToAll();
             };
-            flyout.Items.Add(item);
+            _inkWidthChecks.Add((width, check));
+            widthRow.Children.Add(button);
+        }
+        panel.Children.Add(widthRow);
+
+        panel.Children.Add(new Border
+        {
+            Height = 1,
+            Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+        });
+
+        var stop = new Button
+        {
+            Content = "Stop drawing",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        ToolTipService.SetToolTip(stop, "Ctrl+E");
+        stop.Click += (_, _) =>
+        {
+            SetInkMode(false);
+            _inkFlyout?.Hide();
+        };
+        panel.Children.Add(stop);
+
+        return new Flyout
+        {
+            Content = panel,
+            Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Bottom,
+        };
+    }
+
+    /// <summary>Opens the pen panel anchored under the pen button.</summary>
+    private void ShowInkOptions()
+    {
+        _inkFlyout ??= BuildInkFlyout();
+        _inkFlyout.ShowAt(InkButton);
+    }
+
+    private bool IsInkFlyoutOpen => _inkFlyout?.IsOpen == true;
+
+    /// <summary>
+    /// Moves the check marks to match the current settings. Deliberately NOT a
+    /// rebuild: replacing the visual tree of an open flyout closes it.
+    /// </summary>
+    private void RefreshInkFlyoutChecks()
+    {
+        foreach (var (hex, check) in _inkColorChecks)
+        {
+            check.Visibility = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase)
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
+        foreach (var (width, check) in _inkWidthChecks)
+        {
+            check.Visibility = Math.Abs(_state.Settings.InkWidth - width) < 0.01
+                ? Visibility.Visible : Visibility.Collapsed;
+        }
+        // Width previews follow the chosen colour.
+        var inkBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(_state.Settings.InkColor));
+        foreach (var preview in _inkWidthPreviews)
+        {
+            preview.Background = inkBrush;
         }
     }
 
@@ -559,7 +736,7 @@ public sealed partial class MainWindow : Window
         {
             view.Viewer.SetInkStyle(_state.Settings.InkColor, _state.Settings.InkWidth);
         }
-        BuildInkOptionsFlyout(); // refresh checkmarks
+        RefreshInkFlyoutChecks();
     }
 
     private static Color HexToColor(string hex)
@@ -600,13 +777,27 @@ public sealed partial class MainWindow : Window
     private void ZoomInButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomIn();
     private void ZoomOutButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.ZoomOut();
     private void RotateButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.RotateClockwise();
+    private void RotateLeftButton_Click(object sender, RoutedEventArgs e) => _activeViewer?.RotateCounterClockwise();
     private void FitWidthButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitWidth);
     private void FitPageButton_Click(object sender, RoutedEventArgs e) => SetFitMode(FitMode.FitPage);
     private void SaveButton_Click(object sender, RoutedEventArgs e) => _ = SaveActiveAsync();
     private void SaveAsButton_Click(object sender, RoutedEventArgs e) => _ = SaveAsActiveAsync();
     private void PropertiesButton_Click(object sender, RoutedEventArgs e) => _ = ShowPropertiesAsync();
     private void UpdatesButton_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
-    private void InkButton_Click(object sender, RoutedEventArgs e) => SetInkMode(InkButton.IsChecked == true);
+    /// <summary>
+    /// The pen button turns drawing ON and shows the options; it never turns it
+    /// off, so clicking it again just brings the panel back. Stop drawing via
+    /// Esc, Ctrl+E, or the panel's own button.
+    ///
+    /// (A ToggleButton flips IsChecked before Click fires, so a click while ink
+    /// is already on would momentarily uncheck it — SetInkMode(true) puts it
+    /// back within the same synchronous handler, so no wrong frame is drawn.)
+    /// </summary>
+    private void InkButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetInkMode(true);
+        ShowInkOptions();
+    }
     private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
     private void PresentMenuItem_Click(object sender, RoutedEventArgs e) => TogglePresentation();
     private void UndoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.UndoAsync();
@@ -676,10 +867,15 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>Keeps the header toggles and the zoom-pill menu items in step.</summary>
     private void UpdateFitToggles()
     {
-        FitWidthItem.IsChecked = _activeViewer?.FitMode == FitMode.FitWidth;
-        FitPageItem.IsChecked = _activeViewer?.FitMode == FitMode.FitPage;
+        bool fitWidth = _activeViewer?.FitMode == FitMode.FitWidth;
+        bool fitPage = _activeViewer?.FitMode == FitMode.FitPage;
+        FitWidthButton.IsChecked = fitWidth;
+        FitPageButton.IsChecked = fitPage;
+        FitWidthItem.IsChecked = fitWidth;   // ToggleMenuFlyoutItem.IsChecked is bool,
+        FitPageItem.IsChecked = fitPage;     // ToggleButton.IsChecked is bool? — assign separately
     }
 
     private void PageBox_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -709,7 +905,7 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Close,
             XamlRoot = Content.XamlRoot,
         };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary)
         {
             await Launcher.LaunchUriAsync(parsed);
         }
@@ -754,7 +950,7 @@ public sealed partial class MainWindow : Window
             XamlRoot = Content.XamlRoot,
         };
 
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(box.Text))
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(box.Text))
         {
             view.Viewer.AddNote(at.PageIndex, at.X, at.Y, box.Text.Trim());
         }
@@ -875,13 +1071,12 @@ public sealed partial class MainWindow : Window
             panel.Children.Add(row);
         }
 
-        await new ContentDialog
+        await ShowDialogAsync(new ContentDialog
         {
             Title = view.DisplayName,
             Content = new ScrollViewer { Content = panel, MaxHeight = 420 },
             CloseButtonText = "Close",
-            XamlRoot = Content.XamlRoot,
-        }.ShowAsync();
+        });
     }
 
     private async void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -898,8 +1093,34 @@ public sealed partial class MainWindow : Window
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
         var updateCheck = new CheckBox { Content = "Check for updates automatically", IsChecked = _state.Settings.AutoCheckUpdates };
 
+        // Applies the dialog's controls to settings. Shared by Save and by the
+        // "check now" button, which treats itself as an implicit Save so the
+        // user's in-flight edits aren't discarded when the dialog closes.
+        void ApplySettings()
+        {
+            _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
+            _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
+            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
+            _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
+            _state.Settings.VimKeys = vimCheck.IsChecked == true;
+            _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
+            ApplyTheme(_state.Settings.Theme);
+            _store.Save(_state);
+            PopulateRecents(); // reflect the thumbnails toggle immediately
+        }
+
+        // This button lives INSIDE the Settings dialog, so running the check
+        // here would try to open the update dialog while Settings is still up —
+        // WinUI allows only one ContentDialog at a time, and the resulting throw
+        // used to kill the app. Close Settings first, run the check after.
+        bool checkAfterClosing = false;
+        ContentDialog? dialog = null;
         var checkNowButton = new Button { Content = "Check for updates now" };
-        checkNowButton.Click += async (_, _) => await CheckForUpdatesAsync(userInitiated: true);
+        checkNowButton.Click += (_, _) =>
+        {
+            checkAfterClosing = true;
+            dialog?.Hide();
+        };
 
         var panel = new StackPanel { Spacing = 12 };
         panel.Children.Add(new TextBlock { Text = "Theme", Opacity = 0.7 });
@@ -917,27 +1138,22 @@ public sealed partial class MainWindow : Window
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
         });
 
-        var dialog = new ContentDialog
+        dialog = new ContentDialog
         {
             Title = "Settings",
             Content = panel,
             PrimaryButtonText = "Save",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = Content.XamlRoot,
         };
 
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary || checkAfterClosing)
         {
-            _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
-            _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
-            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
-            _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
-            _state.Settings.VimKeys = vimCheck.IsChecked == true;
-            _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
-            ApplyTheme(_state.Settings.Theme);
-            _store.Save(_state);
-            PopulateRecents(); // reflect the thumbnails toggle immediately
+            ApplySettings();
+        }
+        if (checkAfterClosing)
+        {
+            await CheckForUpdatesAsync(userInitiated: true); // Settings is closed by now
         }
     }
 
@@ -997,22 +1213,29 @@ public sealed partial class MainWindow : Window
             weight[target] += group.Shortcuts.Length + 2;
         }
 
-        await new ContentDialog
+        await ShowDialogAsync(new ContentDialog
         {
             Title = "Keyboard shortcuts",
             Content = new ScrollViewer { Content = grid, MaxHeight = 540 },
             CloseButtonText = "Close",
-            XamlRoot = Content.XamlRoot,
-        }.ShowAsync();
+        });
     }
 
     // ---------------------------------------------------------------- updates
 
     private readonly UpdateService _updater = new();
 
-    /// <summary>Runs on launch (rate-limited) and from the Settings/palette "check now".</summary>
+    /// <summary>True while a check is running, so two can never overlap.</summary>
+    private bool _updateCheckRunning;
+
+    /// <summary>Runs on launch (rate-limited) and from the Settings/menu/palette "check now".</summary>
     private async Task CheckForUpdatesAsync(bool userInitiated)
     {
+        if (_updateCheckRunning)
+        {
+            return; // a check is already in flight — its dialog is the one to show
+        }
+
         if (!userInitiated)
         {
             if (!_state.Settings.AutoCheckUpdates ||
@@ -1020,28 +1243,49 @@ public sealed partial class MainWindow : Window
             {
                 return;
             }
+            // Don't burn the 24h rate limit on a check whose result we'd have to
+            // suppress anyway because the user is busy in another dialog.
+            if (DialogHost.IsOpen)
+            {
+                return;
+            }
         }
 
-        _state.Settings.LastUpdateCheckUtc = DateTime.UtcNow;
-        _store.Save(_state);
-
-        var update = await _updater.CheckAsync();
-        if (update is null)
+        _updateCheckRunning = true;
+        try
         {
+            _state.Settings.LastUpdateCheckUtc = DateTime.UtcNow;
+            _store.Save(_state);
+
+            var update = await _updater.CheckAsync();
+            if (update is null)
+            {
+                if (userInitiated)
+                {
+                    await ShowDialogAsync(new ContentDialog
+                    {
+                        Title = "You're up to date",
+                        Content = $"Rune {UpdateService.CurrentVersion.ToString(3)} is the latest version.",
+                        CloseButtonText = "OK",
+                    });
+                }
+                return;
+            }
+
+            await ShowUpdateDialogAsync(update);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Default.Write("CheckForUpdates", ex);
             if (userInitiated)
             {
-                await new ContentDialog
-                {
-                    Title = "You're up to date",
-                    Content = $"Rune {UpdateService.CurrentVersion.ToString(3)} is the latest version.",
-                    CloseButtonText = "OK",
-                    XamlRoot = Content.XamlRoot,
-                }.ShowAsync();
+                ShowError($"Couldn't check for updates: {ex.Message}");
             }
-            return;
         }
-
-        await ShowUpdateDialogAsync(update);
+        finally
+        {
+            _updateCheckRunning = false;
+        }
     }
 
     private async Task ShowUpdateDialogAsync(UpdateInfo update)
@@ -1060,17 +1304,25 @@ public sealed partial class MainWindow : Window
             PrimaryButtonText = portable ? "Download and install" : "Open releases page",
             CloseButtonText = "Later",
             DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = Content.XamlRoot,
         };
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary)
         {
             return;
         }
 
         if (portable)
         {
-            bool ok = await _updater.DownloadAndApplyAsync(update);
+            // Settle unsaved work BEFORE downloading: installing ends with
+            // Close(), and going straight there would discard annotations
+            // silently. Asking first also means cancelling leaves nothing
+            // downloaded and no updater process spawned.
+            if (!await EnsureSafeToCloseAsync())
+            {
+                return;
+            }
+
+            var (ok, error) = await _updater.DownloadAndApplyAsync(update);
             if (ok)
             {
                 _closeApproved = true;
@@ -1078,7 +1330,8 @@ public sealed partial class MainWindow : Window
             }
             else
             {
-                await OpenReleasesPageFallbackAsync("Rune couldn't update in place (its folder may be read-only). Opening the releases page instead.");
+                await OpenReleasesPageFallbackAsync(
+                    $"Rune couldn't install the update automatically ({error ?? "unknown error"}). Opening the releases page instead.");
             }
         }
         else
@@ -1089,15 +1342,17 @@ public sealed partial class MainWindow : Window
 
     private async Task OpenReleasesPageFallbackAsync(string message)
     {
-        await new ContentDialog
+        var result = await ShowDialogAsync(new ContentDialog
         {
             Title = "Manual update needed",
             Content = message,
             PrimaryButtonText = "Open releases page",
             CloseButtonText = "Cancel",
-            XamlRoot = Content.XamlRoot,
-        }.ShowAsync();
-        await Windows.System.Launcher.LaunchUriAsync(new Uri(_updater.ReleasesPageUrl));
+        });
+        if (result == ContentDialogResult.Primary)
+        {
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(_updater.ReleasesPageUrl));
+        }
     }
 
     // ---------------------------------------------------------------- command palette
@@ -1233,6 +1488,10 @@ public sealed partial class MainWindow : Window
             stream.Seek(0);
             await bitmap.SetSourceAsync(stream);
         }
+        // The card sizes its page box from the bitmap's pixel dimensions, which
+        // are only known once decoding finishes. SetSourceAsync normally
+        // completes after decode; re-assign on ImageOpened in case it doesn't.
+        bitmap.ImageOpened += (_, _) => card.Thumbnail = bitmap;
         card.Thumbnail = bitmap;
     }
 
@@ -1281,6 +1540,8 @@ public sealed partial class MainWindow : Window
         // Moved off the old CommandBar buttons when the header was slimmed down.
         AddAccelerator(VirtualKey.F9, VirtualKeyModifiers.None, () => SidebarButton_Click(this, null!));
         AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control, () => _activeViewer?.RotateClockwise());
+        AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
+            () => _activeViewer?.RotateCounterClockwise());
         AddAccelerator(VirtualKey.B, VirtualKeyModifiers.Control, ToggleBookmark);
         AddAccelerator(VirtualKey.Z, VirtualKeyModifiers.Control, () => _ = CurrentView?.UndoAsync());
         AddAccelerator(VirtualKey.Y, VirtualKeyModifiers.Control, () => _ = CurrentView?.RedoAsync());
@@ -1293,6 +1554,7 @@ public sealed partial class MainWindow : Window
         AddAccelerator((VirtualKey)0xBF, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
             () => _ = ShowShortcutsAsync(), requiresDocument: false);
         AddAccelerator(VirtualKey.F5, VirtualKeyModifiers.None, TogglePresentation);
+        // Escape peels off one layer at a time, outermost first.
         AddAccelerator(VirtualKey.Escape, VirtualKeyModifiers.None, () =>
         {
             if (Presentation.IsActive)
@@ -1303,9 +1565,17 @@ public sealed partial class MainWindow : Window
             {
                 Palette.Hide();
             }
-            else
+            else if (IsInkFlyoutOpen)
+            {
+                _inkFlyout?.Hide(); // close the panel but keep drawing
+            }
+            else if (FindBar.Visibility == Visibility.Visible)
             {
                 HideFindBar();
+            }
+            else if (_activeViewer?.IsInkMode == true)
+            {
+                SetInkMode(false); // finally, leave drawing mode
             }
         }, requiresDocument: false);
 
@@ -1694,5 +1964,20 @@ public sealed partial class MainWindow : Window
     {
         ErrorBar.Message = message;
         ErrorBar.IsOpen = true;
+    }
+
+    /// <summary>Surfaces a background/unhandled failure (called by App's safety net).</summary>
+    internal void ReportBackgroundError(string message) =>
+        ShowError($"Something went wrong: {message}");
+
+    /// <summary>
+    /// Shows a dialog through <see cref="DialogHost"/> so two can never overlap,
+    /// filling in XamlRoot centrally. Every ContentDialog in this window goes
+    /// through here.
+    /// </summary>
+    private Task<ContentDialogResult> ShowDialogAsync(ContentDialog dialog)
+    {
+        dialog.XamlRoot ??= Content.XamlRoot;
+        return DialogHost.ShowAsync(dialog);
     }
 }

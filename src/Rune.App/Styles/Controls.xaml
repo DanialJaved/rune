@@ -54,6 +54,38 @@
         <Setter Property="CornerRadius" Value="{StaticResource RadiusPill}" />
     </Style>
 
+    <!-- Pen colour swatch: a filled circle. WinUI clamps corner radius to half
+         the smaller side, so 16 is a circle at 32 px. -->
+    <Style x:Key="InkSwatchButtonStyle" TargetType="Button">
+        <Setter Property="Width" Value="{StaticResource InkSwatchSize}" />
+        <Setter Property="Height" Value="{StaticResource InkSwatchSize}" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="16" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
+    <!-- Pen width choice: shows the actual stroke thickness. -->
+    <Style x:Key="InkWidthButtonStyle" TargetType="Button">
+        <Setter Property="Width" Value="46" />
+        <Setter Property="Height" Value="{StaticResource InkSwatchSize}" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusSmall}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
+    <!-- Vertical rule grouping related header buttons. -->
+    <Style x:Key="HeaderSeparatorStyle" TargetType="Border">
+        <Setter Property="Width" Value="1" />
+        <Setter Property="Height" Value="{StaticResource HeaderSeparatorHeight}" />
+        <Setter Property="Margin" Value="4,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Background" Value="{ThemeResource DividerStrokeColorDefaultBrush}" />
+    </Style>
+
     <!-- Homepage recent-document card container. -->
     <Style x:Key="CardSurfaceStyle" TargetType="Grid">
         <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />

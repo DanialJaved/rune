@@ -25,7 +25,14 @@
     <x:Double x:Key="CardWidth">168</x:Double>
     <x:Double x:Key="CardHeight">212</x:Double>
 
-    <!-- Sidebar -->
+    <!-- Pen options panel -->
+    <x:Double x:Key="InkSwatchSize">32</x:Double>
+    <x:Double x:Key="HeaderSeparatorHeight">20</x:Double>
+
+    <!-- Sidebar. Thumbnail boxes take their height from each page's own aspect
+         ratio; the clamps keep a poster (1:10) or a banner (10:1) usable. -->
     <x:Double x:Key="SidebarWidth">280</x:Double>
     <x:Double x:Key="SidebarThumbWidth">168</x:Double>
+    <x:Double x:Key="SidebarThumbMinHeight">96</x:Double>
+    <x:Double x:Key="SidebarThumbMaxHeight">320</x:Double>
 </ResourceDictionary>

@@ -106,23 +106,57 @@ public sealed class UpdateService
     /// <summary>
     /// Downloads and extracts the update, then launches a detached script that
     /// waits for this process to exit, copies the new files over the app
-    /// directory, and relaunches Rune. Returns false (without exiting) if the
-    /// app directory isn't writable.
+    /// directory, and relaunches Rune.
+    ///
+    /// Never throws — matching <see cref="CheckAsync"/>'s contract. Returns
+    /// (false, reason) so the caller can tell the user what actually failed
+    /// instead of a generic message.
     /// </summary>
-    public async Task<bool> DownloadAndApplyAsync(UpdateInfo update, CancellationToken ct = default)
+    public async Task<(bool Ok, string? Error)> DownloadAndApplyAsync(UpdateInfo update, CancellationToken ct = default)
+    {
+        string? work = null;
+        try
+        {
+            return await DownloadAndApplyCoreAsync(update, w => work = w, ct);
+        }
+        catch (Exception ex)
+        {
+            Rune.Services.ErrorLog.Default.Write("DownloadAndApply", ex);
+            if (work is not null)
+            {
+                try { Directory.Delete(work, recursive: true); } catch { }
+            }
+            return (false, Friendly(ex));
+        }
+    }
+
+    /// <summary>Human-readable cause for the update dialog.</summary>
+    private static string Friendly(Exception ex) => ex switch
+    {
+        HttpRequestException or TaskCanceledException => "the download failed",
+        InvalidDataException => "the downloaded file was corrupt",
+        UnauthorizedAccessException => "Rune's folder isn't writable",
+        IOException => "a file couldn't be written",
+        System.ComponentModel.Win32Exception => "the updater couldn't start",
+        _ => ex.Message,
+    };
+
+    private async Task<(bool Ok, string? Error)> DownloadAndApplyCoreAsync(
+        UpdateInfo update, Action<string> reportWorkDir, CancellationToken ct)
     {
         if (update.ZipUrl is null || !IsPortable())
         {
-            return false;
+            return (false, "this build can't update itself");
         }
 
         string appDir = AppContext.BaseDirectory.TrimEnd('\\');
         if (!IsDirectoryWritable(appDir))
         {
-            return false;
+            return (false, "Rune's folder is read-only");
         }
 
         string work = Path.Combine(Path.GetTempPath(), "Rune-update-" + Guid.NewGuid().ToString("N"));
+        reportWorkDir(work);
         string staging = Path.Combine(work, "staging");
         Directory.CreateDirectory(staging);
 
@@ -159,7 +193,7 @@ public sealed class UpdateService
             UseShellExecute = false,
             WorkingDirectory = Path.GetTempPath(),
         });
-        return true;
+        return (true, null);
     }
 
     private static bool TryParseVersion(string tag, out Version version)

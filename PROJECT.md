@@ -2,7 +2,7 @@
 
 > A single-file brain-dump so a fresh session (human or AI) can understand
 > and continue this project without re-deriving context. Last updated for
-> **v0.4.0** (2026-07-20).
+> **v0.4.1** (2026-07-29).
 
 ---
 
@@ -102,7 +102,7 @@ src/
     Assets/                   rune.ico + MSIX visual assets (generated)
 
 tests/
-  Rune.Tests/           xUnit — 93 tests against a generated corpus (see §6)
+  Rune.Tests/           xUnit — 118 tests against a generated corpus (see §6)
 
 tools/
   gen-corpus.ps1        Hand-authors the test PDFs (no PDF lib needed)
@@ -174,7 +174,7 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 - Text selection & copy; find-in-document with highlight-all + hit stepping
 - **Annotations** (standard PDF annots via `FPDF_annot` + `FPDF_SaveAsCopy`):
   highlight / underline / strikeout from selection, sticky notes, and
-  **freehand ink** (pen color/width in the hamburger). Right-click to delete.
+  **freehand ink** (colour/width panel on the pen button itself). Right-click to delete.
   Save (Ctrl+S) / Save As (Ctrl+Shift+S). Dirty tab marker `•` + save prompt.
 - **Page editing** in the thumbnail sidebar: multi-select, drag-to-reorder,
   Delete, **Ctrl+C/X/V page clipboard incl. across tabs**, drop an external
@@ -206,7 +206,8 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 | Find / next / prev | `Ctrl+F` / `F3` / `Shift+F3` |
 | Command palette / shortcuts | `Ctrl+K` / `F1` (or `Ctrl+?`) |
 | Zoom in/out/100%/fit page/fit width | `Ctrl++` / `Ctrl+-` / `Ctrl+1` / `Ctrl+0` / `Ctrl+2` |
-| Night / sidebar / rotate | `Ctrl+I` / `F9` / `Ctrl+R` |
+| Night / sidebar | `Ctrl+I` / `F9` |
+| Rotate right / left | `Ctrl+R` / `Ctrl+Shift+R` |
 | Presentation / bookmark | `F5` / `Ctrl+B` |
 | Highlight / pen / save / save as | `Ctrl+H` / `Ctrl+E` / `Ctrl+S` / `Ctrl+Shift+S` |
 | Copy / cut / paste (text or pages) | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
@@ -228,7 +229,7 @@ dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
 # Run (accepts an optional PDF path; also --page N --zoom Z for scripted tests)
 src/Rune.App/bin/x64/Debug/net10.0-windows10.0.19041.0/win-x64/Rune.exe [file.pdf]
 
-# Test (93 tests)
+# Test (118 tests)
 dotnet test tests/Rune.Tests/Rune.Tests.csproj
 
 # Regenerate assets when needed
@@ -343,6 +344,31 @@ gh release create vX.Y.Z <zip> <msix> artifacts/rune-signing.cer --title "Rune v
   **user bookmarks** (Ctrl+B); **page editing** (reorder/delete/clipboard/
   insert incl. cross-tab and external-PDF drop); **undo/redo** (Ctrl+Z/Y) over
   annotations + page ops. 50 → 93 tests.
+- **v0.4.1** (2026-07-29) — bug-fix release from user testing of v0.4.0.
+  **Fixed:** the **crash on "check for updates" with a document open**. There
+  was no `Application.UnhandledException` handler anywhere, so a second
+  concurrent `ContentDialog` (WinUI allows one) threw out of an `async void`
+  and killed the process. Two paths produced it: the Settings "check now"
+  button lives *inside* the Settings dialog, and the startup check could
+  collide with a user-initiated one — the latter is why a document had to be
+  open (restoring one delays the startup check into collision range). Added
+  `ErrorLog` + app-level `UnhandledException`/`UnobservedTaskException`
+  handlers, `DialogHost` (serializes all 10 dialog sites), a single-flight
+  update guard, and a never-throws contract on `DownloadAndApplyAsync`.
+  Self-update no longer discards unsaved annotations (it prompts *before*
+  downloading), and the releases-page fallback no longer opens the browser
+  when you click Cancel.
+  **Fixed:** thumbnails **not matching page shape** — a fixed-width box with
+  only a `MinHeight` letterboxed every landscape/4:3/16:9 page, invisibly
+  (hardcoded white bars behind white slides). Boxes now take each page's own
+  aspect ratio, sized *before* the render arrives (so the list no longer
+  reflows mid-scroll), follow Ctrl+R, and are theme-aware; homepage cards get
+  a bordered, correctly-shaped page box.
+  **Added:** pen colour/width panel **on the pen button** (clicking keeps
+  drawing on and re-opens it; Esc / Ctrl+E / "Stop drawing" exit), and
+  **fit-width / fit-page / rotate-left / rotate-right always visible in the
+  header** (+ Ctrl+Shift+R for rotate-left). 93 → 118 tests. Also: `main` is
+  now branch-protected (no force-push, no deletion).
 
 ---
 

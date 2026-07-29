@@ -28,7 +28,7 @@ internal static class ShortcutCatalog
             new("Zoom in / out", "Ctrl++ / Ctrl+-"),
             new("Actual size", "Ctrl+1"),
             new("Fit width / fit page", "Ctrl+2 / Ctrl+0"),
-            new("Rotate", "Ctrl+R"),
+            new("Rotate right / left", "Ctrl+R / Ctrl+Shift+R"),
             new("Night mode", "Ctrl+I"),
             new("Sidebar", "F9"),
             new("Presentation", "F5"),
