@@ -102,12 +102,26 @@ Privacy policy URL (required field — point it at the repo's policy):
 
 ---
 
-## Capability justification
+## Capability justification — `runFullTrust`
 
-`runFullTrust` — standard and required for any WinUI 3 / Windows App SDK desktop
-application. Rune uses it to read PDF files the user explicitly opens and to
-print. It does not use it for background activity, networking, or system
-modification.
+Partner Center flags this as a restricted capability and asks "Why do you need
+the runFullTrust capability, and how will it be used in your product?".
+Paste the following verbatim:
+
+> Rune PDF Reader is a WinUI 3 / Windows App SDK desktop application, and every
+> packaged Win32 desktop app of this type runs as a full-trust process, so
+> runFullTrust is required simply for the app to launch. Rune needs it to render
+> PDF pages via PDFium (pdfium.dll), a native C++ library called through
+> P/Invoke, to read the PDF files a user explicitly opens and save annotations
+> back to them, and to print. It makes no network connections, runs no
+> background tasks, requires no elevation, modifies no system settings, and
+> collects no user data. Rune is open source under the GPLv3 and the full source
+> is at https://github.com/DanialJaved/rune
+
+**The "no network connections" claim depends on the Store build keeping
+`UpdateService.UpdatesSupported == false`** (see `Services/UpdateService.cs`).
+If the self-updater is ever re-enabled for packaged builds, this justification
+and the privacy declaration both stop being true and must be revised.
 
 ---
 

@@ -2,7 +2,10 @@
 
 > A single-file brain-dump so a fresh session (human or AI) can understand
 > and continue this project without re-deriving context. Last updated for
-> **v0.4.1** (2026-07-29).
+> **v0.4.1** (2026-07-29), including Microsoft Store submission prep.
+>
+> **Start here:** §1 what it is · §4 how rendering works (the load-bearing part)
+> · §7 gotchas (read before debugging) · §10 known bugs · §13 current state.
 
 ---
 
@@ -94,11 +97,13 @@ src/
       CommandPalette.xaml(.cs) Ctrl+K fuzzy command palette
       BookmarkItem.cs, AnnotationEdit.cs, ThumbnailItem.cs, OutlineNode.cs, RecentCard.cs
     Services/
+      DialogHost.cs           Serializes every ContentDialog (WinUI allows ONE — see §7)
       PageClipboard.cs        App-wide page clipboard (serialized bytes, cross-tab)
       PrintService.cs         PrintManagerInterop + PrintDocument (live preview, page ranges)
-      UpdateService.cs        GitHub-Releases self-update
+      UpdateService.cs        GitHub-Releases self-update; UpdatesSupported gates it OFF
+                              for packaged/Store builds (§8b)
       ThumbnailCache.cs       Homepage first-page thumbnails (disk-cached PNGs)
-    Package.appxmanifest      MSIX identity + .pdf file-type association
+    Package.appxmanifest      Store identity + .pdf file-type association (§8b)
     Assets/                   rune.ico + MSIX visual assets (generated)
 
 tests/
@@ -107,7 +112,18 @@ tests/
 tools/
   gen-corpus.ps1        Hand-authors the test PDFs (no PDF lib needed)
   gen-icon.ps1          Draws the raido-rune icon + all MSIX assets
+
+docs/
+  store-listing.md      Store submission copy: description, search terms, age
+                        rating answers, runFullTrust justification, screenshot plan
+  store-screenshots/    6 × 1920×1080 PNGs for the Store listing
+PRIVACY.md              Required by the Store (live URL is checked at cert time)
 ```
+
+Engine files added in v0.4.x worth knowing about: `ErrorLog.cs` (crash log,
+never throws), `ViewRotationMath.cs` (negative quarter-turn normalization),
+`ThumbnailMetrics.cs` (aspect-correct box sizing), `BookmarkRemap.cs`,
+`UndoStack.cs`, `PageText.cs`.
 
 ---
 
@@ -162,7 +178,7 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 
 ---
 
-## 5. Feature set (as shipped in v0.4.0)
+## 5. Feature set (as shipped in v0.4.1)
 
 - Tabs **in the title bar** (Chrome/Terminal style), lazy-loaded per tab
 - Continuous virtualized scroll; zoom 10–640% at cursor; fit-width/page; rotate
@@ -278,6 +294,38 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
   and remember the display is **125% scale**. Caveat: if another app holds the
   foreground (e.g. a browser/video), input lands there and screenshots capture
   it — verify only when Rune can take focus.
+- **Clean screenshots** (no taskbar/desktop bleed): size the window to exactly
+  1920×1080 at (0,0) with `SetWindowPos`, then capture with
+  `PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT=2)` — that grabs the window's own
+  pixels, so nothing on top can intrude. In-app `Flyout`s (e.g. the pen panel)
+  *are* captured; a `MenuFlyout` shown via `ShowAt(element, point)` may render in
+  its own HWND and **not** appear — screen-capture those instead.
+- **`ScrollViewer.ViewportWidth` is STALE inside `SizeChanged`.** A ScrollViewer
+  refreshes it during its own arrange pass, which runs *after* the event. Reading
+  it there lays the document out against the previous size. Use
+  `SizeChangedEventArgs.NewSize`. (This was the sidebar-toggle bug: page pinned
+  left with ghost strips of the old render.)
+- **Never read theme brushes via `Application.Current.Resources["..."]` in code.**
+  It returns the **dark-theme** value regardless of the active theme, so e.g.
+  `TextFillColorPrimaryBrush` rendered white-on-white in light mode. Use
+  `{ThemeResource}` in XAML, or build an explicit `SolidColorBrush`.
+- **`ToggleButton.IsChecked` is `bool?`; `ToggleMenuFlyoutItem.IsChecked` is `bool`.**
+  Chained assignment across the two won't compile — assign separately.
+- **`RuntimeIdentifier` must follow `$(Platform)`.** Pinning it to `win-x64`
+  breaks the ARM64 leg of a multi-arch Store bundle (`NETSDK1032`); both RIDs
+  must also be in `RuntimeIdentifiers` so restore can resolve them.
+- **Symbol packages need `mspdbcmf.exe`** from the VS C++ workload (not installed
+  here) — `AppxSymbolPackageEnabled=false`. They're optional for the Store.
+- **PowerShell + `git commit -m "..."`**: quotes/apostrophes inside the message
+  break argument parsing and scatter the body across `pathspec` errors. Write the
+  message to a file and use `git commit -F <file>`.
+- **Editing files containing private-use glyph chars** (e.g. `FontIcon Glyph=""`
+  in `MainWindow.xaml.cs`): exact-string edits spanning those lines fail to match.
+  Edit around them, or splice by line range.
+- **Focus traps** (see §10 known bugs): the Win2D canvas is not focusable, so
+  clicking the page never returns focus. If focus sits on the tab strip or the
+  page-number box, navigation keys are dead. When scripting, navigate via the
+  command palette (Ctrl+K → type a number → Enter) rather than PageDown.
 
 ---
 
@@ -314,6 +362,54 @@ gh release create vX.Y.Z <zip> <msix> artifacts/rune-signing.cer --title "Rune v
 - Compliance: `LICENSE` (GPLv3) + `THIRD-PARTY-NOTICES.md` +
   `third_party/WindowsAppSDK-NOTICE.txt` ship inside every binary (PDFium's
   BSD/Apache terms require its license to accompany the DLL).
+
+---
+
+## 8b. Microsoft Store
+
+Listed as **"Rune PDF Reader"** ("Rune" alone was taken — and is poor Store SEO
+anyway; nobody searching "rune" wants a PDF reader). The package identity, exe,
+repo and icon all stay `Rune`; only the display name differs.
+
+| Field | Value |
+|---|---|
+| Identity/Name | `Danimite.RunePDFReader` |
+| Identity/Publisher | `CN=513DE1BC-C862-44F8-AEAD-F60E359F4BBF` |
+| PublisherDisplayName | `Danimite` |
+| Partner Center account | m.danial.javed@gmail.com, developer name **Danimite** |
+
+These must match Partner Center **exactly** or the upload is rejected. The
+self-signed cert is NOT used here — the Store re-signs, which is also why Store
+installs get no SmartScreen/SAC warning.
+
+```powershell
+# Store upload bundle (unsigned — the Store signs it), x64 + ARM64
+dotnet restore src/Rune.App/Rune.App.csproj
+dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
+  -p:WindowsPackageType=MSIX -p:GenerateAppxPackageOnBuild=true `
+  -p:AppxPackageSigningEnabled=false `
+  -p:AppxBundle=Always -p:AppxBundlePlatforms="x64|arm64" `
+  -p:UapAppxPackageBuildMode=StoreUpload `
+  -p:AppxPackageDir="..\..\artifacts\store\"
+# → artifacts/store/Rune.App_X.Y.Z.0_x64_arm64_bundle.msixupload  (~106 MB)
+```
+
+- **The self-updater MUST stay disabled for packaged builds**
+  (`UpdateService.UpdatesSupported`). Offering a Store user a link to GitHub
+  Releases sends them outside the Store for a competing build — a certification
+  failure — and the `WindowsApps` install dir is read-only anyway. It also means
+  a Store build makes **no network requests at all**, which is what lets the
+  privacy declaration and the `runFullTrust` justification say "no network,
+  collects no data". **Re-enabling it invalidates both.**
+- `runFullTrust` is flagged at submission as a restricted capability needing
+  approval. Expected for every WinUI 3 desktop app; justification text is in
+  `docs/store-listing.md`.
+- `PRIVACY.md` must be live on `main` before submitting — certification follows
+  the URL in the listing.
+- Store screenshots must use a **licence-safe** document (they're published
+  commercially). The current set uses the NASA Systems Engineering Handbook —
+  a US Government work, so public domain. **Never** shoot the user's own files;
+  filenames leak in the tab strip and recents list.
 
 ---
 
@@ -372,26 +468,76 @@ gh release create vX.Y.Z <zip> <msix> artifacts/rune-signing.cer --title "Rune v
 
 ---
 
-## 10. Roadmap (not yet built)
+## 10. Known bugs (found by driving the app; none are regressions)
+
+All three predate v0.4.1 and were surfaced while capturing Store screenshots.
+They're the kind of thing a first-time user hits, and none is hard to fix.
+
+1. **Navigation keys go dead after clicking a tab or the page-number box.**
+   The Win2D canvas isn't focusable, so clicking the document never takes focus
+   back. `Content_PreviewKeyDown` correctly defers to text inputs
+   (`IsTextInputFocused`) and to `SelectorItem`/`TreeViewItem` — but `TabViewItem`
+   *is* a `SelectorItem`, and the page `NumberBox` *is* a text input, so arrows
+   and PageUp/PageDown stay routed away from the viewer. Likely fix: make the
+   ScrollViewer focusable (`IsTabStop`) and focus it on pointer-press in the
+   canvas. Same class as the original v0.4.0 arrow-key complaint.
+2. **Selected pages are nearly invisible in light theme.** Multi-select works,
+   but the thumbnail `Border`'s opaque background occludes the ListViewItem
+   selection tint — only a thin accent bar on the left edge shows. Bad for a
+   feature built around multi-select page editing. Visible in dark theme.
+3. **Night mode doesn't invert sidebar thumbnails** — light thumbnails against
+   an inverted page. Night mode is a viewer-only GPU `InvertEffect`; making
+   thumbnails follow it means inverting their bitmaps too.
+
+---
+
+## 11. Roadmap (not yet built)
 
 - Form filling
 - Digital signature verification
 - Page **extract** to a new file (reorder/delete/insert already shipped in v0.4)
 - More formats (ePub, CBZ — would need MuPDF; note AGPL implications)
-- **Code signing** (Azure Trusted Signing ~$10/mo, or Microsoft Store) — the
-  real fix for SAC/SmartScreen. **Deferred by user choice.**
-- **winget** submission — **deferred by user choice** (winget does NOT bypass
-  SAC; signing is the actual unblock).
-- Smaller / size-optimized packages (current zip ~88 MB, self-contained runtime)
+- **Code signing** — *solved for Store installs* (the Store re-signs). Still open
+  for the portable/GitHub build: Azure Trusted Signing ~$10/mo. Deferred.
+- **winget** submission — deferred (winget does NOT bypass SAC; signing is the
+  actual unblock).
+- Smaller / size-optimized packages (zip ~88 MB, Store bundle ~106 MB — both
+  carry the self-contained .NET + WindowsAppSDK runtimes)
+- Harden the updater script (`UpdateService.cs:141-152`): `%` in paths breaks the
+  generated `.cmd`, it `rmdir`s its own directory, `robocopy` exit ≥ 8 is
+  ignored, and the downloaded zip is neither hash- nor signature-verified.
 
 ---
 
-## 11. Standing conventions
+## 12. Standing conventions
 
 - **Never publish (repo/release/anything outward-facing) without asking first.**
-- Ship **unsigned** for now; document the SAC/SmartScreen limitation honestly.
-- Verify features by **driving the real app** (screenshots), not just tests,
-  for anything with a runtime surface — then commit.
-- Commit messages end with `Co-Authored-By: Claude <...>`; branch off `main`
-  only when the user asks to commit/push.
+- **No AI attribution in commits, PR bodies, or release notes.** History was
+  rewritten on 2026-07-29 to strip `Co-Authored-By: Claude` from all 34 commits
+  (the user is the sole author); don't reintroduce it.
+- `main` is **branch-protected**: no force-push, no deletion. Normal pushes are
+  allowed, so a PR isn't strictly required — but recent work has gone through
+  PRs (#2–#5) and that reads well on a public repo.
+- Verify features by **driving the real app** (screenshots), not just tests, for
+  anything with a runtime surface — then commit. This session, on-screen checks
+  caught three bugs that compiled and passed 118 tests.
+- Ship **unsigned** on GitHub; document the SAC/SmartScreen limitation honestly.
+  Store builds are signed by Microsoft.
+- Danial is **new to C#/.NET** — explain non-obvious concepts (P/Invoke, async
+  void, XAML binding, MSIX) while building.
 - Plan files from past sessions live in `C:\Users\djkho\.claude\plans\`.
+
+---
+
+## 13. Current state (2026-07-29)
+
+- `main` @ `1db901e` — v0.4.1 source + Store submission prep, all merged.
+- **GitHub releases: latest published is v0.4.0.** `main` and the Store package
+  are both **0.4.1**, so *the crash fix has not reached GitHub users yet* —
+  anyone on v0.4.0 who checks for updates with a document open still crashes.
+  **Cutting the v0.4.1 release is the top outstanding task.**
+- Microsoft Store: package uploaded and accepted, identity/listing/privacy/
+  screenshots all ready; **not yet submitted** (user's call).
+- 118 tests passing; x64 and ARM64 Release builds clean.
+- Uncommitted at time of writing: `docs/store-listing.md` tweak (short
+  `runFullTrust` justification) and this PROJECT.md update.
