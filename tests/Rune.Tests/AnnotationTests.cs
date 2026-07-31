@@ -4,7 +4,11 @@ namespace Rune.Tests;
 
 public class AnnotationTests
 {
-    private static string CorpusPath(string name) => Path.Combine(AppContext.BaseDirectory, "corpus", name);
+    private static string CorpusPath(string name) => PixelAssert.CorpusPath(name);
+
+    private static int CountNonWhite(PageBitmap bmp) => PixelAssert.CountNonWhite(bmp);
+
+    private static int CountTinted(PageBitmap bmp) => PixelAssert.CountTinted(bmp);
 
     private static string TempPdf() => Path.Combine(Path.GetTempPath(), $"rune-annot-{Guid.NewGuid():N}.pdf");
 
@@ -149,23 +153,6 @@ public class AnnotationTests
         Assert.True(afterInk > beforeInk + 500, $"expected ink pixels: before={beforeInk}, after={afterInk}");
     }
 
-    private static int CountNonWhite(PageBitmap bmp)
-    {
-        int n = 0;
-        for (int y = 0; y < bmp.Height; y++)
-        {
-            for (int x = 0; x < bmp.Width; x++)
-            {
-                int i = y * bmp.Stride + x * 4;
-                if (bmp.Pixels[i] != 0xFF || bmp.Pixels[i + 1] != 0xFF || bmp.Pixels[i + 2] != 0xFF)
-                {
-                    n++;
-                }
-            }
-        }
-        return n;
-    }
-
     [Fact]
     public void Highlight_ActuallyChangesRenderedPixels()
     {
@@ -181,21 +168,4 @@ public class AnnotationTests
             $"expected highlight tint in render: before={beforeYellowish}, after={afterYellowish}");
     }
 
-    private static int CountTinted(PageBitmap bmp)
-    {
-        int tinted = 0;
-        for (int y = 0; y < bmp.Height; y++)
-        {
-            for (int x = 0; x < bmp.Width; x++)
-            {
-                int i = y * bmp.Stride + x * 4;
-                byte b = bmp.Pixels[i], g = bmp.Pixels[i + 1], r = bmp.Pixels[i + 2];
-                if (r > 200 && g > 150 && b < 200 && !(r > 250 && g > 250 && b > 250))
-                {
-                    tinted++;
-                }
-            }
-        }
-        return tinted;
-    }
 }

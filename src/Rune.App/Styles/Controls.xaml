@@ -93,4 +93,46 @@
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{StaticResource RadiusMedium}" />
     </Style>
+
+    <!-- ================================================================
+         Styles for panels built in code-behind.
+
+         Code-behind must NEVER resolve a theme brush itself: reading
+         Application.Current.Resources["...Brush"] returns the DARK value
+         whatever the active theme is, so light mode silently gets dark
+         chrome. A Style is safe because its setters are resolved against
+         the element's real theme when it is applied — assign element.Style
+         instead of the brush.
+         ================================================================ -->
+
+    <!-- Horizontal rule inside a flyout or dialog. -->
+    <Style x:Key="FlyoutSeparatorStyle" TargetType="Border">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Background" Value="{ThemeResource DividerStrokeColorDefaultBrush}" />
+    </Style>
+
+    <!-- Key cap in the keyboard-shortcuts dialog. -->
+    <Style x:Key="ShortcutKeyChipStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource ControlFillColorDefaultBrush}" />
+        <Setter Property="BorderBrush" Value="{ThemeResource ControlStrokeColorDefaultBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusSmall}" />
+        <Setter Property="Padding" Value="6,2" />
+    </Style>
+
+    <!-- De-emphasised label text (dialog field names, captions). Replaces
+         hardcoded Opacity, which reads very differently on light vs dark. -->
+    <Style x:Key="SecondaryTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+    </Style>
+
+    <Style x:Key="TertiaryTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+    </Style>
+
+    <!-- A limitation or warning the reader must not skim past. -->
+    <Style x:Key="CautionTextStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCautionBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
 </ResourceDictionary>

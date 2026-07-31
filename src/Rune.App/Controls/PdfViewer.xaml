@@ -4,11 +4,16 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:win2d="using:Microsoft.Graphics.Canvas.UI.Xaml">
 
+    <!-- ZoomMode carries pinch only; Ctrl+wheel is handled in code-behind so it
+         never raster-scales. MinZoomFactor/MaxZoomFactor must match PdfViewer's
+         MinZoom/MaxZoom: if the ScrollViewer clamps a pinch at a limit the real
+         zoom hasn't reached, RebaseZoom folds in a factor the zoom can't absorb
+         and the anchor drifts at the extremes. -->
     <ScrollViewer
         x:Name="Scroller"
         ZoomMode="Enabled"
-        MinZoomFactor="0.2"
-        MaxZoomFactor="5"
+        MinZoomFactor="0.1"
+        MaxZoomFactor="6.4"
         HorizontalScrollBarVisibility="Auto"
         VerticalScrollBarVisibility="Auto"
         HorizontalScrollMode="Enabled"

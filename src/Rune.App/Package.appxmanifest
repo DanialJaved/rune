@@ -12,7 +12,7 @@
   <Identity
     Name="Danimite.RunePDFReader"
     Publisher="CN=513DE1BC-C862-44F8-AEAD-F60E359F4BBF"
-    Version="0.4.1.0" />
+    Version="0.5.0.0" />
 
   <Properties>
     <DisplayName>Rune PDF Reader</DisplayName>
@@ -34,16 +34,16 @@
         DisplayName="Rune PDF Reader"
         Description="A fast, free, modern PDF reader for Windows"
         BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.scale-200.png"
-        Square44x44Logo="Assets\Square44x44Logo.scale-200.png">
-        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.scale-200.png" />
-        <uap:SplashScreen Image="Assets\SplashScreen.scale-200.png" />
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+        <uap:SplashScreen Image="Assets\SplashScreen.png" />
       </uap:VisualElements>
       <Extensions>
         <uap:Extension Category="windows.fileTypeAssociation">
           <uap:FileTypeAssociation Name="pdf">
             <uap:DisplayName>PDF Document</uap:DisplayName>
-            <uap:Logo>Assets\Square44x44Logo.scale-200.png</uap:Logo>
+            <uap:Logo>Assets\Square44x44Logo.png</uap:Logo>
             <uap:SupportedFileTypes>
               <uap:FileType>.pdf</uap:FileType>
             </uap:SupportedFileTypes>

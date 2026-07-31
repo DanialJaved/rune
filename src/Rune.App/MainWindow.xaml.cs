@@ -1,6 +1,8 @@
 using Rune.Controls;
 using Rune.Engine;
 using Rune.Services;
+using Rune.Styles;
+using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -42,6 +44,11 @@ public sealed partial class MainWindow : Window
         _state = _store.Load();
         ApplyTheme(_state.Settings.Theme);
         NightButton.IsChecked = _state.Settings.NightMode;
+
+        // With the theme set to "System", flipping Windows' theme changes
+        // ActualTheme without going through ApplyTheme — the caption buttons
+        // have to be re-coloured or they keep the old glyph colour.
+        ((FrameworkElement)Content).ActualThemeChanged += (s, _) => ApplyThemeToChrome(s.ActualTheme);
 
         RegisterAccelerators();
         ((UIElement)Content).KeyDown += Content_KeyDown;
@@ -127,12 +134,46 @@ public sealed partial class MainWindow : Window
 
     private void ApplyTheme(string theme)
     {
-        ((FrameworkElement)Content).RequestedTheme = theme switch
+        var root = (FrameworkElement)Content;
+        root.RequestedTheme = theme switch
         {
             "Light" => ElementTheme.Light,
             "Dark" => ElementTheme.Dark,
             _ => ElementTheme.Default,
         };
+        ApplyThemeToChrome(root.ActualTheme);
+    }
+
+    /// <summary>
+    /// Colours the window's caption buttons to match the app's theme.
+    ///
+    /// Without this they follow the OS: because the theme is set on
+    /// <c>Window.Content</c> rather than <c>Application.RequestedTheme</c>,
+    /// choosing Dark inside Rune on a light-mode Windows leaves black glyphs
+    /// on Rune's dark title bar (and vice versa). It is the most visible
+    /// cross-theme inconsistency in the app.
+    /// </summary>
+    private void ApplyThemeToChrome(ElementTheme resolved)
+    {
+        // ElementTheme.Default means "follow the app", so resolve it here
+        // rather than leaving the caption buttons on a different axis.
+        bool dark = resolved == ElementTheme.Default
+            ? Application.Current.RequestedTheme == ApplicationTheme.Dark
+            : resolved == ElementTheme.Dark;
+
+        var titleBar = AppWindow.TitleBar;
+
+        // MUST stay transparent: an opaque button background paints over the
+        // Mica backdrop behind the tab strip.
+        titleBar.ButtonBackgroundColor = Colors.Transparent;
+        titleBar.ButtonInactiveBackgroundColor = Colors.Transparent;
+
+        titleBar.ButtonForegroundColor = RuneColors.CaptionForeground(dark);
+        titleBar.ButtonInactiveForegroundColor = RuneColors.CaptionInactiveForeground(dark);
+        titleBar.ButtonHoverForegroundColor = RuneColors.CaptionForeground(dark);
+        titleBar.ButtonPressedForegroundColor = RuneColors.CaptionForeground(dark);
+        titleBar.ButtonHoverBackgroundColor = RuneColors.CaptionHoverBackground(dark);
+        titleBar.ButtonPressedBackgroundColor = RuneColors.CaptionPressedBackground(dark);
     }
 
     private void UpdateCaptionClearance()
@@ -217,6 +258,7 @@ public sealed partial class MainWindow : Window
             ActiveIndex = Math.Max(0, Tabs.SelectedIndex),
         };
         _store.Save(_state);
+        _thumbnails.Dispose(); // stops the homepage cache's PDFium thread
     }
 
     private void CaptureState(DocumentView view)
@@ -244,8 +286,15 @@ public sealed partial class MainWindow : Window
         view.OpenSidebarOnLoad = _state.Settings.SidebarOpenByDefault;
         view.Viewer.LinkActivated += Viewer_LinkActivated;
         view.Viewer.NightMode = _state.Settings.NightMode;
-        view.Viewer.SetInkStyle(_state.Settings.InkColor, _state.Settings.InkWidth);
+        SeedToolStyles(view.Viewer);
         view.Viewer.DocumentEdited += (_, _) => UpdateDirtyIndicator(view);
+        view.Viewer.ActiveToolChanged += (_, tool) => SyncToolButtons(tool);
+        view.Viewer.SignaturePlaced += (_, widthPt) =>
+        {
+            _state.Settings.SignatureWidthPt = widthPt;
+            _store.Save(_state);
+        };
+        view.SignaturesRead += (_, _) => UpdateToolbarForActive();
         view.Viewer.NoteRequested += Viewer_NoteRequested;
         view.BookmarksChanged += (_, _) => PersistBookmarks(view);
         view.PagesEdited += (_, _) =>
@@ -306,6 +355,7 @@ public sealed partial class MainWindow : Window
     {
         DocHost.Content = CurrentView;
         HookActiveViewer();
+        _showHome = false; // picking a tab is a request to read it
         UpdateStartPageVisibility();
 
         if (!_restoringSession && CurrentView is { } view)
@@ -430,15 +480,41 @@ public sealed partial class MainWindow : Window
     private DocumentView? CurrentView =>
         (Tabs.SelectedItem as TabViewItem)?.Tag as DocumentView;
 
+    /// <summary>
+    /// True while the Home button is showing the recents screen over open tabs.
+    /// Without this the start page would only ever appear with no tabs at all.
+    /// </summary>
+    private bool _showHome;
+
+    /// <summary>
+    /// The wordmark toggles Home. Tabs stay open the whole time, so this is a
+    /// view switch, not a close — and clicking any tab also returns you.
+    /// </summary>
+    private void HomeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (Tabs.TabItems.Count == 0)
+        {
+            return; // already home; nothing to toggle back to
+        }
+        _showHome = !_showHome;
+        UpdateStartPageVisibility();
+        if (!_showHome)
+        {
+            UpdateToolbarForActive();
+        }
+    }
+
     private void UpdateStartPageVisibility()
     {
         bool hasTabs = Tabs.TabItems.Count > 0;
-        StartPage.Visibility = hasTabs ? Visibility.Collapsed : Visibility.Visible;
-        DocHost.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
+        bool showDocument = hasTabs && !_showHome;
+
+        StartPage.Visibility = showDocument ? Visibility.Collapsed : Visibility.Visible;
+        DocHost.Visibility = showDocument ? Visibility.Visible : Visibility.Collapsed;
         // The document header + zoom pill are meaningless on the start page
-        // (and would show stale page/zoom from the last-closed tab).
-        Toolbar.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
-        ZoomPill.Visibility = hasTabs ? Visibility.Visible : Visibility.Collapsed;
+        // (and would show stale page/zoom from a document you aren't looking at).
+        Toolbar.Visibility = showDocument ? Visibility.Visible : Visibility.Collapsed;
+        ZoomPill.Visibility = showDocument ? Visibility.Visible : Visibility.Collapsed;
         if (!hasTabs)
         {
             Title = "Rune";
@@ -486,8 +562,8 @@ public sealed partial class MainWindow : Window
         _suppressPageBox = false;
     }
 
-    /// <summary>Drawing started — get the pen panel out of the way.</summary>
-    private void Viewer_InkStrokeStarted(object? sender, EventArgs e) => _inkFlyout?.Hide();
+    /// <summary>Drawing started — get the tool's options panel out of the way.</summary>
+    private void Viewer_InkStrokeStarted(object? sender, EventArgs e) => HideToolOptions();
 
     private void Viewer_ZoomChanged(object? sender, double zoom)
     {
@@ -503,9 +579,13 @@ public sealed partial class MainWindow : Window
 
         foreach (var control in new Control[]
                  {
-                     SidebarButton, PageBox, FindButton, InkButton, NightButton,
+                     SidebarButton, PageBox, FindButton, NightButton,
                      ZoomInButton, ZoomOutButton, ZoomLabelButton,
                      FitWidthButton, FitPageButton, RotateLeftButton, RotateRightButton,
+                     // The annotation cluster. A tool button left out of this
+                     // list stays permanently greyed out — nothing else enables it.
+                     PenToolButton, HighlighterToolButton, NoteToolButton,
+                     SignToolButton, EraserToolButton,
                  })
         {
             control.IsEnabled = ready;
@@ -522,8 +602,19 @@ public sealed partial class MainWindow : Window
         if (viewer is null)
         {
             PageCountLabel.Text = "";
+            FlattenMenuItem.IsEnabled = false;
+            SignaturesMenuItem.IsEnabled = false;
             return;
         }
+
+        // Deliberately cheap. Asking the document what it contains would mean
+        // PDFium calls on the UI thread — HasFlattenableContent() alone walks
+        // every page — and this runs on every tab switch. Flatten stays
+        // available and reports "nothing to flatten"; the signature count is
+        // read once at load time (DocumentView.HasSignatures).
+        FlattenMenuItem.IsEnabled = ready;
+        SignaturesMenuItem.IsEnabled = ready && CurrentView?.HasSignatures == true;
+        UpdateDocumentNotice(viewer);
 
         _suppressPageBox = true;
         PageBox.Maximum = viewer.PageCount;
@@ -532,217 +623,62 @@ public sealed partial class MainWindow : Window
         PageCountLabel.Text = $"of {viewer.PageCount}";
         ZoomLabel.Text = $"{Math.Round(viewer.Zoom * 100)}%";
         SidebarButton.IsChecked = view!.IsPaneOpen;
-        InkButton.IsChecked = viewer.IsInkMode;
+        SyncToolButtons(viewer.ActiveTool);
         UpdateFitToggles();
         UpdateUndoMenu();
     }
 
-    private void SetInkMode(bool on)
+    /// <summary>
+    /// Arms a tool (or disarms with <see cref="AnnotationTool.None"/>).
+    ///
+    /// Tools are mutually exclusive, so this is the single place the armed tool
+    /// changes — the buttons are only a reflection of the viewer's state, never
+    /// the source of truth, which is what keeps them correct across tab
+    /// switches.
+    /// </summary>
+    private void SetActiveTool(AnnotationTool tool)
     {
-        if (_activeViewer is not null)
+        if (_activeViewer is null)
         {
-            _activeViewer.IsInkMode = on;
-            InkButton.IsChecked = on;
-            if (!on)
-            {
-                _inkFlyout?.Hide(); // covers Ctrl+E while the panel is open
-            }
+            return;
+        }
+        _activeViewer.ActiveTool = tool;
+        SyncToolButtons(tool);
+        if (tool == AnnotationTool.None)
+        {
+            HideToolOptions(); // covers Esc/Ctrl+E while a panel is open
         }
     }
 
-    private static readonly (string Name, string Hex)[] InkColors =
-    [
-        ("Red", "#E22222"), ("Blue", "#2266DD"), ("Green", "#1E9E4A"), ("Black", "#000000"),
-    ];
-    private static readonly (string Name, double Width)[] InkWidths =
-    [
-        ("Thin", 1.5), ("Medium", 2.5), ("Thick", 4.5),
-    ];
-
-    // Pen options live on the pen button itself. A plain Flyout, not a
-    // MenuFlyout: a MenuFlyout dismisses the moment any item is clicked, and we
-    // want the panel to stay put while the user tries colours and widths.
-    private Flyout? _inkFlyout;
-    private readonly List<(string Hex, Border Check)> _inkColorChecks = [];
-    private readonly List<(double Width, Border Check)> _inkWidthChecks = [];
-    private readonly List<Border> _inkWidthPreviews = [];
-
-    /// <summary>Builds the pen panel once; later calls only move the check marks.</summary>
-    private Flyout BuildInkFlyout()
+    /// <summary>Reflects the armed tool onto the cluster. Never sets it.</summary>
+    private void SyncToolButtons(AnnotationTool tool)
     {
-        var panel = new StackPanel { Spacing = 10, MinWidth = 190 };
-        var caption = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
-
-        panel.Children.Add(new TextBlock { Text = "Pen colour", Style = caption, Opacity = 0.7 });
-
-        var colorRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        foreach (var (name, hex) in InkColors)
-        {
-            // A ring around the swatch marks the selection; white/black inner
-            // stroke keeps it visible on both light and dark swatches.
-            var check = new Border
-            {
-                Width = 12,
-                Height = 12,
-                CornerRadius = new CornerRadius(6),
-                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White),
-                BorderBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Black),
-                BorderThickness = new Thickness(1),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Visibility = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase)
-                    ? Visibility.Visible : Visibility.Collapsed,
-            };
-            // The colour lives in the button's CONTENT, not its Background:
-            // Button's hover/pressed visual states override Background, which
-            // made the swatch turn white under the cursor.
-            var dot = new Border
-            {
-                Width = 26,
-                Height = 26,
-                CornerRadius = new CornerRadius(13),
-                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(hex)),
-                Child = check,
-            };
-            var swatch = new Button
-            {
-                Style = (Style)Application.Current.Resources["InkSwatchButtonStyle"],
-                Content = dot,
-            };
-            ToolTipService.SetToolTip(swatch, name);
-            swatch.Click += (_, _) =>
-            {
-                _state.Settings.InkColor = hex;
-                _store.Save(_state);
-                ApplyInkStyleToAll();
-            };
-            _inkColorChecks.Add((hex, check));
-            colorRow.Children.Add(swatch);
-        }
-        panel.Children.Add(colorRow);
-
-        panel.Children.Add(new TextBlock { Text = "Width", Style = caption, Opacity = 0.7 });
-
-        var widthRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        foreach (var (name, width) in InkWidths)
-        {
-            // Show the actual stroke thickness, in the actual pen colour.
-            // (Don't reach into Application.Current.Resources for a theme brush
-            // here: that returns the dark-theme value regardless of the active
-            // theme, which rendered these white-on-white in light mode.)
-            var preview = new Border
-            {
-                Width = 30,
-                Height = width * 2,
-                CornerRadius = new CornerRadius(width),
-                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(_state.Settings.InkColor)),
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            _inkWidthPreviews.Add(preview);
-            var check = new Border
-            {
-                Height = 2,
-                Width = 18,
-                CornerRadius = new CornerRadius(1),
-                Margin = new Thickness(0, 0, 0, 3),
-                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
-                    new Windows.UI.ViewManagement.UISettings().GetColorValue(
-                        Windows.UI.ViewManagement.UIColorType.Accent)),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                Visibility = Math.Abs(_state.Settings.InkWidth - width) < 0.01
-                    ? Visibility.Visible : Visibility.Collapsed,
-            };
-            // Fixed height: without it the Grid shrinks to the preview line, so
-            // the bottom-aligned selection bar would land on top of it.
-            var cell = new Grid { Height = 30 };
-            cell.Children.Add(preview);
-            cell.Children.Add(check);
-
-            var button = new Button
-            {
-                Style = (Style)Application.Current.Resources["InkWidthButtonStyle"],
-                Content = cell,
-            };
-            ToolTipService.SetToolTip(button, name);
-            button.Click += (_, _) =>
-            {
-                _state.Settings.InkWidth = width;
-                _store.Save(_state);
-                ApplyInkStyleToAll();
-            };
-            _inkWidthChecks.Add((width, check));
-            widthRow.Children.Add(button);
-        }
-        panel.Children.Add(widthRow);
-
-        panel.Children.Add(new Border
-        {
-            Height = 1,
-            Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
-        });
-
-        var stop = new Button
-        {
-            Content = "Stop drawing",
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-        };
-        ToolTipService.SetToolTip(stop, "Ctrl+E");
-        stop.Click += (_, _) =>
-        {
-            SetInkMode(false);
-            _inkFlyout?.Hide();
-        };
-        panel.Children.Add(stop);
-
-        return new Flyout
-        {
-            Content = panel,
-            Placement = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode.Bottom,
-        };
+        PenToolButton.IsChecked = tool == AnnotationTool.Pen;
+        HighlighterToolButton.IsChecked = tool == AnnotationTool.Highlighter;
+        NoteToolButton.IsChecked = tool == AnnotationTool.Note;
+        SignToolButton.IsChecked = tool == AnnotationTool.Signature;
+        EraserToolButton.IsChecked = tool == AnnotationTool.Eraser;
     }
-
-    /// <summary>Opens the pen panel anchored under the pen button.</summary>
-    private void ShowInkOptions()
-    {
-        _inkFlyout ??= BuildInkFlyout();
-        _inkFlyout.ShowAt(InkButton);
-    }
-
-    private bool IsInkFlyoutOpen => _inkFlyout?.IsOpen == true;
 
     /// <summary>
-    /// Moves the check marks to match the current settings. Deliberately NOT a
-    /// rebuild: replacing the visual tree of an open flyout closes it.
+    /// A tool button arms its tool and shows its options. Clicking the armed
+    /// tool again just re-opens the panel rather than disarming — matching the
+    /// old pen button, where accidentally turning drawing off mid-session was
+    /// the more annoying failure. Esc disarms.
     /// </summary>
-    private void RefreshInkFlyoutChecks()
+    private void ToolButton_Click(AnnotationTool tool)
     {
-        foreach (var (hex, check) in _inkColorChecks)
-        {
-            check.Visibility = string.Equals(_state.Settings.InkColor, hex, StringComparison.OrdinalIgnoreCase)
-                ? Visibility.Visible : Visibility.Collapsed;
-        }
-        foreach (var (width, check) in _inkWidthChecks)
-        {
-            check.Visibility = Math.Abs(_state.Settings.InkWidth - width) < 0.01
-                ? Visibility.Visible : Visibility.Collapsed;
-        }
-        // Width previews follow the chosen colour.
-        var inkBrush = new Microsoft.UI.Xaml.Media.SolidColorBrush(HexToColor(_state.Settings.InkColor));
-        foreach (var preview in _inkWidthPreviews)
-        {
-            preview.Background = inkBrush;
-        }
+        SetActiveTool(tool);
+        ShowToolOptions(tool);
     }
 
-    private void ApplyInkStyleToAll()
-    {
-        foreach (var view in AllDocumentViews())
-        {
-            view.Viewer.SetInkStyle(_state.Settings.InkColor, _state.Settings.InkWidth);
-        }
-        RefreshInkFlyoutChecks();
-    }
+    private void PenToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Pen);
+    private void HighlighterToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Highlighter);
+    private void NoteToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Note);
+    private void SignToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Signature);
+    private void EraserToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Eraser);
+
+    // The per-tool options panels live in MainWindow.Tools.cs.
 
     private static Color HexToColor(string hex)
     {
@@ -789,20 +725,6 @@ public sealed partial class MainWindow : Window
     private void SaveAsButton_Click(object sender, RoutedEventArgs e) => _ = SaveAsActiveAsync();
     private void PropertiesButton_Click(object sender, RoutedEventArgs e) => _ = ShowPropertiesAsync();
     private void UpdatesButton_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
-    /// <summary>
-    /// The pen button turns drawing ON and shows the options; it never turns it
-    /// off, so clicking it again just brings the panel back. Stop drawing via
-    /// Esc, Ctrl+E, or the panel's own button.
-    ///
-    /// (A ToggleButton flips IsChecked before Click fires, so a click while ink
-    /// is already on would momentarily uncheck it — SetInkMode(true) puts it
-    /// back within the same synchronous handler, so no wrong frame is drawn.)
-    /// </summary>
-    private void InkButton_Click(object sender, RoutedEventArgs e)
-    {
-        SetInkMode(true);
-        ShowInkOptions();
-    }
     private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
     private void PresentMenuItem_Click(object sender, RoutedEventArgs e) => TogglePresentation();
     private void UndoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.UndoAsync();
@@ -1006,7 +928,11 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            await Task.Run(() => document.SaveAs(file.Path));
+            await view.Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Interactive, () =>
+            {
+                document.SaveAs(file.Path);
+                return true;
+            });
             OpenOrActivate(file.Path);
         }
         catch (Exception ex)
@@ -1050,7 +976,7 @@ public sealed partial class MainWindow : Window
         try
         {
             _printService ??= new PrintService(WinRT.Interop.WindowNative.GetWindowHandle(this));
-            await _printService.ShowAsync(document, $"{view.DisplayName} — Rune");
+            await _printService.ShowAsync(document, $"{view.DisplayName} — Rune", view.Viewer.WorkQueue);
         }
         catch (Exception ex)
         {
@@ -1065,7 +991,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var properties = await Task.Run(document.GetProperties);
+        var properties = await view.Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Interactive, document.GetProperties);
 
         var panel = new StackPanel { Spacing = 6, MinWidth = 360 };
         foreach (var (name, value) in properties)
@@ -1189,7 +1115,10 @@ public sealed partial class MainWindow : Window
 
         var strongStyle = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"];
         var captionStyle = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
-        var keyBackground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["ControlFillColorDefaultBrush"];
+        // Styles, not brushes: resolving a theme brush here would hand light
+        // mode the dark-theme fill (PROJECT.md §7).
+        var keyChipStyle = (Style)Application.Current.Resources["ShortcutKeyChipStyle"];
+        var secondaryTextStyle = (Style)Application.Current.Resources["SecondaryTextStyle"];
 
         // Flow groups into whichever column is currently shorter.
         var weight = new int[2];
@@ -1207,15 +1136,13 @@ public sealed partial class MainWindow : Window
                 var name = new TextBlock
                 {
                     Text = shortcut.Name,
-                    Opacity = 0.85,
+                    Style = secondaryTextStyle,
                     VerticalAlignment = VerticalAlignment.Center,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                 };
                 var keys = new Border
                 {
-                    Background = keyBackground,
-                    CornerRadius = new CornerRadius(4),
-                    Padding = new Thickness(7, 3, 7, 3),
+                    Style = keyChipStyle,
                     VerticalAlignment = VerticalAlignment.Center,
                     Child = new TextBlock { Text = shortcut.Keys, Style = captionStyle },
                 };
@@ -1395,7 +1322,9 @@ public sealed partial class MainWindow : Window
             [
                 new("Find in document", "Ctrl+F", ShowFindBar),
                 new("Highlight selection", "Ctrl+H", () => viewer.MarkupSelection(MarkupKind.Highlight)),
-                new("Draw (toggle pen)", "Ctrl+E", () => SetInkMode(!viewer.IsInkMode)),
+                new("Draw (toggle pen)", "Ctrl+E", TogglePenTool),
+                new("Highlighter tool", "", () => SetActiveTool(AnnotationTool.Highlighter)),
+                new("Eraser tool", "", () => SetActiveTool(AnnotationTool.Eraser)),
                 new("Save", "Ctrl+S", () => _ = SaveActiveAsync()),
                 new("Save As…", "Ctrl+Shift+S", () => _ = SaveAsActiveAsync()),
                 new("Print", "Ctrl+P", () => _ = PrintAsync()),
@@ -1555,7 +1484,7 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.P, VirtualKeyModifiers.Control, () => _ = PrintAsync());
         AddAccelerator(VirtualKey.D, VirtualKeyModifiers.Control, () => _ = ShowPropertiesAsync());
         AddAccelerator(VirtualKey.H, VirtualKeyModifiers.Control, () => _activeViewer?.MarkupSelection(MarkupKind.Highlight));
-        AddAccelerator(VirtualKey.E, VirtualKeyModifiers.Control, () => SetInkMode(!(_activeViewer?.IsInkMode ?? false)));
+        AddAccelerator(VirtualKey.E, VirtualKeyModifiers.Control, TogglePenTool);
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control, () => _ = SaveActiveAsync());
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => _ = SaveAsActiveAsync());
 
@@ -1587,17 +1516,22 @@ public sealed partial class MainWindow : Window
             {
                 Palette.Hide();
             }
-            else if (IsInkFlyoutOpen)
+            else if (IsToolOptionsOpen)
             {
-                _inkFlyout?.Hide(); // close the panel but keep drawing
+                HideToolOptions(); // close the panel but keep the tool armed
             }
             else if (FindBar.Visibility == Visibility.Visible)
             {
                 HideFindBar();
             }
-            else if (_activeViewer?.IsInkMode == true)
+            else if (_activeViewer?.CancelSignaturePlacement() == true)
             {
-                SetInkMode(false); // finally, leave drawing mode
+                // Abandon a half-drawn placement before disarming the tool.
+            }
+            else if (_activeViewer?.ActiveTool is not (null or AnnotationTool.None))
+            {
+                _activeViewer?.ClearPendingSignature();
+                SetActiveTool(AnnotationTool.None); // finally, put the tool away
             }
         }, requiresDocument: false);
 
@@ -1629,8 +1563,19 @@ public sealed partial class MainWindow : Window
         ((UIElement)Content).KeyboardAccelerators.Add(accelerator);
     }
 
+    /// <summary>
+    /// True when keystrokes belong to something that is taking text, so the
+    /// document's own navigation must stand down.
+    ///
+    /// A focused PDF form field counts: it is a text input that happens to be
+    /// drawn by PDFium rather than by XAML, so without this arrows would scroll
+    /// the page instead of moving the caret, and Backspace would do nothing.
+    /// Every keyboard path (accelerators, vim keys, the tunneling navigation
+    /// handler) gates on this one predicate.
+    /// </summary>
     private bool IsTextInputFocused() =>
-        FocusManager.GetFocusedElement(Content.XamlRoot) is TextBox or NumberBox or AutoSuggestBox or PasswordBox;
+        FocusManager.GetFocusedElement(Content.XamlRoot) is TextBox or NumberBox or AutoSuggestBox or PasswordBox
+        || _activeViewer?.IsFormFieldFocused == true;
 
     // ---------------------------------------------------------------- vim-style keys
 
@@ -1982,11 +1927,193 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void ShowError(string message)
+    // ---------------------------------------------------------------- forms / flatten / signatures
+
+    /// <summary>
+    /// Shows a standing notice for things the user needs to know about the
+    /// document itself: an XFA form Rune cannot fill, or the presence of
+    /// digital signatures.
+    /// </summary>
+    private void UpdateDocumentNotice(PdfViewer viewer)
     {
-        ErrorBar.Message = message;
-        ErrorBar.IsOpen = true;
+        if (CurrentView is not { } view)
+        {
+            return;
+        }
+
+        // Both notices describe a property of the document, not an event, so
+        // they carry a dismiss key: this method runs again on every tab load,
+        // page edit and flatten, and without one a notice the user closed would
+        // immediately reappear.
+        if (viewer.IsXfaForm)
+        {
+            // Saying nothing here is the worst option: the fields are visible,
+            // so the user types into them and nothing happens.
+            view.ShowNotice(
+                "XFA form",
+                "This document uses an XFA form, which Rune cannot fill. Adobe Acrobat can open it.",
+                InfoBarSeverity.Warning,
+                dismissKey: "xfa");
+            return;
+        }
+
+        int signatures = view.SignatureCount;
+        if (signatures > 0)
+        {
+            view.ShowNotice(
+                signatures == 1 ? "Digitally signed" : $"{signatures} digital signatures",
+                "Rune does not verify signatures. Open Signature details to see what it can read.",
+                InfoBarSeverity.Informational,
+                dismissKey: "signatures");
+        }
     }
+
+    private async void FlattenMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentView is not { IsDocumentLoaded: true, LoadError: null } view || view.Viewer.Document is not { } document)
+        {
+            return;
+        }
+
+        // Flatten is irreversible in the file and clears the undo history, so
+        // it always asks — and says plainly what will be lost.
+        var confirm = new ContentDialog
+        {
+            Title = "Flatten annotations?",
+            Content = "Highlights, notes, ink and filled form fields become part of the page. "
+                    + "They can no longer be edited, moved or deleted, and this cannot be undone.\n\n"
+                    + "The change is not written to disk until you save.",
+            PrimaryButtonText = "Flatten",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await ShowDialogAsync(confirm) != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        try
+        {
+            view.Viewer.KillFormFocus();
+            int changed = await view.FlattenDocumentAsync();
+            UpdateToolbarForActive(); // flatten removes what made the item enabled
+            // Not ShowError: this succeeded. Reporting it through the error
+            // channel gave it a red bar, an error icon and error semantics for
+            // screen readers.
+            ShowNotice(
+                changed == 0
+                    ? "Nothing to flatten."
+                    : $"Flattened {changed} page{(changed == 1 ? "" : "s")}. Save to write the change to disk.",
+                changed == 0 ? InfoBarSeverity.Informational : InfoBarSeverity.Success);
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Flatten failed: {ex.Message}");
+        }
+    }
+
+    private async void SignaturesMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (CurrentView is not { IsDocumentLoaded: true, LoadError: null } view || view.Viewer.Document is not { } document)
+        {
+            return;
+        }
+
+        IReadOnlyList<PdfSignatureInfo> signatures;
+        try
+        {
+            signatures = await view.Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Interactive, document.GetSignatures);
+        }
+        catch (Exception ex)
+        {
+            ShowError($"Could not read signatures: {ex.Message}");
+            return;
+        }
+
+        var panel = new StackPanel { Spacing = 12, MinWidth = 420 };
+
+        // This disclaimer is load-bearing, not boilerplate. Rune ships no
+        // cryptography: it has not checked the certificate, the digest, trust
+        // or revocation. Presenting any of the fields below as proof of
+        // authenticity would mislead someone about a document they may be
+        // relying on, so the limitation goes first and is never softened.
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Rune reports what the document claims. It does not verify signatures — "
+                 + "the certificate, the signer's identity and revocation status are all unchecked. "
+                 + "Use Adobe Acrobat or a dedicated validator to confirm a signature is genuine.",
+            Style = (Style)Application.Current.Resources["CautionTextStyle"],
+        });
+
+        foreach (var signature in signatures)
+        {
+            panel.Children.Add(new Border { Style = (Style)Application.Current.Resources["FlyoutSeparatorStyle"] });
+
+            var rows = new StackPanel { Spacing = 4 };
+            rows.Children.Add(new TextBlock
+            {
+                Text = $"Signature {signature.Index + 1}",
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+
+            AddSignatureRow(rows, "Reason", string.IsNullOrWhiteSpace(signature.Reason) ? "—" : signature.Reason);
+            AddSignatureRow(rows, "Signed", signature.SignedAt?.ToString("f") ?? (string.IsNullOrWhiteSpace(signature.SignedAtRaw) ? "—" : signature.SignedAtRaw));
+            AddSignatureRow(rows, "Format", string.IsNullOrWhiteSpace(signature.SubFilter) ? "—" : signature.SubFilter);
+            AddSignatureRow(rows, "Coverage", signature.Coverage switch
+            {
+                SignatureCoverage.CoversWholeFile => "Signed byte range covers the whole file",
+                SignatureCoverage.LeavesContentUnsigned => "Part of this file is outside the signed range — it was changed or added after signing",
+                _ => "Could not read the signed byte range",
+            });
+            if (signature.IsCertifying)
+            {
+                AddSignatureRow(rows, "Certified", $"Author signature, DocMDP level {signature.DocMdpPermission}");
+            }
+
+            panel.Children.Add(rows);
+        }
+
+        await ShowDialogAsync(new ContentDialog
+        {
+            Title = signatures.Count == 1 ? "Signature details" : $"Signature details ({signatures.Count})",
+            Content = new ScrollViewer { Content = panel, MaxHeight = 460 },
+            CloseButtonText = "Close",
+        });
+    }
+
+    private static void AddSignatureRow(Panel parent, string label, string value)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        row.Children.Add(new TextBlock
+        {
+            Text = label,
+            Width = 90,
+            Style = (Style)Application.Current.Resources["SecondaryTextStyle"],
+        });
+        row.Children.Add(new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap, MaxWidth = 320 });
+        parent.Children.Add(row);
+    }
+
+    /// <summary>
+    /// The app's single notice channel.
+    ///
+    /// Routes to the active document's own notice host so the card floats over
+    /// the page rather than across the sidebar; falls back to the window-level
+    /// host for messages that arrive with no document open (startup problems,
+    /// a missing recent file, background failures).
+    /// </summary>
+    private void ShowNotice(string message, InfoBarSeverity severity, string? title = null, string? dismissKey = null)
+    {
+        if (CurrentView is { IsDocumentLoaded: true, LoadError: null } view)
+        {
+            WindowNotice.Clear();
+            view.ShowNotice(title, message, severity, dismissKey);
+            return;
+        }
+        WindowNotice.Show(title, message, severity, dismissKey);
+    }
+
+    private void ShowError(string message) => ShowNotice(message, InfoBarSeverity.Error);
 
     /// <summary>Surfaces a background/unhandled failure (called by App's safety net).</summary>
     internal void ReportBackgroundError(string message) =>
@@ -1994,12 +2121,18 @@ public sealed partial class MainWindow : Window
 
     /// <summary>
     /// Shows a dialog through <see cref="DialogHost"/> so two can never overlap,
-    /// filling in XamlRoot centrally. Every ContentDialog in this window goes
-    /// through here.
+    /// filling in XamlRoot and theme centrally. Every ContentDialog in this
+    /// window goes through here.
     /// </summary>
     private Task<ContentDialogResult> ShowDialogAsync(ContentDialog dialog)
     {
         dialog.XamlRoot ??= Content.XamlRoot;
+        // A ContentDialog is hosted in a popup outside the content tree, so it
+        // does NOT inherit the theme ApplyTheme sets on Window.Content — it
+        // follows the OS instead. Without this, choosing Light in Rune on a
+        // dark-mode Windows gives a dark dialog over a light app. Same class of
+        // bug as the caption buttons.
+        dialog.RequestedTheme = ((FrameworkElement)Content).ActualTheme;
         return DialogHost.ShowAsync(dialog);
     }
 }

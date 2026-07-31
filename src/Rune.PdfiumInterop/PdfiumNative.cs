@@ -19,6 +19,11 @@ public static class PdfiumNative
     public const int AnnotUnderline = NativeMethods.FPDF_ANNOT_SUBTYPE_UNDERLINE;
     public const int AnnotStrikeout = NativeMethods.FPDF_ANNOT_SUBTYPE_STRIKEOUT;
     public const int AnnotInk = NativeMethods.FPDF_ANNOT_SUBTYPE_INK;
+    public const int AnnotStamp = NativeMethods.FPDF_ANNOT_SUBTYPE_STAMP;
+    public const int AnnotWidget = NativeMethods.FPDF_ANNOT_SUBTYPE_WIDGET;
+
+    public const int FormFlagReadOnly = NativeMethods.FPDF_FORMFLAG_READONLY;
+    public const int FormFlagRequired = NativeMethods.FPDF_FORMFLAG_REQUIRED;
 
     /// <summary>Adds one freehand stroke to an ink annotation. Points are in PDF page space (bottom-left origin).</summary>
     public static bool AddInkStroke(IntPtr annot, (float X, float Y)[] points)
@@ -245,11 +250,18 @@ public static class PdfiumNative
     /// The page is laid out at (fullWidth × fullHeight) pixels after rotation,
     /// and the (srcX, srcY, width, height) window of that layout is written to
     /// the buffer — this is how tiles are rendered (negative start offsets).
+    ///
+    /// <paramref name="formHandle"/>, when non-zero, adds a second pass that
+    /// draws interactive form widgets over the page. This is the single choke
+    /// point every consumer funnels through — viewer tiles, sidebar thumbnails,
+    /// the homepage cache, presentation mode and print — so form fields either
+    /// appear everywhere or nowhere.
     /// </summary>
     public static unsafe void RenderRegionToBuffer(
         IntPtr page, byte[] pixels,
         int srcX, int srcY, int width, int height,
-        int fullWidth, int fullHeight, int rotation, int stride)
+        int fullWidth, int fullHeight, int rotation, int stride,
+        IntPtr formHandle = default)
     {
         fixed (byte* p = pixels)
         {
@@ -264,6 +276,14 @@ public static class PdfiumNative
                 // Opaque white page background, then the page content on top.
                 NativeMethods.FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0xFFFFFFFF);
                 NativeMethods.FPDF_RenderPageBitmap(bitmap, page, -srcX, -srcY, fullWidth, fullHeight, rotation, NativeMethods.FPDF_ANNOT);
+
+                // Widgets are drawn by the form environment, not by the page
+                // render: FPDF_ANNOT only paints appearance streams the file
+                // already carries, so a freshly typed value would be invisible.
+                if (formHandle != IntPtr.Zero)
+                {
+                    NativeMethods.FPDF_FFLDraw(formHandle, bitmap, page, -srcX, -srcY, fullWidth, fullHeight, rotation, NativeMethods.FPDF_ANNOT);
+                }
             }
             finally
             {
@@ -415,11 +435,206 @@ public static class PdfiumNative
     public static int TextSchCount(IntPtr handle) => NativeMethods.FPDFText_GetSchCount(handle);
     public static void TextFindClose(IntPtr handle) => NativeMethods.FPDFText_FindClose(handle);
 
-    /// <summary>Maps a top-left-origin page-point (1 unit = 1 pt) to page space (bottom-left origin).</summary>
-    public static (double X, double Y) DeviceToPage(IntPtr page, int sizeX, int sizeY, int deviceX, int deviceY)
+    /// <summary>
+    /// Maps a top-left-origin page-point (1 unit = 1 pt) to page space
+    /// (bottom-left origin) — the inverse of <see cref="PageToDevice"/>.
+    ///
+    /// <paramref name="rotation"/> is quarter-turns clockwise and must match
+    /// the one used on the way in, or the result is off by a whole page
+    /// dimension. Note that <paramref name="sizeX"/>/<paramref name="sizeY"/>
+    /// are the dimensions of the *rotated* surface, so callers passing a
+    /// rotation of 1 or 3 must swap them.
+    /// </summary>
+    public static (double X, double Y) DeviceToPage(IntPtr page, int sizeX, int sizeY, int deviceX, int deviceY, int rotation = 0)
     {
-        NativeMethods.FPDF_DeviceToPage(page, 0, 0, sizeX, sizeY, 0, deviceX, deviceY, out double px, out double py);
+        NativeMethods.FPDF_DeviceToPage(page, 0, 0, sizeX, sizeY, rotation, deviceX, deviceY, out double px, out double py);
         return (px, py);
+    }
+
+    // ---- Interactive forms ----
+
+    // The form-fill environment itself is owned by PdfiumFormEnvironment, which
+    // handles the struct and delegate lifetimes PDFium requires.
+
+    public static int GetFormType(IntPtr document) => NativeMethods.FPDF_GetFormType(document);
+
+    public static void FormOnAfterLoadPage(IntPtr page, IntPtr formHandle) => NativeMethods.FORM_OnAfterLoadPage(page, formHandle);
+
+    public static void FormOnBeforeClosePage(IntPtr page, IntPtr formHandle) => NativeMethods.FORM_OnBeforeClosePage(page, formHandle);
+
+    public static void FormDoDocumentOpenAction(IntPtr formHandle) => NativeMethods.FORM_DoDocumentOpenAction(formHandle);
+
+    public static bool FormOnLButtonDown(IntPtr formHandle, IntPtr page, double pageX, double pageY, int modifier = 0)
+        => NativeMethods.FORM_OnLButtonDown(formHandle, page, modifier, pageX, pageY) != 0;
+
+    public static bool FormOnLButtonUp(IntPtr formHandle, IntPtr page, double pageX, double pageY, int modifier = 0)
+        => NativeMethods.FORM_OnLButtonUp(formHandle, page, modifier, pageX, pageY) != 0;
+
+    public static bool FormOnMouseMove(IntPtr formHandle, IntPtr page, double pageX, double pageY, int modifier = 0)
+        => NativeMethods.FORM_OnMouseMove(formHandle, page, modifier, pageX, pageY) != 0;
+
+    public static bool FormOnChar(IntPtr formHandle, IntPtr page, int charCode, int modifier = 0)
+        => NativeMethods.FORM_OnChar(formHandle, page, charCode, modifier) != 0;
+
+    public static bool FormOnKeyDown(IntPtr formHandle, IntPtr page, int keyCode, int modifier = 0)
+        => NativeMethods.FORM_OnKeyDown(formHandle, page, keyCode, modifier) != 0;
+
+    /// <summary>Commits the focused field's pending edit. Required before saving.</summary>
+    public static bool FormKillFocus(IntPtr formHandle) => NativeMethods.FORM_ForceToKillFocus(formHandle) != 0;
+
+    public static bool FormSetIndexSelected(IntPtr formHandle, IntPtr page, int index, bool selected)
+        => NativeMethods.FORM_SetIndexSelected(formHandle, page, index, selected ? 1 : 0) != 0;
+
+    public static void SetFormFieldHighlight(IntPtr formHandle, uint rgb, byte alpha)
+    {
+        NativeMethods.FPDF_SetFormFieldHighlightColor(formHandle, 0, rgb);
+        NativeMethods.FPDF_SetFormFieldHighlightAlpha(formHandle, alpha);
+    }
+
+    /// <summary>The widget annotation at a page-space point, or Zero. Caller must CloseAnnot it.</summary>
+    public static IntPtr GetFormFieldAtPoint(IntPtr formHandle, IntPtr page, float pageX, float pageY)
+    {
+        var point = new NativeMethods.FS_POINTF { X = pageX, Y = pageY };
+        return NativeMethods.FPDFAnnot_GetFormFieldAtPoint(formHandle, page, ref point);
+    }
+
+    public static int GetFormFieldType(IntPtr formHandle, IntPtr annot) => NativeMethods.FPDFAnnot_GetFormFieldType(formHandle, annot);
+
+    public static int GetFormFieldFlags(IntPtr formHandle, IntPtr annot) => NativeMethods.FPDFAnnot_GetFormFieldFlags(formHandle, annot);
+
+    public static bool IsFormFieldChecked(IntPtr formHandle, IntPtr annot) => NativeMethods.FPDFAnnot_IsChecked(formHandle, annot) != 0;
+
+    public static string GetFormFieldName(IntPtr formHandle, IntPtr annot)
+        => ReadUtf16(NativeMethods.FPDFAnnot_GetFormFieldName(formHandle, annot, null, 0),
+                     buffer => NativeMethods.FPDFAnnot_GetFormFieldName(formHandle, annot, buffer, (uint)buffer.Length));
+
+    public static string GetFormFieldValue(IntPtr formHandle, IntPtr annot)
+        => ReadUtf16(NativeMethods.FPDFAnnot_GetFormFieldValue(formHandle, annot, null, 0),
+                     buffer => NativeMethods.FPDFAnnot_GetFormFieldValue(formHandle, annot, buffer, (uint)buffer.Length));
+
+    public static int GetFormOptionCount(IntPtr formHandle, IntPtr annot) => NativeMethods.FPDFAnnot_GetOptionCount(formHandle, annot);
+
+    public static string GetFormOptionLabel(IntPtr formHandle, IntPtr annot, int index)
+        => ReadUtf16(NativeMethods.FPDFAnnot_GetOptionLabel(formHandle, annot, index, null, 0),
+                     buffer => NativeMethods.FPDFAnnot_GetOptionLabel(formHandle, annot, index, buffer, (uint)buffer.Length));
+
+    // ---- Image stamping (fpdf_edit.h) ----
+
+    public static IntPtr NewImageObject(IntPtr document) => NativeMethods.FPDFPageObj_NewImageObj(document);
+
+    public static void DestroyPageObject(IntPtr pageObject) => NativeMethods.FPDFPageObj_Destroy(pageObject);
+
+    public static void TransformPageObject(IntPtr pageObject, double a, double b, double c, double d, double e, double f)
+        => NativeMethods.FPDFPageObj_Transform(pageObject, a, b, c, d, e, f);
+
+    public static void InsertPageObject(IntPtr page, IntPtr pageObject) => NativeMethods.FPDFPage_InsertObject(page, pageObject);
+
+    /// <summary>Required after any page-content edit, or the change is not serialized.</summary>
+    public static bool GenerateContent(IntPtr page) => NativeMethods.FPDFPage_GenerateContent(page) != 0;
+
+    public static bool AppendAnnotObject(IntPtr annot, IntPtr pageObject)
+        => NativeMethods.FPDFAnnot_AppendObject(annot, pageObject) != 0;
+
+    /// <summary>
+    /// Points an image object at BGRA pixels.
+    ///
+    /// The buffer must stay pinned for the duration of the call — PDFium copies
+    /// out of it here, but the FPDF_BITMAP wraps it directly. Uses
+    /// FPDFBitmap_CreateEx (the same primitive the renderer uses, just in
+    /// reverse) because FPDFBitmap_GetBuffer isn't bound, which would leave a
+    /// bitmap from FPDFBitmap_Create impossible to fill.
+    /// </summary>
+    public static unsafe bool SetImageObjectBitmap(IntPtr page, IntPtr imageObject, byte[] bgra, int width, int height)
+    {
+        fixed (byte* p = bgra)
+        {
+            IntPtr bitmap = NativeMethods.FPDFBitmap_CreateEx(
+                width, height, NativeMethods.FPDFBitmap_BGRA, (IntPtr)p, width * 4);
+            if (bitmap == IntPtr.Zero)
+            {
+                return false;
+            }
+            try
+            {
+                // Takes an ARRAY of pages, not a page — the image may be shared
+                // by several. Passing a bare handle compiles and corrupts memory.
+                IntPtr[] pages = [page];
+                return NativeMethods.FPDFImageObj_SetBitmap(pages, 1, imageObject, bitmap) != 0;
+            }
+            finally
+            {
+                NativeMethods.FPDFBitmap_Destroy(bitmap);
+            }
+        }
+    }
+
+    // ---- Flatten ----
+
+    /// <summary>Bakes annotations and form widgets into page content. Returns an FLATTEN_* code.</summary>
+    public static int FlattenPage(IntPtr page, bool forPrint = false)
+        => NativeMethods.FPDFPage_Flatten(page, forPrint ? NativeMethods.FLAT_PRINT : NativeMethods.FLAT_NORMALDISPLAY);
+
+    public const int FlattenFail = NativeMethods.FLATTEN_FAIL;
+    public const int FlattenSuccess = NativeMethods.FLATTEN_SUCCESS;
+    public const int FlattenNothingToDo = NativeMethods.FLATTEN_NOTHINGTODO;
+
+    // ---- Digital signatures (read-only reporting; PDFium does not validate) ----
+
+    public static int GetSignatureCount(IntPtr document) => NativeMethods.FPDF_GetSignatureCount(document);
+
+    public static IntPtr GetSignatureObject(IntPtr document, int index) => NativeMethods.FPDF_GetSignatureObject(document, index);
+
+    /// <summary>The /ByteRange array, normally 4 ints. Empty when absent or malformed.</summary>
+    public static int[] GetSignatureByteRange(IntPtr signature)
+    {
+        uint count = NativeMethods.FPDFSignatureObj_GetByteRange(signature, null, 0);
+        if (count == 0)
+        {
+            return [];
+        }
+        var buffer = new int[count];
+        uint written = NativeMethods.FPDFSignatureObj_GetByteRange(signature, buffer, count);
+        return written == count ? buffer : [];
+    }
+
+    /// <summary>Length of the raw PKCS#7 blob. Rune reports its size but cannot verify it.</summary>
+    public static int GetSignatureContentsLength(IntPtr signature)
+        => (int)NativeMethods.FPDFSignatureObj_GetContents(signature, null, 0);
+
+    /// <summary>ASCII, per fpdf_signature.h — decoding this as UTF-16 yields mojibake.</summary>
+    public static string GetSignatureSubFilter(IntPtr signature)
+        => ReadAscii(NativeMethods.FPDFSignatureObj_GetSubFilter(signature, null, 0),
+                     buffer => NativeMethods.FPDFSignatureObj_GetSubFilter(signature, buffer, (uint)buffer.Length));
+
+    /// <summary>ASCII PDF date string.</summary>
+    public static string GetSignatureTime(IntPtr signature)
+        => ReadAscii(NativeMethods.FPDFSignatureObj_GetTime(signature, null, 0),
+                     buffer => NativeMethods.FPDFSignatureObj_GetTime(signature, buffer, (uint)buffer.Length));
+
+    /// <summary>UTF-16LE, unlike SubFilter and Time.</summary>
+    public static string GetSignatureReason(IntPtr signature)
+        => ReadUtf16(NativeMethods.FPDFSignatureObj_GetReason(signature, null, 0),
+                     buffer => NativeMethods.FPDFSignatureObj_GetReason(signature, buffer, (uint)buffer.Length));
+
+    /// <summary>DocMDP level 1–3, or 0 when the signature carries no DocMDP transform.</summary>
+    public static uint GetSignatureDocMdpPermission(IntPtr signature)
+        => NativeMethods.FPDFSignatureObj_GetDocMDPPermission(signature);
+
+    private static string ReadAscii(uint bytes, Func<byte[], uint> fill)
+    {
+        if (bytes == 0)
+        {
+            return string.Empty;
+        }
+        var buffer = new byte[bytes];
+        uint written = fill(buffer);
+        int length = (int)Math.Min(written, bytes);
+        // These APIs do not NUL-terminate consistently; trim if one is present.
+        while (length > 0 && buffer[length - 1] == 0)
+        {
+            length--;
+        }
+        return System.Text.Encoding.ASCII.GetString(buffer, 0, length);
     }
 
     private static string ReadUtf16(uint bytes, Func<byte[], uint> fill)

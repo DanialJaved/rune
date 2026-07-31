@@ -41,20 +41,35 @@
                                 <!-- Height follows the page's own aspect ratio (see
                                      ThumbnailItem.BoxHeight), so landscape and 4:3
                                      slides aren't letterboxed in a portrait box. -->
-                                <Border
-                                    BorderThickness="1"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    CornerRadius="4"
-                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                <!-- Two layers. The card Border's opaque background
+                                     paints ON TOP of the ListViewItem's selection
+                                     tint, which is why the current page was nearly
+                                     invisible in light theme; so the ring is drawn
+                                     as an overlay that owes nothing to the container.
+                                     Only its thickness is bound — the accent brush
+                                     stays here as a ThemeResource so it resolves
+                                     against the live theme. -->
+                                <Grid
                                     Width="{StaticResource SidebarThumbWidth}"
                                     Height="{x:Bind BoxHeight, Mode=OneWay}">
-                                    <Image Source="{x:Bind Image, Mode=OneWay}" Stretch="Uniform" />
-                                </Border>
+                                    <Border
+                                        BorderThickness="1"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        CornerRadius="4"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                                        <Image Source="{x:Bind Image, Mode=OneWay}" Stretch="Uniform" />
+                                    </Border>
+                                    <Border
+                                        BorderThickness="{x:Bind RingThickness, Mode=OneWay}"
+                                        BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                                        CornerRadius="4"
+                                        IsHitTestVisible="False" />
+                                </Grid>
                                 <TextBlock
                                     Text="{x:Bind Label}"
                                     HorizontalAlignment="Center"
                                     Style="{StaticResource CaptionTextBlockStyle}"
-                                    Opacity="0.7" />
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </StackPanel>
                         </DataTemplate>
                     </ListView.ItemTemplate>
@@ -86,7 +101,7 @@
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                     Style="{StaticResource CaptionTextBlockStyle}"
-                    Opacity="0.5" />
+                    Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
 
                 <!-- Bookmarks pane (user bookmarks; persisted via the shell) -->
                 <ListView
@@ -102,10 +117,10 @@
                     <ListView.ItemTemplate>
                         <DataTemplate x:DataType="controls:BookmarkItem">
                             <StackPanel Orientation="Horizontal" Spacing="10" Padding="4,6">
-                                <FontIcon Glyph="&#xE8A4;" FontSize="14" Opacity="0.6" VerticalAlignment="Center" />
+                                <FontIcon Glyph="&#xE8A4;" FontSize="14" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
                                 <StackPanel>
                                     <TextBlock Text="{x:Bind Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{x:Bind PageLabel, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.5" />
+                                    <TextBlock Text="{x:Bind PageLabel, Mode=OneWay}" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                                 </StackPanel>
                             </StackPanel>
                         </DataTemplate>
@@ -122,12 +137,12 @@
                         Text="No bookmarks yet"
                         HorizontalAlignment="Center"
                         Style="{StaticResource CaptionTextBlockStyle}"
-                        Opacity="0.5" />
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                     <TextBlock
                         Text="Press Ctrl+B to bookmark this page"
                         HorizontalAlignment="Center"
                         Style="{StaticResource CaptionTextBlockStyle}"
-                        Opacity="0.35" />
+                        Foreground="{ThemeResource TextFillColorDisabledBrush}" />
                 </StackPanel>
 
                 <!-- Bottom switcher (Papers pattern): thumbnails / chapters / bookmarks -->
@@ -168,6 +183,12 @@
             </Grid>
         </SplitView.Pane>
 
-        <controls:PdfViewer x:Name="ViewerControl" />
+        <!-- SplitView.Content is already the region to the right of the pane,
+             so a notice hosted here can never reach the sidebar and re-centres
+             itself when the pane opens or closes — no width arithmetic. -->
+        <Grid>
+            <controls:PdfViewer x:Name="ViewerControl" />
+            <controls:NoticeHost x:Name="Notice" />
+        </Grid>
     </SplitView>
 </UserControl>

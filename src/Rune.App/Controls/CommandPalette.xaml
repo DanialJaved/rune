@@ -52,7 +52,7 @@
                                 Grid.Column="1"
                                 Text="{x:Bind Shortcut}"
                                 Style="{StaticResource CaptionTextBlockStyle}"
-                                Opacity="0.6"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                 VerticalAlignment="Center" />
                         </Grid>
                     </DataTemplate>

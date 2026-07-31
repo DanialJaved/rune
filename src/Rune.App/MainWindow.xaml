@@ -34,12 +34,23 @@
             AddTabButtonClick="Tabs_AddTabButtonClick"
             TabCloseRequested="Tabs_TabCloseRequested">
             <TabView.TabStripHeader>
-                <TextBlock
-                    Text="Rune"
+                <!-- The wordmark doubles as a Home button: it shows the recents
+                     screen without closing anything, and toggles back to the
+                     document you were reading. -->
+                <Button
+                    x:Name="HomeButton"
+                    Click="HomeButton_Click"
                     VerticalAlignment="Center"
-                    Margin="14,0,10,0"
-                    Style="{StaticResource CaptionTextBlockStyle}"
-                    Opacity="0.8" />
+                    Margin="8,0,4,0"
+                    Padding="6,2"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    ToolTipService.ToolTip="Home — recent documents">
+                    <TextBlock
+                        Text="Rune"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </Button>
             </TabView.TabStripHeader>
             <TabView.TabStripFooter>
                 <Grid x:Name="TitleBarDragArea" Background="Transparent" MinWidth="188" />
@@ -99,7 +110,7 @@
                     x:Name="PageCountLabel"
                     VerticalAlignment="Center"
                     Style="{StaticResource CaptionTextBlockStyle}"
-                    Opacity="0.7" />
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
 
             <Border Grid.Column="2" Style="{StaticResource HeaderSeparatorStyle}" Margin="8,0,4,0" />
@@ -150,6 +161,63 @@
                 <FontIcon Glyph="&#xE7AD;" FontSize="{StaticResource IconGlyphSize}" />
             </Button>
 
+            <!-- Annotation tools, centred in the toolbar's empty middle column
+                 (Snipping Tool's arrangement). Exactly one is armed at a time;
+                 clicking one opens its options directly beneath it. -->
+            <!-- Spans every column rather than sitting in the empty middle one:
+                 the left group is much wider than the right, so centring within
+                 the gap would leave the cluster visibly off-centre in the
+                 window. Overlaying and centring across the whole row puts it
+                 where the eye expects. -->
+            <StackPanel
+                Grid.Column="0"
+                Grid.ColumnSpan="12"
+                Orientation="Horizontal"
+                Spacing="2"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center">
+                <ToggleButton
+                    x:Name="PenToolButton"
+                    Style="{StaticResource IconToggleButtonStyle}"
+                    Click="PenToolButton_Click"
+                    IsEnabled="False"
+                    ToolTipService.ToolTip="Pen — draw freehand (Ctrl+E)">
+                    <FontIcon Glyph="&#xE70F;" FontSize="{StaticResource IconGlyphSize}" />
+                </ToggleButton>
+                <ToggleButton
+                    x:Name="HighlighterToolButton"
+                    Style="{StaticResource IconToggleButtonStyle}"
+                    Click="HighlighterToolButton_Click"
+                    IsEnabled="False"
+                    ToolTipService.ToolTip="Highlighter — drag over text (Ctrl+H)">
+                    <FontIcon Glyph="&#xE891;" FontSize="{StaticResource IconGlyphSize}" />
+                </ToggleButton>
+                <ToggleButton
+                    x:Name="NoteToolButton"
+                    Style="{StaticResource IconToggleButtonStyle}"
+                    Click="NoteToolButton_Click"
+                    IsEnabled="False"
+                    ToolTipService.ToolTip="Note — click to add a sticky note">
+                    <FontIcon Glyph="&#xE70B;" FontSize="{StaticResource IconGlyphSize}" />
+                </ToggleButton>
+                <ToggleButton
+                    x:Name="SignToolButton"
+                    Style="{StaticResource IconToggleButtonStyle}"
+                    Click="SignToolButton_Click"
+                    IsEnabled="False"
+                    ToolTipService.ToolTip="Sign — place your signature">
+                    <FontIcon Glyph="&#xEE56;" FontSize="{StaticResource IconGlyphSize}" />
+                </ToggleButton>
+                <ToggleButton
+                    x:Name="EraserToolButton"
+                    Style="{StaticResource IconToggleButtonStyle}"
+                    Click="EraserToolButton_Click"
+                    IsEnabled="False"
+                    ToolTipService.ToolTip="Eraser — click an annotation to remove it">
+                    <FontIcon Glyph="&#xE75C;" FontSize="{StaticResource IconGlyphSize}" />
+                </ToggleButton>
+            </StackPanel>
+
             <Button
                 x:Name="FindButton"
                 Grid.Column="8"
@@ -159,15 +227,6 @@
                 ToolTipService.ToolTip="Find in document (Ctrl+F)">
                 <FontIcon Glyph="&#xE721;" FontSize="{StaticResource IconGlyphSize}" />
             </Button>
-            <ToggleButton
-                x:Name="InkButton"
-                Grid.Column="9"
-                Style="{StaticResource IconToggleButtonStyle}"
-                Click="InkButton_Click"
-                IsEnabled="False"
-                ToolTipService.ToolTip="Draw with the pen (Ctrl+E)">
-                <FontIcon Glyph="&#xE76D;" FontSize="{StaticResource IconGlyphSize}" />
-            </ToggleButton>
             <ToggleButton
                 x:Name="NightButton"
                 Grid.Column="10"
@@ -217,6 +276,11 @@
                                 <FontIcon Glyph="&#xE749;" />
                             </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="FlattenMenuItem" Text="Flatten annotations…" Click="FlattenMenuItem_Click" IsEnabled="False">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE7C4;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
                         <MenuFlyoutSeparator />
                         <MenuFlyoutItem x:Name="PresentMenuItem" Text="Presentation" Click="PresentMenuItem_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="F5">
                             <MenuFlyoutItem.Icon>
@@ -224,6 +288,11 @@
                             </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutSeparator />
+                        <MenuFlyoutItem x:Name="SignaturesMenuItem" Text="Signature details…" Click="SignaturesMenuItem_Click" IsEnabled="False">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE8A5;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="PropertiesMenuItem" Text="Document properties" Click="PropertiesButton_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="Ctrl+D">
                             <MenuFlyoutItem.Icon>
                                 <FontIcon Glyph="&#xE946;" />
@@ -295,7 +364,7 @@
                                         <FontIcon
                                             Glyph="&#xEA90;"
                                             FontSize="32"
-                                            Opacity="0.25"
+                                            Foreground="{ThemeResource TextFillColorDisabledBrush}"
                                             HorizontalAlignment="Center"
                                             VerticalAlignment="Center"
                                             Visibility="{x:Bind ShowPlaceholder, Mode=OneWay}" />
@@ -313,7 +382,7 @@
                                         </Border>
                                     </Grid>
                                     <TextBlock Text="{x:Bind DisplayName}" MaxWidth="168" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
-                                    <TextBlock Text="{x:Bind Folder}" Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.5" MaxWidth="168" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Margin="0,-4,0,0" />
+                                    <TextBlock Text="{x:Bind Folder}" Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorTertiaryBrush}" MaxWidth="168" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" Margin="0,-4,0,0" />
                                 </StackPanel>
                             </DataTemplate>
                         </GridView.ItemTemplate>
@@ -328,19 +397,29 @@
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                     Visibility="Collapsed">
-                    <FontIcon Glyph="&#xEA90;" FontSize="48" Opacity="0.25" HorizontalAlignment="Center" />
+                    <FontIcon Glyph="&#xEA90;" FontSize="48" Foreground="{ThemeResource TextFillColorDisabledBrush}" HorizontalAlignment="Center" />
                     <TextBlock
                         Text="No recent documents"
                         Style="{StaticResource BodyStrongTextBlockStyle}"
                         HorizontalAlignment="Center"
-                        Opacity="0.7" />
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <TextBlock
                         Text="Open a PDF to get started"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         HorizontalAlignment="Center"
-                        Opacity="0.5" />
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                 </StackPanel>
             </Grid>
+
+            <!-- Window-level notices: messages that arrive with no document to
+                 attach them to (startup problems, a missing recent file, a
+                 background failure). Anything about an open document goes to
+                 that DocumentView's own NoticeHost instead, which is bounded to
+                 the page area so it can't cover the sidebar.
+
+                 Declared before the zoom pill and find bar so active UI always
+                 paints over a passive notice, never the other way round. -->
+            <controls:NoticeHost x:Name="WindowNotice" />
 
             <!-- Floating zoom pill (Papers-style, bottom-right over the page) -->
             <Border
@@ -420,7 +499,7 @@
                         MinWidth="64"
                         Margin="4,0"
                         Style="{StaticResource CaptionTextBlockStyle}"
-                        Opacity="0.7" />
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <ToggleButton x:Name="MatchCaseButton" Click="MatchCase_Click" ToolTipService.ToolTip="Match case" Padding="8,4">
                         <TextBlock Text="Aa" FontSize="13" />
                     </ToggleButton>
@@ -435,13 +514,6 @@
                     </Button>
                 </StackPanel>
             </Border>
-
-            <InfoBar
-                x:Name="ErrorBar"
-                Severity="Error"
-                VerticalAlignment="Bottom"
-                Margin="24"
-                IsOpen="False" />
 
             <controls:CommandPalette x:Name="Palette" />
         </Grid>

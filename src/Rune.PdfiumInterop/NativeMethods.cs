@@ -366,4 +366,272 @@ internal static partial class NativeMethods
     internal const uint FPDF_ERR_PASSWORD = 4;
     internal const uint FPDF_ERR_SECURITY = 5;
     internal const uint FPDF_ERR_PAGE = 6;
+
+    // ---- Interactive forms (fpdf_formfill.h) ----
+
+    /// <summary>
+    /// The host callbacks PDFium calls back into while driving form widgets.
+    ///
+    /// This is the **version 1** layout: `version` through `m_pJsPlatform`, and
+    /// nothing after it. Version 2 appends XFA-only members, and the shipped
+    /// build has no XFA — declaring version 2 against a non-XFA binary makes
+    /// PDFium read past the end of this struct.
+    ///
+    /// Every member is an IntPtr rather than a delegate type so unused slots
+    /// can be left as Zero. PDFium null-checks each one before calling it, so
+    /// "not implemented" is a legitimate, supported choice — see the notes on
+    /// the individual fields.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FPDF_FORMFILLINFO
+    {
+        public int Version;                  // must be 1 on a non-XFA build
+
+        public IntPtr Release;
+        public IntPtr FFI_Invalidate;        // our re-render signal — must be set
+        public IntPtr FFI_OutputSelectedRect;
+        public IntPtr FFI_SetCursor;
+
+        // Deliberately left null. A caret needs a ~500ms repeating timer, and
+        // every tick would re-rasterize the field's tiles. Rune's whole claim
+        // is that it does not busy-render; a blinking caret is not worth it.
+        public IntPtr FFI_SetTimer;
+        public IntPtr FFI_KillTimer;
+
+        // Deliberately left null. It returns FPDF_SYSTEMTIME (16 bytes) BY
+        // VALUE, whose calling convention differs across ABIs — the most
+        // likely source of a silent memory bug in the whole form feature.
+        // PDFium only uses it for JS Date, which this non-V8 build cannot run.
+        public IntPtr FFI_GetLocalTime;
+
+        public IntPtr FFI_OnChange;          // field edited → mark document dirty
+        public IntPtr FFI_GetPage;           // must be set: PDFium resolves indices through it
+        public IntPtr FFI_GetCurrentPage;
+        public IntPtr FFI_GetRotation;       // must be set: PDFium calls it unconditionally
+        public IntPtr FFI_ExecuteNamedAction;
+        public IntPtr FFI_SetTextFieldFocus;
+        public IntPtr FFI_DoURIAction;
+        public IntPtr FFI_DoGoToAction;
+
+        public IntPtr m_pJsPlatform;         // IPDF_JSPLATFORM* — null, no V8
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void FfiInvalidateDelegate(IntPtr pThis, IntPtr page, double left, double top, double right, double bottom);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void FfiOnChangeDelegate(IntPtr pThis);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate IntPtr FfiGetPageDelegate(IntPtr pThis, IntPtr document, int pageIndex);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate IntPtr FfiGetCurrentPageDelegate(IntPtr pThis, IntPtr document);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int FfiGetRotationDelegate(IntPtr pThis, IntPtr page);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void FfiSetCursorDelegate(IntPtr pThis, int cursorType);
+
+    /// <summary>
+    /// PDFium stores the FPDF_FORMFILLINFO *pointer*, not a copy, and calls
+    /// back through it for the environment's whole life. The struct therefore
+    /// has to sit at a fixed address — pass unmanaged memory, never a managed
+    /// struct the GC can relocate.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFDOC_InitFormFillEnvironment(IntPtr document, IntPtr formInfo);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFDOC_ExitFormFillEnvironment(IntPtr formHandle);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_GetFormType(IntPtr document);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FORM_OnAfterLoadPage(IntPtr page, IntPtr formHandle);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FORM_OnBeforeClosePage(IntPtr page, IntPtr formHandle);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FORM_DoDocumentOpenAction(IntPtr formHandle);
+
+    // pageX/pageY are in PDF page space (bottom-left origin), not device pixels.
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FORM_OnLButtonDown(IntPtr formHandle, IntPtr page, int modifier, double pageX, double pageY);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FORM_OnLButtonUp(IntPtr formHandle, IntPtr page, int modifier, double pageX, double pageY);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FORM_OnMouseMove(IntPtr formHandle, IntPtr page, int modifier, double pageX, double pageY);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FORM_OnChar(IntPtr formHandle, IntPtr page, int charCode, int modifier);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FORM_OnKeyDown(IntPtr formHandle, IntPtr page, int keyCode, int modifier);
+
+    /// <summary>Commits the focused field's edit. Must be called before saving.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FORM_ForceToKillFocus(IntPtr formHandle);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FORM_SetIndexSelected(IntPtr formHandle, IntPtr page, int index, int selected);
+
+    /// <summary>Draws form widgets over an already-rendered page bitmap.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDF_FFLDraw(
+        IntPtr formHandle, IntPtr bitmap, IntPtr page,
+        int startX, int startY, int sizeX, int sizeY, int rotate, int flags);
+
+    /// <summary>fieldType 0 = all types. color is 0xRRGGBB.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDF_SetFormFieldHighlightColor(IntPtr formHandle, int fieldType, uint color);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDF_SetFormFieldHighlightAlpha(IntPtr formHandle, byte alpha);
+
+    // ---- Form field queries (fpdf_annot.h, form-aware half) ----
+    //
+    // NOTE: there is no FPDFAnnot_SetFormFieldValue in PDFium. The only way to
+    // change a field's value is to drive the form-fill event API (click, then
+    // FORM_OnChar). Do not go looking for a programmatic setter.
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFAnnot_GetFormFieldAtPoint(IntPtr formHandle, IntPtr page, ref FS_POINTF point);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetFormFieldType(IntPtr formHandle, IntPtr annot);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAnnot_GetFormFieldName(IntPtr formHandle, IntPtr annot, [Out] byte[]? buffer, uint bufLen);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAnnot_GetFormFieldValue(IntPtr formHandle, IntPtr annot, [Out] byte[]? buffer, uint bufLen);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetFormFieldFlags(IntPtr formHandle, IntPtr annot);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetOptionCount(IntPtr formHandle, IntPtr annot);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFAnnot_GetOptionLabel(IntPtr formHandle, IntPtr annot, int index, [Out] byte[]? buffer, uint bufLen);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_IsChecked(IntPtr formHandle, IntPtr annot);
+
+    // FPDF_GetFormType
+    internal const int FORMTYPE_NONE = 0;
+    internal const int FORMTYPE_ACRO_FORM = 1;
+    internal const int FORMTYPE_XFA_FULL = 2;      // PDFium cannot fill these
+    internal const int FORMTYPE_XFA_FOREGROUND = 3;
+
+    // FPDFAnnot_GetFormFieldType
+    internal const int FPDF_FORMFIELD_UNKNOWN = 0;
+    internal const int FPDF_FORMFIELD_PUSHBUTTON = 1;
+    internal const int FPDF_FORMFIELD_CHECKBOX = 2;
+    internal const int FPDF_FORMFIELD_RADIOBUTTON = 3;
+    internal const int FPDF_FORMFIELD_COMBOBOX = 4;
+    internal const int FPDF_FORMFIELD_LISTBOX = 5;
+    internal const int FPDF_FORMFIELD_TEXTFIELD = 6;
+    internal const int FPDF_FORMFIELD_SIGNATURE = 7;
+
+    // Field flags (FPDFAnnot_GetFormFieldFlags)
+    internal const int FPDF_FORMFLAG_READONLY = 1 << 0;
+    internal const int FPDF_FORMFLAG_REQUIRED = 1 << 1;
+
+    // ---- Flatten (fpdf_flatten.h) ----
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPage_Flatten(IntPtr page, int flag);
+
+    internal const int FLAT_NORMALDISPLAY = 0;
+    internal const int FLAT_PRINT = 1;
+
+    internal const int FLATTEN_FAIL = 0;
+    internal const int FLATTEN_SUCCESS = 1;
+    internal const int FLATTEN_NOTHINGTODO = 2;
+
+    // ---- Page objects & appearance streams (fpdf_edit.h) ----
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFPageObj_NewImageObj(IntPtr document);
+
+    /// <summary>
+    /// Takes an ARRAY of pages, not a single page — the image may be shared by
+    /// several. Passing a bare page handle here compiles fine and corrupts memory.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFImageObj_SetBitmap(IntPtr[] pages, int count, IntPtr imageObject, IntPtr bitmap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFPageObj_Transform(IntPtr pageObject, double a, double b, double c, double d, double e, double f);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFPage_InsertObject(IntPtr page, IntPtr pageObject);
+
+    /// <summary>Required after any page-content edit, or the change is not serialized.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPage_GenerateContent(IntPtr page);
+
+    /// <summary>alpha: 1 for a transparent bitmap (needed for signature stamps).</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFBitmap_Create(int width, int height, int alpha);
+
+    /// <summary>Frees a page object that was never inserted into a page (failure paths).</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFPageObj_Destroy(IntPtr pageObject);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFAnnot_GetObject(IntPtr annot, int index);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_AppendObject(IntPtr annot, IntPtr pageObject);
+
+    /// <summary>value is UTF-16LE; pass null to clear the appearance stream.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_SetAP(
+        IntPtr annot, int appearanceMode,
+        [MarshalAs(UnmanagedType.LPWStr)] string? value);
+
+    internal const int FPDF_ANNOT_APPEARANCEMODE_NORMAL = 0;
+    internal const int FPDF_ANNOT_SUBTYPE_STAMP = 13;
+    internal const int FPDF_ANNOT_SUBTYPE_WIDGET = 20;
+
+    // ---- Digital signatures (fpdf_signature.h) ----
+    //
+    // Read-only reporting. PDFium hands back the raw PKCS#7 blob and byte
+    // range; it does NOT validate the signature, the certificate chain, or
+    // revocation. Nothing built on these may claim a signature is "valid".
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_GetSignatureCount(IntPtr document);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDF_GetSignatureObject(IntPtr document, int index);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFSignatureObj_GetContents(IntPtr signature, [Out] byte[]? buffer, uint length);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFSignatureObj_GetByteRange(IntPtr signature, [Out] int[]? buffer, uint length);
+
+    /// <summary>ASCII, unlike GetReason. Do not decode as UTF-16.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFSignatureObj_GetSubFilter(IntPtr signature, [Out] byte[]? buffer, uint length);
+
+    /// <summary>UTF-16LE, unlike GetSubFilter and GetTime.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFSignatureObj_GetReason(IntPtr signature, [Out] byte[]? buffer, uint length);
+
+    /// <summary>ASCII PDF date string, e.g. D:20260730120000+01'00'.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFSignatureObj_GetTime(IntPtr signature, [Out] byte[]? buffer, uint length);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFSignatureObj_GetDocMDPPermission(IntPtr signature);
 }

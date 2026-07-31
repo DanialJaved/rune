@@ -60,10 +60,55 @@ public sealed class AppSettings
     public bool SidebarOpenByDefault { get; set; } = true;
 
     /// <summary>Ink pen color as #RRGGBB (default red).</summary>
+    /// <remarks>
+    /// Superseded by <see cref="Pen"/>. Kept so an existing state.json still
+    /// carries the user's chosen pen forward — see <see cref="MigrateToolStyles"/>.
+    /// </remarks>
     public string InkColor { get; set; } = "#E22222";
 
-    /// <summary>Ink pen width in points.</summary>
+    /// <summary>Ink pen width in points. Superseded by <see cref="Pen"/>.</summary>
     public double InkWidth { get; set; } = 2.5;
+
+    /// <summary>Freehand pen style.</summary>
+    public ToolStyle? Pen { get; set; }
+
+    /// <summary>Text-markup style: which mark, its colour, and its opacity.</summary>
+    public ToolStyle? Highlighter { get; set; }
+
+    /// <summary>Width in points a click-placed signature uses; remembered from the last placement.</summary>
+    public double SignatureWidthPt { get; set; } = 180;
+
+    /// <summary>
+    /// Fills in the per-tool styles the first time a pre-v0.6 state file is
+    /// loaded, seeding the pen from the old flat InkColor/InkWidth so a user's
+    /// chosen pen isn't silently reset. Mirrors the Folio→Rune migration below.
+    /// </summary>
+    public void MigrateToolStyles()
+    {
+        Pen ??= new ToolStyle { Color = InkColor, Size = InkWidth, Opacity = 1.0 };
+        Highlighter ??= new ToolStyle { Color = "#FFD200", Size = 0, Opacity = 0.4, Markup = "Highlight" };
+    }
+}
+
+/// <summary>
+/// One annotation tool's remembered style. A class rather than a record so it
+/// round-trips through the plain-POCO JSON the rest of the settings use, and so
+/// a missing key in an older file deserializes to null (see
+/// <see cref="AppSettings.MigrateToolStyles"/>) rather than throwing.
+/// </summary>
+public sealed class ToolStyle
+{
+    /// <summary>#RRGGBB.</summary>
+    public string Color { get; set; } = "#E22222";
+
+    /// <summary>Stroke width in points. Unused by tools that don't draw a stroke.</summary>
+    public double Size { get; set; } = 2.5;
+
+    /// <summary>0–1. The engine has always accepted a full alpha byte; only the viewer hardcoded it.</summary>
+    public double Opacity { get; set; } = 1.0;
+
+    /// <summary>For the markup tool: "Highlight", "Underline" or "Strikeout".</summary>
+    public string Markup { get; set; } = "Highlight";
 }
 
 /// <summary>The whole persisted app state (one JSON file).</summary>
@@ -161,14 +206,20 @@ public sealed class AppStateStore
         {
             if (File.Exists(_path))
             {
-                return JsonSerializer.Deserialize<AppState>(File.ReadAllText(_path), Options) ?? new AppState();
+                var loaded = JsonSerializer.Deserialize<AppState>(File.ReadAllText(_path), Options) ?? new AppState();
+                // Older files predate the per-tool styles; fill them in from
+                // the flat ink settings rather than resetting the user's pen.
+                loaded.Settings.MigrateToolStyles();
+                return loaded;
             }
         }
         catch
         {
             // Corrupt state file: start fresh rather than block startup.
         }
-        return new AppState();
+        var fresh = new AppState();
+        fresh.Settings.MigrateToolStyles();
+        return fresh;
     }
 
     public void Save(AppState state)
