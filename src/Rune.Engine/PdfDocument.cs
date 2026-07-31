@@ -22,6 +22,7 @@ public sealed partial class PdfDocument : IDisposable
         _handle = handle;
         _pageSizes = [];
         ReadPageMetricsLocked(); // Open holds the lock around this ctor
+        InitializeFormsLocked(); // no-op (and no allocation) for documents without forms
     }
 
     /// <summary>
@@ -114,7 +115,7 @@ public sealed partial class PdfDocument : IDisposable
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
 
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 throw PdfiumNative.LastError();
@@ -122,11 +123,16 @@ public sealed partial class PdfDocument : IDisposable
 
             try
             {
-                PdfiumNative.RenderRegionToBuffer(page, pixels, srcX, srcY, width, height, fullWidth, fullHeight, rotation % 4, stride);
+                // The form handle adds the FPDF_FFLDraw pass, so filled fields
+                // show up everywhere a page is rasterized — tiles, thumbnails,
+                // presentation and print alike.
+                PdfiumNative.RenderRegionToBuffer(
+                    page, pixels, srcX, srcY, width, height, fullWidth, fullHeight, rotation % 4, stride,
+                    _formEnv is { IsXfa: false } env ? env.Handle : IntPtr.Zero);
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
 
@@ -242,7 +248,7 @@ public sealed partial class PdfDocument : IDisposable
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
 
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 return links;
@@ -283,7 +289,7 @@ public sealed partial class PdfDocument : IDisposable
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
         return links;
@@ -454,26 +460,24 @@ public sealed partial class PdfDocument : IDisposable
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 return fallback;
             }
-            IntPtr textPage = PdfiumNative.TextLoadPage(page);
-            if (textPage == IntPtr.Zero)
-            {
-                PdfiumNative.ClosePage(page);
-                return fallback;
-            }
             try
             {
+                IntPtr textPage = AcquireTextPageLocked(pageIndex);
+                if (textPage == IntPtr.Zero)
+                {
+                    return fallback;
+                }
                 var (ptW, ptH) = _pageSizes[pageIndex];
                 return fn(page, textPage, Math.Max(1, (int)MathF.Round(ptW)), Math.Max(1, (int)MathF.Round(ptH)));
             }
             finally
             {
-                PdfiumNative.TextClosePage(textPage);
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
     }
@@ -484,6 +488,11 @@ public sealed partial class PdfDocument : IDisposable
         {
             if (_handle != IntPtr.Zero)
             {
+                // Strict teardown order: pages (each firing FORM_OnBeforeClosePage
+                // while the environment is still alive), then the environment,
+                // then the document that owns both.
+                ReleaseAllPagesLocked();
+                DisposeFormsLocked();
                 PdfiumNative.CloseDocument(_handle);
                 _handle = IntPtr.Zero;
             }

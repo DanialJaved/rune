@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Rune's app mark: the raido rune set on a document page.
+
+  The rune alone read as a generic glyph; sitting on a page it reads as a
+  document tool, which is what Rune became once it grew forms, annotations
+  and page editing.
+
+  SOURCE OF TRUTH for the icon. tools/gen-icon.ps1 rasterizes this file to
+  rune.ico and every MSIX asset. That script is NOT a general SVG renderer —
+  it understands exactly this subset and nothing else:
+
+    <rect>  x y width height rx  fill|gradient
+    <path>  d  fill
+    <path>  d  stroke stroke-width  (round caps and joins assumed)
+
+  Gradients are limited to the single vertical linearGradient below, referenced
+  as fill="url(#tile)". Anything else (transforms, opacity, text, groups with
+  attributes, dashes) is ignored silently — check the rendered PNGs after
+  editing rather than assuming a new feature took effect.
+
+  See rune-small.svg for the 16-24px variant: at that size the corner fold and
+  the rune's thin strokes collapse into mush, so small sizes get their own art.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="100">
+      <stop offset="0" stop-color="#0A84E0" />
+      <stop offset="1" stop-color="#0057A8" />
+    </linearGradient>
+  </defs>
+
+  <!-- Accent tile. rx is 22% of the side, matching the Windows 11 app-icon curve. -->
+  <rect x="0" y="0" width="100" height="100" rx="22" fill="url(#tile)" />
+
+  <!-- Page: a portrait sheet with the top-right corner turned down. -->
+  <path d="M 28 18 L 60 18 L 74 32 L 74 82 L 28 82 Z" fill="#FFFFFF" />
+  <!-- The fold itself, a shade darker so the corner reads as folded, not cut. -->
+  <path d="M 60 18 L 74 32 L 60 32 Z" fill="#C9DCEF" />
+
+  <!-- Raido rune, in accent blue ON the page: stave, bow, leg. -->
+  <path d="M 42 34 L 42 68" stroke="#0057A8" stroke-width="6" />
+  <path d="M 42 34 L 58 42" stroke="#0057A8" stroke-width="6" />
+  <path d="M 58 42 L 42 50" stroke="#0057A8" stroke-width="6" />
+  <path d="M 42 50 L 60 68" stroke="#0057A8" stroke-width="6" />
+</svg>

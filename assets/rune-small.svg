@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Small-size variant of the Rune mark, used below 32px.
+
+  At 16 and 24 pixels the corner fold in rune.svg is roughly one pixel and the
+  rune's three strokes merge into a blob. This version drops the fold, widens
+  the page, and thickens the rune so the silhouette survives. Multi-size art is
+  the honest answer for icons — one path scaled down does not work.
+
+  Same renderer subset as rune.svg; see the comment there.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="100">
+      <stop offset="0" stop-color="#0A84E0" />
+      <stop offset="1" stop-color="#0057A8" />
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="100" height="100" rx="22" fill="url(#tile)" />
+
+  <!-- Plain sheet: no fold, and wider so its edges stay visible at 16px. -->
+  <path d="M 24 16 L 76 16 L 76 84 L 24 84 Z" fill="#FFFFFF" />
+
+  <!-- Heavier rune strokes: thin ones vanish at this size. -->
+  <path d="M 40 32 L 40 70" stroke="#0057A8" stroke-width="9" />
+  <path d="M 40 32 L 59 42" stroke="#0057A8" stroke-width="9" />
+  <path d="M 59 42 L 40 52" stroke="#0057A8" stroke-width="9" />
+  <path d="M 40 52 L 61 70" stroke="#0057A8" stroke-width="9" />
+</svg>

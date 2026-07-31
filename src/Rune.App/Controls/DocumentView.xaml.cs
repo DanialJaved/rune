@@ -46,12 +46,13 @@ public sealed partial class DocumentView : UserControl
 
         ViewerControl.CurrentPageChanged += (_, page) => SyncThumbnailSelection(page);
         ViewerControl.RotationChanged += (_, rotation) => OnViewRotated(rotation);
+        ViewerControl.NightModeChanged += (_, _) => OnNightModeChanged();
         ViewerControl.AnnotationEdited += (_, e) => PushEdit(new DocumentEdit
         {
             Label = e.Label,
             IsPageMutation = false,
             PageIndex = e.PageIndex,
-            SnapshotBytes = 0,
+            SnapshotBytes = e.SnapshotBytes,
             UndoAction = e.UndoAction,
             RedoAction = e.RedoAction,
         });
@@ -62,6 +63,44 @@ public sealed partial class DocumentView : UserControl
         get => Split.IsPaneOpen;
         set => Split.IsPaneOpen = value;
     }
+
+    /// <summary>
+    /// Shows a notice floating over this document's pages. Returns false when
+    /// the user has already dismissed a notice with the same key.
+    /// </summary>
+    public bool ShowNotice(string? title, string message, InfoBarSeverity severity, string? dismissKey = null)
+        => Notice.Show(title, message, severity, dismissKey);
+
+    public void ClearNotice() => Notice.Clear();
+
+    /// <summary>
+    /// Runs PDFium work on the render thread — the one thread every PDFium call
+    /// must funnel through (see <see cref="PdfViewer.WorkQueue"/>).
+    ///
+    /// The fallback covers one narrow race: closing a tab disposes the viewer's
+    /// scheduler on Unloaded, cancelling anything still queued. If that happens
+    /// the render thread has already been joined, so nothing else can be inside
+    /// PDFium and finishing the work off-thread is safe. Without the fallback a
+    /// tab closed at the wrong moment would leak the native document.
+    /// </summary>
+    private async Task<T> RunPdfAsync<T>(PdfWorkPriority priority, Func<T> work)
+    {
+        try
+        {
+            return await Viewer.RunOnRenderThreadAsync(priority, work);
+        }
+        catch (OperationCanceledException)
+        {
+            return await Task.Run(work);
+        }
+    }
+
+    private Task RunPdfAsync(PdfWorkPriority priority, Action work)
+        => RunPdfAsync(priority, () =>
+        {
+            work();
+            return true;
+        });
 
     /// <summary>Opens the document (once) and populates the view. Safe to await repeatedly.</summary>
     public async Task EnsureLoadedAsync(RecentFile? restore)
@@ -74,7 +113,7 @@ public sealed partial class DocumentView : UserControl
 
         try
         {
-            _document = await Task.Run(() => PdfDocument.Open(FilePath));
+            _document = await RunPdfAsync(PdfWorkPriority.Interactive, () => PdfDocument.Open(FilePath));
         }
         catch (Exception ex) when (ex is PdfiumException or IOException)
         {
@@ -95,9 +134,42 @@ public sealed partial class DocumentView : UserControl
         }
 
         PopulateThumbnails(_document);
+        // CurrentPageChanged doesn't fire on load (the page never changes), so
+        // mark the starting page here or its ring never appears.
+        SyncThumbnailSelection(Viewer.CurrentPage);
         _ = PopulateOutlineAsync(_document);
+        _ = ReadSignatureCountAsync(_document);
         Loaded2?.Invoke(this, EventArgs.Empty);
     }
+
+    /// <summary>
+    /// Digital signatures in this document. Read once at load on the render
+    /// thread and cached, because the toolbar consults it on every tab switch
+    /// and PDFium must never be touched from the UI thread.
+    /// </summary>
+    public int SignatureCount { get; private set; }
+
+    public bool HasSignatures => SignatureCount > 0;
+
+    private async Task ReadSignatureCountAsync(PdfDocument document)
+    {
+        try
+        {
+            int count = await RunPdfAsync(PdfWorkPriority.Background, () => document.SignatureCount);
+            if (_document == document)
+            {
+                SignatureCount = count;
+                SignaturesRead?.Invoke(this, EventArgs.Empty);
+            }
+        }
+        catch
+        {
+            // Signature reporting is informational; a failure just leaves it off.
+        }
+    }
+
+    /// <summary>Raised once the signature count is known, so the shell can refresh its notice.</summary>
+    public event EventHandler? SignaturesRead;
 
     public void Close()
     {
@@ -109,7 +181,7 @@ public sealed partial class DocumentView : UserControl
         {
             // Dispose takes the global PDFium lock; never block the UI thread
             // on it (a tile render can hold it for tens of milliseconds).
-            _ = Task.Run(document.Dispose);
+            _ = RunPdfAsync(PdfWorkPriority.Interactive, document.Dispose);
         }
     }
 
@@ -128,14 +200,14 @@ public sealed partial class DocumentView : UserControl
         }
 
         string tmp = FilePath + ".saving";
-        await Task.Run(() => document.SaveAs(tmp));
+        await RunPdfAsync(PdfWorkPriority.Interactive, () => document.SaveAs(tmp));
 
         double zoom = Viewer.Zoom;
         int rotation = Viewer.ViewRotation;
         double fraction = Viewer.ScrollFraction;
 
         Viewer.SetDocument(null);
-        await Task.Run(document.Dispose); // takes the PDFium lock — keep it off the UI thread
+        await RunPdfAsync(PdfWorkPriority.Interactive, document.Dispose); // takes the PDFium lock — keep it off the UI thread
         _document = null;
 
         try
@@ -153,7 +225,7 @@ public sealed partial class DocumentView : UserControl
             // reopen gives every page a fresh identity, so undo edits recorded
             // against the old document no longer apply — drop the history.
             ClearUndoHistory();
-            _document = await Task.Run(() => PdfDocument.Open(FilePath));
+            _document = await RunPdfAsync(PdfWorkPriority.Interactive, () => PdfDocument.Open(FilePath));
             Viewer.SetDocument(_document);
             Viewer.RestoreView(zoom, rotation, fraction);
             PopulateThumbnails(_document);
@@ -238,7 +310,7 @@ public sealed partial class DocumentView : UserControl
             // Drop the result if the document or rotation moved on while we waited.
             if (_document == document && Viewer.ViewRotation == rotation)
             {
-                item.Image = ToBitmap(bmp);
+                item.Image = ToBitmap(bmp, Viewer.NightMode);
             }
             bmp.Return();
         }
@@ -248,16 +320,58 @@ public sealed partial class DocumentView : UserControl
         }
     }
 
-    private static WriteableBitmap ToBitmap(PageBitmap page)
+    /// <summary>
+    /// Copies a rendered page into a bitmap, optionally inverting it for night
+    /// mode. The viewer inverts on the GPU with a Win2D effect, but an Image in
+    /// a virtualized ListView has no equivalent — and leaving thumbnails bright
+    /// beside inverted pages was a long-standing visual bug. A 168x220 DIP
+    /// thumbnail is ~55k pixels, so inverting during the copy is free.
+    /// </summary>
+    private static WriteableBitmap ToBitmap(PageBitmap page, bool invert)
     {
         var bitmap = new WriteableBitmap(page.Width, page.Height);
+        int byteCount = page.Stride * page.Height;
+
         using (var stream = bitmap.PixelBuffer.AsStream())
         {
-            // Copy exactly one image's worth of bytes (the pooled buffer may be larger).
-            stream.Write(page.Pixels, 0, page.Stride * page.Height);
+            if (!invert)
+            {
+                // Copy exactly one image's worth of bytes (the pooled buffer may be larger).
+                stream.Write(page.Pixels, 0, byteCount);
+            }
+            else
+            {
+                // BGRA: invert colour, leave alpha alone.
+                var inverted = new byte[byteCount];
+                for (int i = 0; i < byteCount; i += 4)
+                {
+                    inverted[i] = (byte)(255 - page.Pixels[i]);
+                    inverted[i + 1] = (byte)(255 - page.Pixels[i + 1]);
+                    inverted[i + 2] = (byte)(255 - page.Pixels[i + 2]);
+                    inverted[i + 3] = page.Pixels[i + 3];
+                }
+                stream.Write(inverted, 0, byteCount);
+            }
         }
         bitmap.Invalidate();
         return bitmap;
+    }
+
+    /// <summary>
+    /// Re-renders realized thumbnails when night mode flips. Only what is on
+    /// screen — the rest come back inverted through virtualization as the user
+    /// scrolls to them.
+    /// </summary>
+    private void OnNightModeChanged()
+    {
+        foreach (var item in _thumbnails)
+        {
+            if (ThumbList.ContainerFromItem(item) is not null)
+            {
+                item.Image = null; // clears IsRendered so the re-request is honoured
+                _ = RenderThumbnailAsync(item);
+            }
+        }
     }
 
     private void ThumbList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -274,6 +388,13 @@ public sealed partial class DocumentView : UserControl
 
     private void SyncThumbnailSelection(int pageIndex)
     {
+        // The ring marks the page being read regardless of what is selected for
+        // page editing, so it updates even when the early-return below fires.
+        for (int i = 0; i < _thumbnails.Count; i++)
+        {
+            _thumbnails[i].IsCurrent = i == pageIndex;
+        }
+
         // Never collapse an in-progress multi-selection just because the
         // viewer scrolled to another page.
         if (pageIndex < 0 || pageIndex >= _thumbnails.Count || ThumbList.SelectedItems.Count > 1)
@@ -298,7 +419,7 @@ public sealed partial class DocumentView : UserControl
         IReadOnlyList<OutlineItem> outline;
         try
         {
-            outline = await Task.Run(document.GetOutline);
+            outline = await RunPdfAsync(PdfWorkPriority.Background, document.GetOutline);
         }
         catch
         {
@@ -374,6 +495,32 @@ public sealed partial class DocumentView : UserControl
         {
             _pageOpRunning = false;
         }
+    }
+
+    /// <summary>
+    /// Bakes every annotation and form field into page content.
+    ///
+    /// Routed through the page-mutation path because flatten rewrites page
+    /// content and annotation lists wholesale — every tile, thumbnail and text
+    /// map derived from the old structure is stale afterwards. Undo history is
+    /// dropped for the same reason: the annotation objects an undo entry refers
+    /// to no longer exist.
+    /// </summary>
+    public async Task<int> FlattenDocumentAsync()
+    {
+        if (_document is not { } document)
+        {
+            return 0;
+        }
+
+        int changed = 0;
+        await RunPageOpAsync(doc => changed = doc.FlattenAllPages(), remapBookmark: null);
+        if (changed > 0)
+        {
+            ClearUndoHistory();
+            PagesEdited?.Invoke(this, EventArgs.Empty);
+        }
+        return changed;
     }
 
     private void AfterPageMutation(Func<int, int?>? remapBookmark)

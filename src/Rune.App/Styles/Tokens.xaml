@@ -21,6 +21,10 @@
     <CornerRadius x:Key="RadiusMedium">8</CornerRadius>
     <CornerRadius x:Key="RadiusPill">18</CornerRadius>
 
+    <!-- Notice card: wide enough for two lines of message text, narrow enough
+         to stay a card rather than becoming a full-width bar. -->
+    <x:Double x:Key="NoticeMaxWidth">520</x:Double>
+
     <!-- Homepage cards -->
     <x:Double x:Key="CardWidth">168</x:Double>
     <x:Double x:Key="CardHeight">212</x:Double>

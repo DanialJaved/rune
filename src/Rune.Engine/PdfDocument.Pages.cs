@@ -31,6 +31,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            ReleaseAllPagesLocked(); // open handles must not outlive the pages they point at
             // Descending order so earlier deletions don't shift later indices.
             for (int i = indices.Count - 1; i >= 0; i--)
             {
@@ -62,6 +63,7 @@ public sealed partial class PdfDocument
                 lock (PdfiumLibrary.Lock)
                 {
                     ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+                    ReleaseAllPagesLocked(); // page indices are about to change under us
                     if (!PdfiumNative.MovePages(_handle, [.. indices], destIndex))
                     {
                         throw new PdfiumException("Moving pages failed.", 1);
@@ -139,6 +141,7 @@ public sealed partial class PdfDocument
             lock (PdfiumLibrary.Lock)
             {
                 ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+                ReleaseAllPagesLocked(); // inserting shifts every index at or after destIndex
                 IntPtr source = PdfiumNative.LoadMemDocument(pin.AddrOfPinnedObject(), pdfBytes.Length, null);
                 if (source == IntPtr.Zero)
                 {
@@ -179,6 +182,7 @@ public sealed partial class PdfDocument
             lock (PdfiumLibrary.Lock)
             {
                 ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+                ReleaseAllPagesLocked(); // inserting shifts every index at or after destIndex
                 IntPtr source = PdfiumNative.LoadCustomDocument(fileAccess, null);
                 if (source == IntPtr.Zero)
                 {

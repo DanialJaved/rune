@@ -4,9 +4,12 @@
 
 **A fast, free, modern PDF reader for Windows.**
 
+[![Microsoft Store](https://img.shields.io/badge/Microsoft%20Store-Rune%20PDF%20Reader-0078D4?logo=microsoftstore&logoColor=white)](https://apps.microsoft.com/detail/9NH37840QDM6)
 [![CI](https://github.com/DanialJaved/rune/actions/workflows/ci.yml/badge.svg)](https://github.com/DanialJaved/rune/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/DanialJaved/rune)](https://github.com/DanialJaved/rune/releases)
+
+**[Install from the Microsoft Store →](https://apps.microsoft.com/detail/9NH37840QDM6)**
 
 </div>
 
@@ -28,7 +31,12 @@ Windows never had a PDF reader that is fast **and** lightweight **and** modern-l
 - **Sidebar** (open by default, `F9`) with a switcher for **thumbnails / chapters / bookmarks**; internal & web links; back/forward history
 - Full keyboard navigation — arrows scroll and page, `PageUp`/`PageDown`, `Home`/`End` (plus optional vim keys)
 - Text selection & copy, find-in-document with highlight-all and hit stepping
-- **Annotations**: highlight, underline, strikeout from a selection, sticky notes, and **freehand pen/ink** — saved as standard PDF annotations any reader can see (`Ctrl+H` highlight, `Ctrl+E` pen, right-click menu, `Ctrl+S` / `Ctrl+Shift+S`)
+- **Form filling**: click a field and type — text boxes, dropdowns and checkboxes, saved back into the PDF. Standard AcroForm documents only; XFA forms (some tax and government PDFs) say so plainly instead of silently ignoring your typing, and form JavaScript doesn't run, so auto-calculating fields won't recalculate
+- **Flatten**: bake annotations and filled fields into the page so they can't be edited back out
+- **Signature details**: for a digitally signed PDF, shows the signer's stated reason, time and format, and whether the signature covers the whole file. Rune does **not** verify signatures — it has no cryptography and never claims a signature is valid
+- **Annotation toolbar**: pen, highlighter, note, sign and eraser sit together in the middle of the header; picking one opens its colours, size and opacity right beneath it. The highlighter works in a single gesture — just drag across the text — and still writes real PDF markup, so highlights stay attached to the words and other readers understand them
+- **Sign a document**: draw your signature with the mouse or pen, or import a picture of one, then click to place it (drag if you want a specific size). Saved signatures are reusable and stay on your machine. This is a *visible* signature — ink on the page, like signing a printout — not a cryptographic one
+- **Annotations**: highlight, underline, strikeout, sticky notes, and **freehand pen/ink** — saved as standard PDF annotations any reader can see (`Ctrl+H` highlight, `Ctrl+E` pen, `Esc` to put the tool away, right-click menu, `Ctrl+S` / `Ctrl+Shift+S`)
 - **Page editing** in the thumbnail sidebar: multi-select, drag to reorder, `Delete`, copy/cut/paste pages (`Ctrl+C`/`X`/`V`, works across open tabs), or drop a PDF onto the sidebar to insert its pages
 - **Undo / redo** for annotations and page edits (`Ctrl+Z` / `Ctrl+Y`)
 - **Bookmarks** (`Ctrl+B`): name a page and jump back later; saved per document
@@ -70,20 +78,20 @@ Vim-style keys (`j k h l`, `gg`/`G`, `p`/`n`) can be enabled in Settings. Right-
 
 ## Install
 
-**Portable (recommended):** grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract anywhere, run `Rune.exe`. No installation, no registry.
+**[Microsoft Store](https://apps.microsoft.com/detail/9NH37840QDM6) (recommended):** one click, automatic updates, and it registers as a PDF handler — no certificate step, and nothing for SmartScreen to warn about.
 
-**MSIX (for "default PDF app" integration):** download the `.msix` and `rune-signing.cer` from Releases, then trust the certificate once (admin PowerShell):
+**Portable:** grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract anywhere, run `Rune.exe`. No installation, no registry. This is the build to use if you want Rune without the Store, or want to carry it on a USB stick.
+
+**Sideloaded MSIX:** download the `.msix` and `rune-signing.cer` from Releases, then trust the certificate once (admin PowerShell):
 
 ```powershell
 Import-Certificate -FilePath rune-signing.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
 Add-AppxPackage -Path Rune.App_x.y.z.0_x64.msix
 ```
 
-Then set Rune as your default PDF handler in Settings → Apps → Default apps. (A store-signed package is planned so this step disappears.)
-
-> **Smart App Control / SmartScreen:** Rune is not yet code-signed, so machines with Smart App Control enabled will block it, and SmartScreen may warn on first run ("More info → Run anyway"). Code signing that satisfies SAC is planned. Until then, the portable build on a machine with SAC **off** is the smoothest path.
+> **Smart App Control / SmartScreen** apply to the GitHub downloads only — the Store build is signed by Microsoft. The portable and sideloaded builds are not yet code-signed, so machines with Smart App Control enabled will block them and SmartScreen may warn on first run ("More info → Run anyway").
 >
-> Packages aren't size-optimized yet — the zip carries the full self-contained .NET + Windows App SDK runtimes.
+> The GitHub packages aren't size-optimized — they carry the full self-contained .NET + Windows App SDK runtimes.
 
 ## Tech
 
@@ -115,7 +123,9 @@ The debug build is an unpackaged self-contained exe — just run it.
 
 ## Roadmap
 
-**Next:** form filling, digital signature verification, page extraction to a new file, more formats (ePub, CBZ), code signing, smaller packages.
+**Next:** visible signature stamps (draw or import a signature and place it on the page), page extraction to a new file, more formats (ePub, CBZ), code signing for the GitHub builds, smaller packages.
+
+**Known limits:** form JavaScript needs a V8-enabled PDFium build; text selection and annotation are disabled while the view is rotated; signature *validation* would need a cryptography stack Rune doesn't ship.
 
 ## License
 
@@ -123,7 +133,7 @@ The debug build is an unpackaged self-contained exe — just run it.
 
 ### A note on the Microsoft Store
 
-Rune is also published on the Microsoft Store, where it is covered by the Store's Standard Application License Terms. Those terms are generally considered incompatible with the GPL, so this deserves an explicit word:
+Rune is published on the Microsoft Store as **[Rune PDF Reader](https://apps.microsoft.com/detail/9NH37840QDM6)**, where it is covered by the Store's Standard Application License Terms. Those terms are generally considered incompatible with the GPL, so this deserves an explicit word:
 
 Rune's own source is written entirely by its copyright holder, and its dependencies are permissively licensed (PDFium is BSD-3-Clause/Apache-2.0, Win2D and .NET are MIT) — there is no third-party copyleft code in it. As the sole copyright holder I can distribute my own work under whatever terms I choose, and I choose to make it available both under the GPLv3 here and through the Store for people who want automatic updates and one-click installation.
 

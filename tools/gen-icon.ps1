@@ -1,108 +1,170 @@
-# Generates Rune's app icon: a rounded accent-blue tile with a white runic
-# "R" (raido rune) drawn as clean strokes. Outputs:
-#   src/Rune.App/Assets/rune.ico            (16/24/32/48/64/256, PNG-compressed)
-#   src/Rune.App/Assets/*.png               (MSIX visual assets)
+# Rasterizes Rune's app mark from assets/rune.svg (and rune-small.svg below
+# 32px) into every icon asset the app and the Store need:
+#   src/Rune.App/Assets/rune.ico   (16/24/32/48/64/256, PNG-compressed entries)
+#   src/Rune.App/Assets/*.png      (MSIX visual assets, scale-100..400)
 # Run from repo root:  powershell -File tools\gen-icon.ps1
+#
+# The SVG is the design source of truth; edit it, not this script. What follows
+# is NOT a general SVG renderer — it understands only the subset documented at
+# the top of assets/rune.svg. Rendering goes through WPF (Geometry.Parse +
+# RenderTargetBitmap) so the repo keeps its "no external tools" property;
+# PowerShell has no in-box SVG rasterizer, and shelling out to Inkscape or
+# resvg would add a dependency this project deliberately does without.
 
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName PresentationCore, PresentationFramework, WindowsBase, System.Drawing
 
-$assets = Join-Path $PSScriptRoot '..\src\Rune.App\Assets'
+$root = Join-Path $PSScriptRoot '..'
+$assets = Join-Path $root 'src\Rune.App\Assets'
 New-Item -ItemType Directory -Force $assets | Out-Null
 
-function Draw-RuneTile {
-    param([int]$Size, [bool]$Transparent = $false)
+function ConvertTo-Brush {
+    param([string]$Spec, [xml]$Doc, [double]$Size)
 
-    $bmp = New-Object System.Drawing.Bitmap($Size, $Size)
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.SmoothingMode = 'AntiAlias'
-
-    $accent = [System.Drawing.Color]::FromArgb(255, 0, 99, 177)   # Windows accent blue
-    $accent2 = [System.Drawing.Color]::FromArgb(255, 0, 120, 212)
-
-    if (-not $Transparent) {
-        # Rounded-rect tile with a subtle vertical gradient.
-        $radius = [Math]::Max(2, [int]($Size * 0.22))
-        $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-        $d = $radius * 2
-        $path.AddArc(0, 0, $d, $d, 180, 90)
-        $path.AddArc($Size - $d, 0, $d, $d, 270, 90)
-        $path.AddArc($Size - $d, $Size - $d, $d, $d, 0, 90)
-        $path.AddArc(0, $Size - $d, $d, $d, 90, 90)
-        $path.CloseFigure()
-        $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
-            (New-Object System.Drawing.Point(0, 0)),
-            (New-Object System.Drawing.Point(0, $Size)),
-            $accent2, $accent)
-        $g.FillPath($brush, $path)
-        $brush.Dispose(); $path.Dispose()
+    if ($Spec -notmatch '^url\(#(.+)\)$') {
+        return New-Object System.Windows.Media.SolidColorBrush(
+            [System.Windows.Media.ColorConverter]::ConvertFromString($Spec))
     }
 
-    # Raido rune (runic R): vertical stave + angled bow + leg, as strokes.
-    $w = [Math]::Max(1.5, $Size * 0.09)
-    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::White, $w)
-    $pen.StartCap = 'Round'; $pen.EndCap = 'Round'; $pen.LineJoin = 'Round'
+    # The single supported gradient form: a vertical linearGradient by id.
+    $id = $Matches[1]
+    $node = $Doc.svg.defs.linearGradient | Where-Object { $_.id -eq $id }
+    if (-not $node) { throw "gradient '$id' not found in the SVG" }
 
-    $x0 = $Size * 0.36      # stave x
-    $top = $Size * 0.22
-    $bottom = $Size * 0.78
-    $mid = $Size * 0.52
-    $x1 = $Size * 0.64      # bow tip x
-
-    $g.DrawLine($pen, [single]$x0, [single]$top, [single]$x0, [single]$bottom)                 # stave
-    $g.DrawLine($pen, [single]$x0, [single]$top, [single]$x1, [single]($Size * 0.34))          # bow upper
-    $g.DrawLine($pen, [single]$x1, [single]($Size * 0.34), [single]$x0, [single]$mid)          # bow lower
-    $g.DrawLine($pen, [single]$x0, [single]$mid, [single]$x1, [single]$bottom)                 # leg
-
-    $pen.Dispose(); $g.Dispose()
-    return $bmp
+    $brush = New-Object System.Windows.Media.LinearGradientBrush
+    $brush.StartPoint = New-Object System.Windows.Point 0, 0
+    $brush.EndPoint = New-Object System.Windows.Point 0, 1
+    foreach ($stop in $node.stop) {
+        $brush.GradientStops.Add((New-Object System.Windows.Media.GradientStop(
+            [System.Windows.Media.ColorConverter]::ConvertFromString($stop.'stop-color'),
+            [double]$stop.offset)))
+    }
+    return $brush
 }
 
-function Save-Png([System.Drawing.Bitmap]$bmp, [string]$path) {
-    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-    Write-Host "wrote $(Split-Path -Leaf $path)"
+# Renders one SVG file at the given pixel size onto a transparent surface.
+function Convert-SvgToBitmap {
+    param([string]$SvgPath, [int]$Size)
+
+    [xml]$doc = Get-Content -Raw -LiteralPath $SvgPath
+    # viewBox is "0 0 W H"; everything below is expressed in those units.
+    $view = [double](($doc.svg.viewBox -split '\s+')[2])
+    $scale = $Size / $view
+
+    $visual = New-Object System.Windows.Media.DrawingVisual
+    $ctx = $visual.RenderOpen()
+    $ctx.PushTransform((New-Object System.Windows.Media.ScaleTransform $scale, $scale))
+
+    # <rect> — only the tile uses this, and only with a uniform corner radius.
+    foreach ($rect in @($doc.svg.rect)) {
+        if (-not $rect) { continue }
+        $r = New-Object System.Windows.Rect ([double]$rect.x), ([double]$rect.y), ([double]$rect.width), ([double]$rect.height)
+        $radius = if ($rect.rx) { [double]$rect.rx } else { 0 }
+        $ctx.DrawRoundedRectangle((ConvertTo-Brush $rect.fill $doc $view), $null, $r, $radius, $radius)
+    }
+
+    # <path> — filled when it carries fill, stroked when it carries stroke.
+    foreach ($path in @($doc.svg.path)) {
+        if (-not $path) { continue }
+        $geometry = [System.Windows.Media.Geometry]::Parse($path.d)
+
+        if ($path.fill) {
+            $ctx.DrawGeometry((ConvertTo-Brush $path.fill $doc $view), $null, $geometry)
+        }
+        if ($path.stroke) {
+            $pen = New-Object System.Windows.Media.Pen(
+                (ConvertTo-Brush $path.stroke $doc $view),
+                [double]$path.'stroke-width')
+            # Round caps/joins are assumed rather than parsed — the mark is
+            # drawn with them throughout and nothing else has looked right.
+            $pen.StartLineCap = 'Round'
+            $pen.EndLineCap = 'Round'
+            $pen.LineJoin = 'Round'
+            $ctx.DrawGeometry($null, $pen, $geometry)
+        }
+    }
+
+    $ctx.Pop()
+    $ctx.Close()
+
+    $rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap(
+        $Size, $Size, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
+    $rtb.Render($visual)
+    return $rtb
+}
+
+# Below 32px the fold and the thin strokes collapse, so small sizes get their
+# own art rather than a scaled-down version of the large one.
+$svgLarge = Join-Path $root 'assets\rune.svg'
+$svgSmall = Join-Path $root 'assets\rune-small.svg'
+function Get-Source([int]$Size) { if ($Size -lt 32) { $svgSmall } else { $svgLarge } }
+
+function Save-Bitmap {
+    param($Bitmap, [string]$Path)
+    $encoder = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+    $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($Bitmap))
+    $stream = [System.IO.File]::Create($Path)
+    $encoder.Save($stream)
+    $stream.Dispose()
+    Write-Host "wrote $(Split-Path -Leaf $Path)"
+}
+
+# Square art centred on a wider canvas (wide tile, splash screen).
+function Save-Centred {
+    param([int]$CanvasW, [int]$CanvasH, [int]$Art, [string]$Path)
+    $visual = New-Object System.Windows.Media.DrawingVisual
+    $ctx = $visual.RenderOpen()
+    $ctx.DrawImage((Convert-SvgToBitmap (Get-Source $Art) $Art),
+        (New-Object System.Windows.Rect ([double](($CanvasW - $Art) / 2)), ([double](($CanvasH - $Art) / 2)), ([double]$Art), ([double]$Art)))
+    $ctx.Close()
+    $rtb = New-Object System.Windows.Media.Imaging.RenderTargetBitmap(
+        $CanvasW, $CanvasH, 96, 96, [System.Windows.Media.PixelFormats]::Pbgra32)
+    $rtb.Render($visual)
+    Save-Bitmap $rtb $Path
 }
 
 # ---- MSIX visual assets ----------------------------------------------------
-foreach ($spec in @(
-    @{ Name = 'Square44x44Logo.scale-200.png';   Size = 88 },
+# The previous set was scale-200 only, which is the bare minimum the Store
+# accepts; Windows picks the nearest and rescales, which is why the taskbar
+# icon looked soft. These are the scales Windows actually asks for.
+$square = @(
+    @{ Name = 'Square44x44Logo.scale-100.png'; Size = 44 },
+    @{ Name = 'Square44x44Logo.scale-125.png'; Size = 55 },
+    @{ Name = 'Square44x44Logo.scale-150.png'; Size = 66 },
+    @{ Name = 'Square44x44Logo.scale-200.png'; Size = 88 },
+    @{ Name = 'Square44x44Logo.scale-400.png'; Size = 176 },
+    @{ Name = 'Square44x44Logo.targetsize-16.png'; Size = 16 },
+    @{ Name = 'Square44x44Logo.targetsize-24.png'; Size = 24 },
+    @{ Name = 'Square44x44Logo.targetsize-32.png'; Size = 32 },
+    @{ Name = 'Square44x44Logo.targetsize-48.png'; Size = 48 },
+    @{ Name = 'Square44x44Logo.targetsize-256.png'; Size = 256 },
     @{ Name = 'Square44x44Logo.targetsize-24_altform-unplated.png'; Size = 24 },
+    @{ Name = 'Square44x44Logo.targetsize-48_altform-unplated.png'; Size = 48 },
+    @{ Name = 'Square44x44Logo.targetsize-256_altform-unplated.png'; Size = 256 },
+    @{ Name = 'Square150x150Logo.scale-100.png'; Size = 150 },
+    @{ Name = 'Square150x150Logo.scale-125.png'; Size = 188 },
+    @{ Name = 'Square150x150Logo.scale-150.png'; Size = 225 },
     @{ Name = 'Square150x150Logo.scale-200.png'; Size = 300 },
-    @{ Name = 'Wide310x150Logo.scale-200.png';   Size = 300 },   # square art centered on wide canvas below
-    @{ Name = 'StoreLogo.png';                   Size = 50 }
-)) {
-    if ($spec.Name -like 'Wide*') {
-        $wide = New-Object System.Drawing.Bitmap(620, 300)
-        $g = [System.Drawing.Graphics]::FromImage($wide)
-        $tile = Draw-RuneTile -Size 300
-        $g.DrawImage($tile, 160, 0)
-        $g.Dispose(); $tile.Dispose()
-        Save-Png $wide (Join-Path $assets $spec.Name)
-        $wide.Dispose()
-    }
-    else {
-        $tile = Draw-RuneTile -Size $spec.Size
-        Save-Png $tile (Join-Path $assets $spec.Name)
-        $tile.Dispose()
-    }
+    @{ Name = 'Square150x150Logo.scale-400.png'; Size = 600 },
+    @{ Name = 'StoreLogo.png'; Size = 50 },
+    @{ Name = 'StoreLogo.scale-200.png'; Size = 100 }
+)
+foreach ($spec in $square) {
+    Save-Bitmap (Convert-SvgToBitmap (Get-Source $spec.Size) $spec.Size) (Join-Path $assets $spec.Name)
 }
 
-# Splash screen: 1240x600, tile centered.
-$splash = New-Object System.Drawing.Bitmap(1240, 600)
-$g = [System.Drawing.Graphics]::FromImage($splash)
-$tile = Draw-RuneTile -Size 300
-$g.DrawImage($tile, 470, 150)
-$g.Dispose(); $tile.Dispose()
-Save-Png $splash (Join-Path $assets 'SplashScreen.scale-200.png')
-$splash.Dispose()
+Save-Centred 310 150 150 (Join-Path $assets 'Wide310x150Logo.scale-100.png')
+Save-Centred 620 300 300 (Join-Path $assets 'Wide310x150Logo.scale-200.png')
+Save-Centred 620 300 300 (Join-Path $assets 'SplashScreen.scale-100.png')
+Save-Centred 1240 600 600 (Join-Path $assets 'SplashScreen.scale-200.png')
 
 # ---- Multi-size .ico (PNG-compressed entries) ------------------------------
 $sizes = 16, 24, 32, 48, 64, 256
 $pngs = foreach ($s in $sizes) {
-    $bmp = Draw-RuneTile -Size $s
+    $encoder = New-Object System.Windows.Media.Imaging.PngBitmapEncoder
+    $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create((Convert-SvgToBitmap (Get-Source $s) $s)))
     $ms = New-Object System.IO.MemoryStream
-    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-    $bmp.Dispose()
+    $encoder.Save($ms)
     , $ms.ToArray()
 }
 

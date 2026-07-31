@@ -1,0 +1,77 @@
+<UserControl
+    x:Class="Rune.Controls.SignaturePad"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <StackPanel Spacing="10" Width="440">
+        <TextBlock
+            Text="Draw your signature below, or import a picture of one."
+            Style="{StaticResource CaptionTextBlockStyle}"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            TextWrapping="Wrap" />
+
+        <!-- The pad is deliberately white in both themes: a signature is ink on
+             paper, and drawing it on a dark surface would misrepresent how it
+             lands on the page. -->
+        <!-- Live strokes are plain XAML Polylines, not a Win2D CanvasControl: a
+             Win2D control hosted inside a ContentDialog's popup does not
+             reliably get a device and renders nothing. Win2D is still used,
+             but only offscreen, to rasterise the finished strokes.
+
+             The Canvas needs a Background to be hit-testable at all. -->
+        <Border
+            BorderThickness="1"
+            BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+            CornerRadius="{StaticResource RadiusMedium}"
+            Height="180">
+            <Grid>
+                <Canvas
+                    x:Name="Pad"
+                    Background="White"
+                    PointerPressed="Pad_PointerPressed"
+                    PointerMoved="Pad_PointerMoved"
+                    PointerReleased="Pad_PointerReleased"
+                    PointerCanceled="Pad_PointerReleased"
+                    PointerCaptureLost="Pad_PointerReleased" />
+                <!-- Above the canvas so an import is visible, but transparent to
+                     the pointer so drawing still reaches the canvas. -->
+                <Image
+                    x:Name="ImportedPreview"
+                    Stretch="Uniform"
+                    Margin="8"
+                    IsHitTestVisible="False" />
+            </Grid>
+        </Border>
+
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <Button
+                    x:Name="BlackButton"
+                    Style="{StaticResource InkSwatchButtonStyle}"
+                    Click="BlackButton_Click"
+                    ToolTipService.ToolTip="Black" />
+                <Button
+                    x:Name="BlueButton"
+                    Style="{StaticResource InkSwatchButtonStyle}"
+                    Click="BlueButton_Click"
+                    ToolTipService.ToolTip="Blue" />
+            </StackPanel>
+
+            <Button
+                Grid.Column="2"
+                Content="Clear"
+                Click="ClearButton_Click" />
+            <Button
+                Grid.Column="3"
+                Content="Import image…"
+                Click="ImportButton_Click" />
+        </Grid>
+    </StackPanel>
+</UserControl>

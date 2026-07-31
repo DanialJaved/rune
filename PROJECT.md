@@ -283,6 +283,84 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
   pinned to **1024** in `Tiles.cs` — do **not** raise it. (This was the root
   cause of the "rotate shows blank page" bug: only rotated landscape pages
   produced tiles that wide.)
+- **PDFium form-fill landmines** (all cost real time in v0.5.0; see
+  `PdfiumFormEnvironment.cs` and `PdfDocument.Forms.cs`):
+  - **`FPDFAnnot_SetFormFieldValue` does not exist.** The only way to change a
+    field's value is to drive the event API — click, then `FORM_OnChar`. Don't
+    go looking for a programmatic setter; there isn't one.
+  - `FPDF_FORMFILLINFO.version` must be **1**. Version 2 appends XFA members and
+    this build has no XFA, so declaring 2 makes PDFium read past the struct.
+  - PDFium stores the **pointer** to `FPDF_FORMFILLINFO`, so it lives in
+    `AllocHGlobal` memory, not on the managed heap where the GC can move it —
+    same rule as `FileAccessAdapter`.
+  - `FFI_GetLocalTime` is left NULL deliberately: it returns a 16-byte struct
+    **by value**, and it's only used by form JS, which this build can't run.
+  - `FFI_SetTimer`/`FFI_KillTimer` are left NULL deliberately — they exist for
+    caret blink, which would re-rasterize the focused field's tiles twice a
+    second. A decision, not an oversight.
+  - `FFI_GetPage` must **not** call `FORM_OnAfterLoadPage`, and must not load a
+    page — PDFium calls it from inside its own page setup. It returns only pages
+    the cache already holds.
+  - **Never `RunAsync` from inside a form callback** — instant deadlock.
+  - **`FPDF_SetFormFieldHighlightColor` takes BGR, not RGB**, despite the header
+    saying `0xxxrrggbb`. Passing `0x3399FF` renders peach. Verified on screen.
+  - **Kill form focus before every save.** PDFium holds the in-progress value in
+    the focused widget, so saving with focus alive writes the field's *previous*
+    value. `SaveAs` and `FlattenPage` both do this themselves.
+  - `FPDFImageObj_SetBitmap` takes a page **array**, not a page.
+  - `FPDFSignatureObj_GetSubFilter`/`GetTime` are ASCII; `GetReason` is UTF-16.
+- **Theme brushes in code-behind**: never resolve one via
+  `Application.Current.Resources["...Brush"]` — it returns the **dark** value
+  whatever the active theme is. Define a `Style` in `Styles/Controls.xaml` and
+  assign `element.Style`; a Style's setters resolve against the element's real
+  theme. Reading a *Style* out of `Application.Current.Resources` is fine.
+- **`ContentDialog` doesn't follow `Window.Content`'s theme either.** It is
+  hosted in a popup outside the content tree, so it tracks the OS: choosing
+  Light in Rune on a dark-mode Windows gave a dark dialog over a light app.
+  `ShowDialogAsync` now sets `dialog.RequestedTheme` centrally — every dialog in
+  the window goes through it, so don't call `ShowAsync` directly.
+- **`InfoBar` stretches to its container.** Its template is a full-width bar, so
+  dropping one into the row-2 overlay Grid painted it straight across the
+  sidebar with its message clipped. Notices go through `NoticeHost`, which
+  bounds it with `MaxWidth` + centre alignment. There are two hosts: one per
+  `DocumentView` (inside `SplitView.Content`, so it can never reach the sidebar
+  and re-centres itself when the pane toggles — no width arithmetic), and one at
+  window level for messages with no document open. `MainWindow.ShowNotice`
+  routes between them; `ShowError` is a thin shim over it.
+- **Caption buttons don't follow `Window.Content`'s theme.** Because the theme is
+  set on the content root rather than `Application.RequestedTheme`, the system
+  caption glyphs track the OS. `MainWindow.ApplyThemeToChrome` sets
+  `AppWindow.TitleBar.Button*Color` explicitly — and their backgrounds must stay
+  `Transparent` or Mica dies behind the tab strip.
+- **`ChangeView` clamps against the OLD extent.** After `RebuildLayout()` assigns
+  `Canvas.Width/Height`, the ScrollViewer has not re-measured, so `ChangeView`
+  clamps the requested offset to the previous `ScrollableWidth/Height` —
+  zooming in silently lands short. Call `Scroller.UpdateLayout()` in between
+  (see `ScrollToAnchor`). Same class as the stale-`ViewportWidth` note above.
+  `ChangeView` also returns `bool` and does nothing when it returns false.
+- **Zoom must anchor in PAGE space, never document space.** `PageLayout` is
+  affine, not a pure scale: `Margin` and `PageGap` are constant DIPs and pages
+  are centred. Scaling a scroll offset by the zoom ratio therefore mis-scales
+  those constants, and since the gap is added once per page the error grows
+  with page index — barely visible on page 1, tens of DIPs by page 40. Use
+  `ZoomAnchor.Capture`/`Restore`; `ZoomAnchorTests` pins the behaviour.
+- **Handle Ctrl+wheel on the Canvas, not the ScrollViewer.** Attaching to the
+  ScrollViewer needs `handledEventsToo: true`, which means the ScrollViewer has
+  *already* applied its own Ctrl+wheel zoom — so the real zoom stepped and its
+  `ZoomFactor` got folded in on top, zooming roughly twice as far per notch.
+  `PointerWheelChanged` bubbles from the hit-test target, so handling it on the
+  child pre-empts the ScrollViewer entirely.
+- **Win2D controls don't work inside a `ContentDialog`.** A `CanvasControl`
+  hosted in the dialog's popup never gets a device and silently renders
+  nothing — the signature pad draws with XAML `Polyline`s and uses Win2D only
+  offscreen (`CanvasRenderTarget` + `CanvasDevice.GetSharedDevice()`), which is
+  unaffected. `InkCanvas` is not available in this SDK at all.
+- **Win2D renders premultiplied; PDFium composites straight alpha.** Pinned by
+  `StampTests.HalfAlphaGrey_CompositesAsStraightAlpha` — a mid-grey at 50% must
+  land at ~191 over white, not ~255. `SignaturePad.ToStraightAlpha` is the one
+  place the conversion happens; a fully transparent or fully opaque pixel is
+  identical either way, which is why the earlier transparency test couldn't
+  detect the difference.
 - **No Visual Studio** — everything is `dotnet` CLI. Don't suggest VS-only flows.
 - **Line endings:** commits warn `LF will be replaced by CRLF` (harmless);
   `.gitattributes` marks PDFs/images binary so autocrlf can't corrupt them.
@@ -465,36 +543,95 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
   **fit-width / fit-page / rotate-left / rotate-right always visible in the
   header** (+ Ctrl+Shift+R for rotate-left). 93 → 118 tests. Also: `main` is
   now branch-protected (no force-push, no deletion).
+- **v0.5.0** (2026-07-31) — the release that turns a reader into a document tool.
+  **Added: interactive form filling.** The whole of `fpdf_formfill.h` was
+  unbound; v0.5.0 adds the form-fill environment (`PdfiumFormEnvironment`), the
+  `FPDF_FFLDraw` pass inside `RenderRegionToBuffer` (so filled fields show in
+  tiles, thumbnails, presentation and print alike), pointer/keyboard routing,
+  and XFA detection with an honest info bar instead of a dead form.
+  **Added: flatten** (`FPDFPage_Flatten`) and **signature details** — read-only,
+  reporting only what the file claims plus `/ByteRange` coverage, and never
+  asserting validity, because Rune ships no cryptography.
+  **New architecture: the page-handle cache** (`PdfDocument.PageCache.cs`) —
+  PDFium needs a stable `FPDF_PAGE` across keystrokes, so pages are no longer
+  loaded and closed per operation. Every PDFium call site was moved onto it, and
+  the last seven off-render-thread call sites (including `PrintService`, which
+  rendered on the *UI* thread) now go through the work queue.
+  **Fixed** all three v0.4.1 known bugs (see §10), plus the two
+  `Application.Current.Resources` brush reads and caption buttons that ignored
+  the app's theme. Colour now lives in `Styles/RuneColors.cs` (Win2D) and
+  `{ThemeResource}` brushes (XAML); ~20 hardcoded `Opacity` values became real
+  secondary/tertiary text brushes.
+  **New logo**: the raido rune set on a document page, authored as
+  `assets/rune.svg` and rasterized by `tools/gen-icon.ps1` through WPF — plus
+  the full scale-100..400 asset set the Store recommends, where before there was
+  only scale-200.
+  **Fixed two long-standing viewer bugs** found by using the build:
+  *Zoom didn't follow the cursor* — both zoom paths scaled the scroll offset by
+  the zoom ratio, which assumes document space scales purely with zoom. It
+  doesn't (constant `Margin`/`PageGap`, centred pages), and the error compounded
+  once per page gap: negligible on page 1, tens of DIPs by page 40. Anchoring
+  now goes through `ZoomAnchor` in page space. Ctrl+wheel is also handled
+  directly on the Canvas instead of by the ScrollViewer, so it anchors exactly
+  and never raster-scales.
+  *The page went blurry and stayed that way* — `UpdateDesiredTiles` returned
+  early whenever `ScrollViewer.ZoomFactor != 1`, and only a settling
+  `ViewChanged` ever reset it. A missed one left the tile pipeline permanently
+  unable to request a crisp tile. It now folds the factor in itself rather than
+  giving up. Also fixed a stale-key leak in the v0.5.0 form-refresh sets that
+  made evicted tiles get re-requested forever.
+  **Rebuilt the notice surface.** The signature/XFA notice was a raw `InfoBar`
+  in the window overlay, so it stretched across the sidebar with its text
+  clipped, covered the find bar, and reopened itself after every page edit
+  because its close button recorded nothing. It is now `NoticeHost` — a compact
+  floating card bounded to the document area — and it is the app's *only*
+  message channel, replacing the error bar that had the same stretch bug and
+  was announcing successful flattens in red with error semantics. Dialogs also
+  now inherit the app theme instead of the OS's. 118 → 197 tests.
 
 ---
 
-## 10. Known bugs (found by driving the app; none are regressions)
+## 10. Known bugs
 
-All three predate v0.4.1 and were surfaced while capturing Store screenshots.
-They're the kind of thing a first-time user hits, and none is hard to fix.
+None open. The three v0.4.1 bugs below, and the two zoom/blur bugs found while
+using v0.5.0 (see §9), were all fixed in v0.5.0; kept here with their fixes
+because each one's cause is worth remembering.
 
-1. **Navigation keys go dead after clicking a tab or the page-number box.**
-   The Win2D canvas isn't focusable, so clicking the document never takes focus
-   back. `Content_PreviewKeyDown` correctly defers to text inputs
-   (`IsTextInputFocused`) and to `SelectorItem`/`TreeViewItem` — but `TabViewItem`
-   *is* a `SelectorItem`, and the page `NumberBox` *is* a text input, so arrows
-   and PageUp/PageDown stay routed away from the viewer. Likely fix: make the
-   ScrollViewer focusable (`IsTabStop`) and focus it on pointer-press in the
-   canvas. Same class as the original v0.4.0 arrow-key complaint.
-2. **Selected pages are nearly invisible in light theme.** Multi-select works,
-   but the thumbnail `Border`'s opaque background occludes the ListViewItem
-   selection tint — only a thin accent bar on the left edge shows. Bad for a
-   feature built around multi-select page editing. Visible in dark theme.
-3. **Night mode doesn't invert sidebar thumbnails** — light thumbnails against
-   an inverted page. Night mode is a viewer-only GPU `InvertEffect`; making
-   thumbnails follow it means inverting their bitmaps too.
+1. ~~Navigation keys go dead after clicking a tab or the page-number box.~~
+   **Fixed.** `PdfViewer` is now `IsTabStop = true` and takes focus on pointer
+   press (it had to be, for form fields to receive keystrokes at all).
+   `IsTextInputFocused()` additionally reports true while a PDF form field has
+   focus, so arrows move the caret rather than scrolling the document.
+2. ~~Selected pages are nearly invisible in light theme.~~ **Fixed.** Cause was
+   the thumbnail `Border`'s opaque background painting over the ListViewItem's
+   selection tint. The current page now draws its own accent ring as a second
+   Border overlay (`ThumbnailItem.RingThickness`), owing nothing to the
+   container. Only the *thickness* is bound — the accent brush stays in XAML as
+   a `{ThemeResource}`.
+3. ~~Night mode doesn't invert sidebar thumbnails.~~ **Fixed.** `DocumentView.ToBitmap`
+   inverts BGRA during the copy it already performs (~55k pixels, sub-ms), and
+   `PdfViewer.NightModeChanged` re-renders realized containers. The homepage
+   recent-document cards are deliberately **not** inverted: the start page isn't
+   a document, and night mode is a per-document reading mode.
 
 ---
 
 ## 11. Roadmap (not yet built)
 
-- Form filling
-- Digital signature verification
+- **Typed signatures** (a script font) — Draw and Import shipped; typing is the
+  least convincing of the three and is easy to add to `SignaturePad` later.
+- **Resize handles on a placed signature** — today the size is chosen during
+  placement (click = last-used width, drag = custom) and is final once placed;
+  erase and re-place to change it.
+- **Form JavaScript** — needs a V8-enabled PDFium build (`bblanchon.PDFium.V8.*`,
+  a one-line csproj swap for a much larger binary). Without it, auto-calculating
+  fields accept typed values but never recalculate.
+- **Form filling and annotation while rotated** — every interactive path still
+  early-returns when `_rotation != 0`. `PdfiumNative.DeviceToPage` now takes a
+  rotation argument, but the viewer's `ToPageLocal`/`HighlightRect` still assume
+  the unrotated view, and so do `PageText` and `AnnotationInfo`.
+- **Signature validation** — out of reach without a crypto stack. Rune reports
+  only what the file claims plus byte-range coverage, and must never say "valid".
 - Page **extract** to a new file (reorder/delete/insert already shipped in v0.4)
 - More formats (ePub, CBZ — would need MuPDF; note AGPL implications)
 - **Code signing** — *solved for Store installs* (the Store re-signs). Still open

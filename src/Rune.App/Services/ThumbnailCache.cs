@@ -12,12 +12,22 @@ namespace Rune.Services;
 /// Everything runs on background threads; results are returned as encoded PNG
 /// bytes the caller turns into a bitmap on the UI thread.
 /// </summary>
-public sealed class ThumbnailCache
+public sealed class ThumbnailCache : IDisposable
 {
     private const int TargetWidthPx = 320;
     private const int MaxCachedFiles = 24;
 
     private readonly string _dir;
+
+    /// <summary>
+    /// A serialized PDFium thread of this cache's own. Homepage thumbnails open
+    /// short-lived documents unrelated to any open tab, so they have no viewer
+    /// scheduler to borrow — but they must not run on pool threads either: two
+    /// threads inside PDFium contend on the global lock, and a homepage render
+    /// would stall the render thread mid-scroll. No tiles are ever scheduled
+    /// here, so the tile callback is never invoked.
+    /// </summary>
+    private readonly RenderScheduler _pdfThread = new((_, _) => { });
 
     public ThumbnailCache()
     {
@@ -49,7 +59,7 @@ public sealed class ThumbnailCache
                     return await File.ReadAllBytesAsync(cachePath);
                 }
 
-                byte[] png = Render(pdfPath);
+                byte[] png = EncodePng(await _pdfThread.RunAsync(PdfWorkPriority.Thumbnail, () => RenderRaw(pdfPath)));
                 await File.WriteAllBytesAsync(cachePath, png);
                 Prune();
                 return png;
@@ -61,7 +71,11 @@ public sealed class ThumbnailCache
         });
     }
 
-    private static byte[] Render(string pdfPath)
+    /// <summary>Raw BGRA pixels detached from the pooled render buffer, safe to hand off the PDFium thread.</summary>
+    private readonly record struct RawImage(byte[] Pixels, int Width, int Height);
+
+    /// <summary>Runs on the PDFium thread. PNG encoding deliberately does not — it needs no PDFium state.</summary>
+    private static RawImage RenderRaw(string pdfPath)
     {
         using var doc = PdfDocument.Open(pdfPath);
         var (ptWidth, _) = doc.GetPageSize(0);
@@ -69,7 +83,10 @@ public sealed class ThumbnailCache
         var page = doc.RenderPage(0, scale);
         try
         {
-            return EncodePng(page);
+            // The pooled buffer may be longer than the image; copy the exact bytes.
+            var pixels = new byte[page.Stride * page.Height];
+            Array.Copy(page.Pixels, pixels, pixels.Length);
+            return new RawImage(pixels, page.Width, page.Height);
         }
         finally
         {
@@ -77,19 +94,15 @@ public sealed class ThumbnailCache
         }
     }
 
-    private static byte[] EncodePng(PageBitmap page)
+    private static byte[] EncodePng(RawImage image)
     {
         // BitmapEncoder needs a random-access stream; encode in-memory to bytes.
         using var stream = new InMemoryRandomAccessStream();
         var encoder = BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream).AsTask().GetAwaiter().GetResult();
 
-        // The pooled buffer may be longer than the image; copy the exact bytes.
-        var pixels = new byte[page.Stride * page.Height];
-        Array.Copy(page.Pixels, pixels, pixels.Length);
-
         encoder.SetPixelData(
             BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore,
-            (uint)page.Width, (uint)page.Height, 96, 96, pixels);
+            (uint)image.Width, (uint)image.Height, 96, 96, image.Pixels);
         encoder.FlushAsync().AsTask().GetAwaiter().GetResult();
 
         stream.Seek(0);
@@ -133,4 +146,6 @@ public sealed class ThumbnailCache
             // Pruning is best-effort.
         }
     }
+
+    public void Dispose() => _pdfThread.Dispose();
 }

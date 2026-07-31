@@ -1,0 +1,41 @@
+<UserControl
+    x:Class="Rune.Controls.NoticeHost"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    IsHitTestVisible="True">
+
+    <!-- A floating notice card, not a full-width bar.
+
+         The InfoBar default template stretches to its container, which is how
+         the document notice ended up painted across the sidebar with its text
+         clipped. MaxWidth plus explicit alignment is what keeps it a card; the
+         elevation matches CommandPalette, the app's other floating surface.
+
+         Margin is a literal Thickness because the spacing tokens are x:Double,
+         which Margin cannot take — same as ZoomPill and FindBar.
+
+         The opaque Background is load-bearing: InfoBar's severity tint is
+         translucent, so without an opaque surface underneath it the page text
+         reads straight through the card. -->
+    <Border
+        x:Name="Card"
+        Visibility="Collapsed"
+        MaxWidth="{StaticResource NoticeMaxWidth}"
+        HorizontalAlignment="Center"
+        VerticalAlignment="Top"
+        Margin="16"
+        CornerRadius="{StaticResource RadiusMedium}"
+        Translation="0,0,32"
+        Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+        <Border.Shadow>
+            <ThemeShadow />
+        </Border.Shadow>
+
+        <InfoBar
+            x:Name="Bar"
+            IsOpen="False"
+            IsClosable="True"
+            CloseButtonClick="Bar_CloseButtonClick"
+            CornerRadius="{StaticResource RadiusMedium}" />
+    </Border>
+</UserControl>

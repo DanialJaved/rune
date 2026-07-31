@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Rune.Engine;
 
@@ -77,7 +78,40 @@ public sealed class ThumbnailItem : INotifyPropertyChanged
 
     public bool IsRendered => _image is not null;
 
+    /// <summary>
+    /// Whether this is the page currently being read.
+    ///
+    /// The ring is drawn by the item rather than left to the ListViewItem's
+    /// selection tint, because the thumbnail Border's opaque background paints
+    /// over that tint — which is why the current page was nearly invisible in
+    /// the light theme while looking fine in dark.
+    /// </summary>
+    public bool IsCurrent
+    {
+        get => _isCurrent;
+        set
+        {
+            if (_isCurrent == value)
+            {
+                return;
+            }
+            _isCurrent = value;
+            PropertyChanged?.Invoke(this, RingThicknessChangedArgs);
+        }
+    }
+
+    /// <summary>
+    /// Thickness of the accent ring overlay: 2 when this is the current page,
+    /// 0 otherwise. Only the thickness is data-bound — the accent brush itself
+    /// stays in XAML as a {ThemeResource}, because resolving a theme brush from
+    /// code returns the dark-theme value whatever the active theme is.
+    /// </summary>
+    public Thickness RingThickness => new(_isCurrent ? 2 : 0);
+
+    private bool _isCurrent;
+
     private static readonly PropertyChangedEventArgs ImageChangedArgs = new(nameof(Image));
     private static readonly PropertyChangedEventArgs BoxHeightChangedArgs = new(nameof(BoxHeight));
+    private static readonly PropertyChangedEventArgs RingThicknessChangedArgs = new(nameof(RingThickness));
     public event PropertyChangedEventHandler? PropertyChanged;
 }

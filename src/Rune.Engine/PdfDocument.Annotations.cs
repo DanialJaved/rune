@@ -16,10 +16,25 @@ public sealed record AnnotationInfo(int Index, int Subtype, double X, double Y, 
 }
 
 /// <summary>
+/// The pixels behind a stamp annotation, straight (non-premultiplied) BGRA.
+/// Held so undo can re-create the stamp: reading an image back out of a live
+/// annotation would need FPDFImageObj_GetBitmap, which isn't bound.
+/// </summary>
+public sealed record StampImage(byte[] Bgra, int Width, int Height)
+{
+    /// <summary>Retained bytes, for the undo stack's memory cap.</summary>
+    public long ByteCount => Bgra.LongLength;
+}
+
+/// <summary>
 /// Everything needed to faithfully re-create one of Rune's annotation
-/// subtypes (markup/ink/note) — captured before a deletion so undo can
+/// subtypes (markup/ink/note/stamp) — captured before a deletion so undo can
 /// rebuild it. All geometry is in PDF page space (bottom-left origin).
 /// </summary>
+/// <param name="Stamp">
+/// Set only for stamps. Trailing and defaulted so every existing call site is
+/// unaffected.
+/// </param>
 public sealed record AnnotationSpec(
     int PageIndex,
     int Subtype,
@@ -28,7 +43,8 @@ public sealed record AnnotationSpec(
     (float L, float B, float R, float T) Rect,
     (byte R, byte G, byte B, byte A) Color,
     float BorderWidth,
-    string Contents);
+    string Contents,
+    StampImage? Stamp = null);
 
 public sealed partial class PdfDocument
 {
@@ -52,7 +68,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 throw PdfiumNative.LastError();
@@ -102,7 +118,7 @@ public sealed partial class PdfDocument
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
         IsDirty = true;
@@ -126,7 +142,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 throw PdfiumNative.LastError();
@@ -172,7 +188,7 @@ public sealed partial class PdfDocument
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
         IsDirty = true;
@@ -187,7 +203,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 throw PdfiumNative.LastError();
@@ -223,7 +239,7 @@ public sealed partial class PdfDocument
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
         IsDirty = true;
@@ -239,7 +255,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 return result;
@@ -282,7 +298,7 @@ public sealed partial class PdfDocument
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
         return result;
@@ -297,7 +313,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 return false;
@@ -308,7 +324,7 @@ public sealed partial class PdfDocument
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
         IsDirty |= removed;
@@ -325,7 +341,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 return false;
@@ -340,7 +356,7 @@ public sealed partial class PdfDocument
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
         IsDirty |= removed;
@@ -361,7 +377,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 return null;
@@ -427,7 +443,7 @@ public sealed partial class PdfDocument
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
     }
@@ -442,7 +458,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, pageIndex);
+            IntPtr page = AcquirePageLocked(pageIndex);
             if (page == IntPtr.Zero)
             {
                 return null;
@@ -453,7 +469,7 @@ public sealed partial class PdfDocument
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(pageIndex);
             }
         }
         return lastIndex < 0 ? null : CaptureAnnotation(pageIndex, lastIndex);
@@ -468,7 +484,7 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
-            IntPtr page = PdfiumNative.LoadPage(_handle, spec.PageIndex);
+            IntPtr page = AcquirePageLocked(spec.PageIndex);
             if (page == IntPtr.Zero)
             {
                 throw PdfiumNative.LastError();
@@ -492,6 +508,14 @@ public sealed partial class PdfDocument
                     }
                     var (rl, rb, rr, rt) = spec.Rect;
                     PdfiumNative.SetAnnotRect(annot, rl, rb, rr, rt);
+
+                    // Stamps carry pixels rather than geometry; re-attach the
+                    // image and scale it back into the captured rect.
+                    if (spec.Stamp is { } stamp)
+                    {
+                        AttachStampImageLocked(page, annot, stamp, rl, rb, rr, rt);
+                    }
+
                     PdfiumNative.SetAnnotColor(annot, spec.Color.R, spec.Color.G, spec.Color.B, spec.Color.A);
                     if (spec.BorderWidth > 0)
                     {
@@ -510,7 +534,7 @@ public sealed partial class PdfDocument
             }
             finally
             {
-                PdfiumNative.ClosePage(page);
+                ReleasePageLocked(spec.PageIndex);
             }
         }
         IsDirty = true;
@@ -527,6 +551,17 @@ public sealed partial class PdfDocument
         lock (PdfiumLibrary.Lock)
         {
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            // Commit any in-progress field edit BEFORE closing pages. PDFium
+            // keeps the value being typed in the focused widget, so saving with
+            // focus alive writes the field's previous value and silently drops
+            // what the user just entered.
+            if (_formEnv is { Handle: not 0, IsXfa: false } env)
+            {
+                PdfiumNative.FormKillFocus(env.Handle);
+            }
+            // Close pages so pending page-level state is flushed into the
+            // document before it is serialized.
+            ReleaseAllPagesLocked();
             if (!PdfiumNative.SaveCopy(_handle, stream))
             {
                 throw new PdfiumException("Saving the PDF failed.", 1);
