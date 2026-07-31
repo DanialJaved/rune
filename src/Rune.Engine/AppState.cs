@@ -47,11 +47,10 @@ public sealed class AppSettings
     /// <summary>Enable j/k/g/G-style navigation keys.</summary>
     public bool VimKeys { get; set; } = true;
 
-    /// <summary>Check GitHub for a newer release once per launch (≥24h apart).</summary>
-    public bool AutoCheckUpdates { get; set; } = true;
-
-    /// <summary>Last time an update check ran, to rate-limit automatic checks.</summary>
-    public DateTime LastUpdateCheckUtc { get; set; } = DateTime.MinValue;
+    // AutoCheckUpdates / LastUpdateCheckUtc used to live here. Rune no longer
+    // updates itself — the Store does — so both are gone. Existing state.json
+    // files still carry the keys; System.Text.Json ignores unknown properties,
+    // so no migration is needed.
 
     /// <summary>Show a thumbnail grid of recent documents on the start page.</summary>
     public bool ShowRecentThumbnails { get; set; } = true;

@@ -81,13 +81,61 @@ public sealed partial class PdfDocument : IDisposable
         {
             (ptWidth, ptHeight) = (ptHeight, ptWidth);
         }
-        return (Math.Max(1, (int)MathF.Round(ptWidth * scale)),
-                Math.Max(1, (int)MathF.Round(ptHeight * scale)));
+        // Saturate rather than cast blind: a float past int range converts to an
+        // unspecified value, and a page may declare any MediaBox it likes.
+        return (ToPixels(ptWidth * scale), ToPixels(ptHeight * scale));
+
+        static int ToPixels(float value) =>
+            value >= int.MaxValue ? int.MaxValue : Math.Max(1, (int)MathF.Round(value));
     }
 
-    /// <summary>Renders a whole page. Convenience over <see cref="RenderRegion"/>.</summary>
+    /// <summary>
+    /// Most pixels a single render may produce (≈256 MB of BGRA). Comfortably
+    /// above any real page — E-size at print resolution is ~34 Mpx — and far
+    /// enough below <see cref="int.MaxValue"/>/4 that the buffer arithmetic in
+    /// <see cref="RenderRegion"/> cannot overflow.
+    /// </summary>
+    public const long MaxRenderPixels = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// Reduces <paramref name="scale"/> if a page of this point size would
+    /// rasterize past <see cref="MaxRenderPixels"/>; otherwise returns it
+    /// unchanged. Rotation is irrelevant — swapping the sides leaves the
+    /// product alone.
+    ///
+    /// Pure, so the budget can be tested without allocating the bitmap that
+    /// reaching it would produce.
+    /// </summary>
+    public static float ClampScaleToBudget(float ptWidth, float ptHeight, float scale)
+    {
+        double pixels = (double)ptWidth * scale * ((double)ptHeight * scale);
+        if (pixels <= MaxRenderPixels)
+        {
+            return scale;
+        }
+        // Aim just inside the cap, not exactly at it. The result is rounded to
+        // whole pixels by GetPagePixelSize and narrowed to float here, and
+        // either can round up — landing on the cap exactly would then trip
+        // RenderRegion's guard, which is the throw this whole path exists to
+        // avoid. The margin is orders of magnitude larger than the error.
+        return scale * (float)Math.Sqrt(MaxRenderPixels * 0.99 / pixels);
+    }
+
+    /// <summary>
+    /// Renders a whole page. Convenience over <see cref="RenderRegion"/>.
+    ///
+    /// Unlike the tile path — bounded by <c>TileMath.MaxSingleTilePx</c> — the
+    /// size here comes from the document's own MediaBox, which is
+    /// attacker-controlled. A page declaring the PDF maximum of 14400 pt per
+    /// side would ask for 30000×30000 px at print resolution, so the scale is
+    /// reduced to fit rather than the render refused: callers such as
+    /// <c>PrintService</c> lay pages out by physical size and carry the pixel
+    /// dimensions separately, so a coarser raster still prints correctly.
+    /// </summary>
     public PageBitmap RenderPage(int pageIndex, float scale, int rotation = 0)
     {
+        var (ptWidth, ptHeight) = GetPageSize(pageIndex);
+        scale = ClampScaleToBudget(ptWidth, ptHeight, scale);
         var (width, height) = GetPagePixelSize(pageIndex, scale, rotation);
         return RenderRegion(pageIndex, scale, rotation, 0, 0, width, height);
     }
@@ -104,6 +152,15 @@ public sealed partial class PdfDocument : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(scale);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+
+        // In long, not int: width × 4 × height overflows to a negative for a
+        // large enough request, and the negative would surface as a confusing
+        // throw out of ArrayPool.Rent instead of a stated limit.
+        if ((long)width * height > MaxRenderPixels)
+        {
+            throw new PdfiumException(
+                $"The page is too large to render at this size ({width}×{height} pixels).", 0);
+        }
 
         var (fullWidth, fullHeight) = GetPagePixelSize(pageIndex, scale, rotation);
         int stride = width * 4;

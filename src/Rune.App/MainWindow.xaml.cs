@@ -58,10 +58,6 @@ public sealed partial class MainWindow : Window
         ((UIElement)Content).PreviewKeyDown += Content_PreviewKeyDown;
         // The pen panel is built lazily on first use (BuildInkFlyout).
 
-        // Packaged/Store builds don't self-update — the Store does. Hide the
-        // entry point entirely rather than offer a link out to GitHub.
-        UpdatesMenuItem.Visibility = UpdateService.UpdatesSupported
-            ? Visibility.Visible : Visibility.Collapsed;
         PopulateRecents();
 
         Activated += MainWindow_FirstActivated;
@@ -199,7 +195,6 @@ public sealed partial class MainWindow : Window
         try
         {
             await RestoreSessionAsync();
-            await CheckForUpdatesAsync(userInitiated: false);
         }
         catch (Exception ex)
         {
@@ -724,7 +719,6 @@ public sealed partial class MainWindow : Window
     private void SaveButton_Click(object sender, RoutedEventArgs e) => _ = SaveActiveAsync();
     private void SaveAsButton_Click(object sender, RoutedEventArgs e) => _ = SaveAsActiveAsync();
     private void PropertiesButton_Click(object sender, RoutedEventArgs e) => _ = ShowPropertiesAsync();
-    private void UpdatesButton_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
     private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
     private void PresentMenuItem_Click(object sender, RoutedEventArgs e) => TogglePresentation();
     private void UndoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.UndoAsync();
@@ -1022,46 +1016,6 @@ public sealed partial class MainWindow : Window
         var sidebarCheck = new CheckBox { Content = "Show the sidebar when a document opens", IsChecked = _state.Settings.SidebarOpenByDefault };
         var thumbsCheck = new CheckBox { Content = "Show recent documents as thumbnails on the start page", IsChecked = _state.Settings.ShowRecentThumbnails };
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
-        var updateCheck = new CheckBox
-        {
-            Content = "Check for updates automatically",
-            IsChecked = _state.Settings.AutoCheckUpdates,
-            // Meaningless in a Store build — the Store updates the app.
-            Visibility = UpdateService.UpdatesSupported ? Visibility.Visible : Visibility.Collapsed,
-        };
-
-        // Applies the dialog's controls to settings. Shared by Save and by the
-        // "check now" button, which treats itself as an implicit Save so the
-        // user's in-flight edits aren't discarded when the dialog closes.
-        void ApplySettings()
-        {
-            _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
-            _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
-            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
-            _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
-            _state.Settings.VimKeys = vimCheck.IsChecked == true;
-            _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
-            ApplyTheme(_state.Settings.Theme);
-            _store.Save(_state);
-            PopulateRecents(); // reflect the thumbnails toggle immediately
-        }
-
-        // This button lives INSIDE the Settings dialog, so running the check
-        // here would try to open the update dialog while Settings is still up —
-        // WinUI allows only one ContentDialog at a time, and the resulting throw
-        // used to kill the app. Close Settings first, run the check after.
-        bool checkAfterClosing = false;
-        ContentDialog? dialog = null;
-        var checkNowButton = new Button
-        {
-            Content = "Check for updates now",
-            Visibility = UpdateService.UpdatesSupported ? Visibility.Visible : Visibility.Collapsed,
-        };
-        checkNowButton.Click += (_, _) =>
-        {
-            checkAfterClosing = true;
-            dialog?.Hide();
-        };
 
         var panel = new StackPanel { Spacing = 12 };
         panel.Children.Add(new TextBlock { Text = "Theme", Opacity = 0.7 });
@@ -1070,16 +1024,14 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(sidebarCheck);
         panel.Children.Add(thumbsCheck);
         panel.Children.Add(vimCheck);
-        panel.Children.Add(updateCheck);
-        panel.Children.Add(checkNowButton);
         panel.Children.Add(new TextBlock
         {
-            Text = $"Rune {UpdateService.CurrentVersion.ToString(3)}",
+            Text = $"Rune {CurrentVersion}",
             Opacity = 0.5,
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
         });
 
-        dialog = new ContentDialog
+        var dialog = new ContentDialog
         {
             Title = "Settings",
             Content = panel,
@@ -1088,15 +1040,22 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Primary,
         };
 
-        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary || checkAfterClosing)
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary)
         {
-            ApplySettings();
-        }
-        if (checkAfterClosing)
-        {
-            await CheckForUpdatesAsync(userInitiated: true); // Settings is closed by now
+            _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
+            _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
+            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
+            _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
+            _state.Settings.VimKeys = vimCheck.IsChecked == true;
+            ApplyTheme(_state.Settings.Theme);
+            _store.Save(_state);
+            PopulateRecents(); // reflect the thumbnails toggle immediately
         }
     }
+
+    /// <summary>The running build's version, for the Settings footer.</summary>
+    private static string CurrentVersion =>
+        (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0)).ToString(3);
 
     // ---------------------------------------------------------------- shortcuts overlay
 
@@ -1163,144 +1122,6 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    // ---------------------------------------------------------------- updates
-
-    private readonly UpdateService _updater = new();
-
-    /// <summary>True while a check is running, so two can never overlap.</summary>
-    private bool _updateCheckRunning;
-
-    /// <summary>Runs on launch (rate-limited) and from the Settings/menu/palette "check now".</summary>
-    private async Task CheckForUpdatesAsync(bool userInitiated)
-    {
-        if (!UpdateService.UpdatesSupported)
-        {
-            return; // packaged/Store build — the Store handles updates
-        }
-        if (_updateCheckRunning)
-        {
-            return; // a check is already in flight — its dialog is the one to show
-        }
-
-        if (!userInitiated)
-        {
-            if (!_state.Settings.AutoCheckUpdates ||
-                (DateTime.UtcNow - _state.Settings.LastUpdateCheckUtc) < TimeSpan.FromHours(24))
-            {
-                return;
-            }
-            // Don't burn the 24h rate limit on a check whose result we'd have to
-            // suppress anyway because the user is busy in another dialog.
-            if (DialogHost.IsOpen)
-            {
-                return;
-            }
-        }
-
-        _updateCheckRunning = true;
-        try
-        {
-            _state.Settings.LastUpdateCheckUtc = DateTime.UtcNow;
-            _store.Save(_state);
-
-            var update = await _updater.CheckAsync();
-            if (update is null)
-            {
-                if (userInitiated)
-                {
-                    await ShowDialogAsync(new ContentDialog
-                    {
-                        Title = "You're up to date",
-                        Content = $"Rune {UpdateService.CurrentVersion.ToString(3)} is the latest version.",
-                        CloseButtonText = "OK",
-                    });
-                }
-                return;
-            }
-
-            await ShowUpdateDialogAsync(update);
-        }
-        catch (Exception ex)
-        {
-            ErrorLog.Default.Write("CheckForUpdates", ex);
-            if (userInitiated)
-            {
-                ShowError($"Couldn't check for updates: {ex.Message}");
-            }
-        }
-        finally
-        {
-            _updateCheckRunning = false;
-        }
-    }
-
-    private async Task ShowUpdateDialogAsync(UpdateInfo update)
-    {
-        bool portable = UpdateService.IsPortable() && update.ZipUrl is not null;
-
-        var notes = new TextBlock
-        {
-            Text = string.IsNullOrWhiteSpace(update.Notes) ? "" : update.Notes,
-            TextWrapping = TextWrapping.Wrap,
-        };
-        var dialog = new ContentDialog
-        {
-            Title = $"Update available — Rune {update.Version.ToString(3)}",
-            Content = new ScrollViewer { Content = notes, MaxHeight = 320, MinWidth = 420 },
-            PrimaryButtonText = portable ? "Download and install" : "Open releases page",
-            CloseButtonText = "Later",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-
-        if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary)
-        {
-            return;
-        }
-
-        if (portable)
-        {
-            // Settle unsaved work BEFORE downloading: installing ends with
-            // Close(), and going straight there would discard annotations
-            // silently. Asking first also means cancelling leaves nothing
-            // downloaded and no updater process spawned.
-            if (!await EnsureSafeToCloseAsync())
-            {
-                return;
-            }
-
-            var (ok, error) = await _updater.DownloadAndApplyAsync(update);
-            if (ok)
-            {
-                _closeApproved = true;
-                Close(); // apply-update.cmd waits for exit, swaps files, relaunches
-            }
-            else
-            {
-                await OpenReleasesPageFallbackAsync(
-                    $"Rune couldn't install the update automatically ({error ?? "unknown error"}). Opening the releases page instead.");
-            }
-        }
-        else
-        {
-            await Windows.System.Launcher.LaunchUriAsync(new Uri(update.HtmlUrl));
-        }
-    }
-
-    private async Task OpenReleasesPageFallbackAsync(string message)
-    {
-        var result = await ShowDialogAsync(new ContentDialog
-        {
-            Title = "Manual update needed",
-            Content = message,
-            PrimaryButtonText = "Open releases page",
-            CloseButtonText = "Cancel",
-        });
-        if (result == ContentDialogResult.Primary)
-        {
-            await Windows.System.Launcher.LaunchUriAsync(new Uri(_updater.ReleasesPageUrl));
-        }
-    }
-
     // ---------------------------------------------------------------- command palette
 
     private void ShowPalette()
@@ -1311,10 +1132,6 @@ public sealed partial class MainWindow : Window
             new("Keyboard shortcuts", "F1", () => _ = ShowShortcutsAsync()),
             new("Settings", "", () => SettingsButton_Click(this, null!)),
         };
-        if (UpdateService.UpdatesSupported)
-        {
-            commands.Add(new PaletteCommand("Check for updates", "", () => _ = CheckForUpdatesAsync(userInitiated: true)));
-        }
 
         if (_activeViewer is { } viewer && CurrentView is { IsDocumentLoaded: true, LoadError: null })
         {

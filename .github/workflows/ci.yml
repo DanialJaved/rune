@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Build and test need nothing but the source. Without this the workflow gets
+# whatever the repository default grants, which is usually write.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: windows-latest

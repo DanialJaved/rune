@@ -101,9 +101,9 @@ Expected result: **everyone / 3+**.
 
 ## Privacy
 
-**Rune collects no data whatsoever.** The Store build makes no network requests
-at all — the self-updater is compiled out for packaged builds (see
-`UpdateService.UpdatesSupported`), because the Store handles updates.
+**Rune collects no data whatsoever,** and makes no network requests at all —
+there is no networking code in the application. The self-updater that used to
+serve the portable build was removed; the Store handles updates.
 
 Everything Rune stores stays on the device, in `%LOCALAPPDATA%\Rune`:
 recently-opened file paths, per-document reading positions and bookmarks, and
@@ -131,10 +131,9 @@ Paste the following verbatim:
 > collects no user data. Rune is open source under the GPLv3 and the full source
 > is at https://github.com/DanialJaved/rune
 
-**The "no network connections" claim depends on the Store build keeping
-`UpdateService.UpdatesSupported == false`** (see `Services/UpdateService.cs`).
-If the self-updater is ever re-enabled for packaged builds, this justification
-and the privacy declaration both stop being true and must be revised.
+The "no network connections" claim is unconditional as of v0.5.0: `UpdateService`
+was deleted, so no build of Rune contains networking code. Adding any would
+invalidate this justification and the privacy declaration together.
 
 ---
 

@@ -303,11 +303,6 @@
                                 <FontIcon Glyph="&#xE765;" />
                             </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
-                        <MenuFlyoutItem x:Name="UpdatesMenuItem" Text="Check for updates" Click="UpdatesButton_Click">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE895;" />
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="SettingsMenuItem" Text="Settings" Click="SettingsButton_Click">
                             <MenuFlyoutItem.Icon>
                                 <FontIcon Glyph="&#xE713;" />

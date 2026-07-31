@@ -47,7 +47,6 @@ Windows never had a PDF reader that is fast **and** lightweight **and** modern-l
 - Command palette (`Ctrl+K`) with fuzzy filtering and go-to-page
 - Session restore: reopens your tabs at the exact scroll position
 - Pinch-to-zoom (touch/touchpad) and `Ctrl`+scroll, zoom at the cursor
-- **Self-updating**: checks GitHub for new releases and updates in place (portable build; toggle in Settings)
 - Printing with live preview and page ranges
 - Opens damaged PDFs gracefully; 4 GB-file streaming without loading into memory
 
@@ -78,20 +77,13 @@ Vim-style keys (`j k h l`, `gg`/`G`, `p`/`n`) can be enabled in Settings. Right-
 
 ## Install
 
-**[Microsoft Store](https://apps.microsoft.com/detail/9NH37840QDM6) (recommended):** one click, automatic updates, and it registers as a PDF handler — no certificate step, and nothing for SmartScreen to warn about.
+### [![Get Rune PDF Reader from the Microsoft Store](https://img.shields.io/badge/Get%20it%20from%20the-Microsoft%20Store-0078D4?style=for-the-badge&logo=microsoftstore&logoColor=white)](https://apps.microsoft.com/detail/9NH37840QDM6)
 
-**Portable:** grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract anywhere, run `Rune.exe`. No installation, no registry. This is the build to use if you want Rune without the Store, or want to carry it on a USB stick.
+**This is the way to install Rune.** One click, automatic updates, it registers as a PDF handler, and Microsoft signs the package — so there's no certificate step and nothing for SmartScreen or Smart App Control to warn about. Works from the Store app or [on the web](https://apps.microsoft.com/detail/9NH37840QDM6).
 
-**Sideloaded MSIX:** download the `.msix` and `rune-signing.cer` from Releases, then trust the certificate once (admin PowerShell):
+**Portable:** if you want Rune without the Store — on a USB stick, or on a machine where you can't install anything — grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract anywhere, run `Rune.exe`. No installation, no registry.
 
-```powershell
-Import-Certificate -FilePath rune-signing.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
-Add-AppxPackage -Path Rune.App_x.y.z.0_x64.msix
-```
-
-> **Smart App Control / SmartScreen** apply to the GitHub downloads only — the Store build is signed by Microsoft. The portable and sideloaded builds are not yet code-signed, so machines with Smart App Control enabled will block them and SmartScreen may warn on first run ("More info → Run anyway").
->
-> The GitHub packages aren't size-optimized — they carry the full self-contained .NET + Windows App SDK runtimes.
+> The portable build is **not code-signed**: machines with Smart App Control enabled will block it, and SmartScreen may warn on first run ("More info → Run anyway"). It also doesn't update itself — check back here, or use the Store build. And it isn't size-optimized; it carries the full self-contained .NET and Windows App SDK runtimes.
 
 ## Tech
 
@@ -123,9 +115,9 @@ The debug build is an unpackaged self-contained exe — just run it.
 
 ## Roadmap
 
-**Next:** visible signature stamps (draw or import a signature and place it on the page), page extraction to a new file, more formats (ePub, CBZ), code signing for the GitHub builds, smaller packages.
+**Next:** typed signatures (draw and import already ship), resizing a signature after placing it, page extraction to a new file, more formats (ePub, CBZ), code signing for the portable build, smaller packages.
 
-**Known limits:** form JavaScript needs a V8-enabled PDFium build; text selection and annotation are disabled while the view is rotated; signature *validation* would need a cryptography stack Rune doesn't ship.
+**Known limits:** form JavaScript needs a V8-enabled PDFium build; text selection, annotation and form filling are disabled while the view is rotated; signature *validation* would need a cryptography stack Rune doesn't ship.
 
 ## License
 
