@@ -1,6 +1,8 @@
+using Microsoft.Graphics.Canvas;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
 using Rune.Engine;
+using Rune.Styles;
 using Windows.Foundation;
 using Windows.System;
 
@@ -22,6 +24,13 @@ public sealed partial class PdfViewer
 
     /// <summary>The page whose field currently has keyboard focus, or -1.</summary>
     private int _formFocusPage = -1;
+
+    /// <summary>
+    /// The focused field itself, kept so a press can tell "same field, move the
+    /// caret" from "different field, commit and move on". Only its identity and
+    /// geometry are used, so a stale instance from a replaced cache is fine.
+    /// </summary>
+    private FormFieldInfo? _formFocusField;
 
     /// <summary>True when a form field is taking keystrokes, so navigation keys must not steal them.</summary>
     public bool IsFormFieldFocused => _formFocusPage >= 0;
@@ -61,14 +70,23 @@ public sealed partial class PdfViewer
         _formFields.Clear();
         _formFieldsRequested.Clear();
         _formFocusPage = -1;
+        _formFocusField = null;
     }
 
-    /// <summary>Field geometry changes whenever a value does, so drop the cached rects with it.</summary>
+    /// <summary>
+    /// Re-reads a page's field geometry after a value changed.
+    ///
+    /// The old rects are deliberately left in place until the new ones arrive.
+    /// Dropping them first opened a window — one per keystroke, since every edit
+    /// lands here — in which <see cref="TryHandleFormPress"/> found no geometry,
+    /// returned false, and let the click fall through to text selection. The
+    /// symptom was that clicking a second field did nothing until you stopped
+    /// typing and pressed Escape.
+    /// </summary>
     private void InvalidateFormFields(int pageIndex)
     {
-        _formFields.Remove(pageIndex);
         _formFieldsRequested.Remove(pageIndex);
-        EnsureFormFields(pageIndex);
+        EnsureFormFields(pageIndex); // overwrites _formFields[pageIndex] on arrival
     }
 
     // ---- Pointer ----
@@ -109,13 +127,29 @@ public sealed partial class PdfViewer
             return false;
         }
 
+        // Moving to a *different* field has to commit the old one first. PDFium
+        // keeps the in-progress value in the focused widget, so without this the
+        // new click can be swallowed by the widget that still holds focus — and
+        // whatever was typed goes with it. Clicking inside the field you are
+        // already editing must NOT do this: there the click is just moving the
+        // caret, and committing would throw the caret back to the start.
+        if (IsFormFieldFocused && !IsFocusedField(hit))
+        {
+            KillFormFocus();
+        }
+
         // Take keyboard focus before the async hop so the very next keystroke
         // is already routed to the field.
         _formFocusPage = page;
+        _formFocusField = hit;
         Focus(FocusState.Pointer);
         DispatchFormClick(document, page, local.X, local.Y);
         return true;
     }
+
+    /// <summary>Whether a field is the one that currently has focus.</summary>
+    private bool IsFocusedField(FormFieldInfo field) =>
+        _formFocusField is { } focused && focused.IsSamePlaceAs(field);
 
     private async void DispatchFormClick(PdfDocument document, int page, double localX, double localY)
     {
@@ -225,6 +259,7 @@ public sealed partial class PdfViewer
     {
         int page = _formFocusPage;
         _formFocusPage = -1;
+        _formFocusField = null;
 
         if (page < 0 || _document is not { HasFillableForm: true } document)
         {
@@ -252,6 +287,54 @@ public sealed partial class PdfViewer
         if (_document == document)
         {
             InvalidateFormFields(page);
+        }
+    }
+
+    // ---- Painting ----
+
+    /// <summary>
+    /// Outlines every field on a page.
+    ///
+    /// PDFium fills widgets during <c>FPDF_FFLDraw</c> and draws no edge, so
+    /// fields that touch — a name box sitting directly on an email box — render
+    /// as one undivided wash. The border is drawn here rather than asked of
+    /// PDFium because the geometry is already cached on the UI thread for
+    /// hit-testing, which makes this pure managed drawing with no render-thread
+    /// work and nothing to invalidate.
+    ///
+    /// Skipped while rotated, for the same reason filling is: page-local
+    /// geometry is not mapped through the view rotation yet, so the rects would
+    /// land in the wrong place.
+    /// </summary>
+    private void DrawFormFieldBorders(CanvasDrawingSession session, int pageIndex, DipRect pageRect)
+    {
+        if (_rotation != 0 || !_formFields.TryGetValue(pageIndex, out var fields))
+        {
+            return;
+        }
+
+        var border = RuneColors.FormFieldBorder(_nightMode);
+        var focusBorder = RuneColors.FormFieldFocusBorder(_nightMode);
+        var readOnlyBorder = RuneColors.FormFieldReadOnlyBorder(_nightMode);
+
+        foreach (var field in fields)
+        {
+            // Pushbuttons already draw their own bevel; outlining them adds a
+            // second, competing edge.
+            if (field.Kind == FormFieldKind.PushButton)
+            {
+                continue;
+            }
+
+            var rect = new Rect(
+                pageRect.X + field.X * _zoom,
+                pageRect.Y + field.Y * _zoom,
+                Math.Max(1, field.Width * _zoom),
+                Math.Max(1, field.Height * _zoom));
+
+            bool focused = IsFocusedField(field);
+            var color = field.IsReadOnly ? readOnlyBorder : focused ? focusBorder : border;
+            session.DrawRectangle(rect, color, focused ? 2f : 1f);
         }
     }
 

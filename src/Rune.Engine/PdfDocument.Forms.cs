@@ -27,6 +27,23 @@ public sealed record FormFieldInfo(
 {
     /// <summary>Pushbuttons and read-only fields accept clicks but never text.</summary>
     public bool AcceptsText => !IsReadOnly && Kind is FormFieldKind.Text or FormFieldKind.ComboBox;
+
+    /// <summary>
+    /// Whether this and <paramref name="other"/> are the same widget on the page.
+    ///
+    /// Compared by page, name and position rather than by record equality:
+    /// <see cref="Value"/> changes on every keystroke, so the generated equality
+    /// would report "different field" mid-edit — and the viewer uses this to
+    /// decide whether a click is moving the caret inside the field being typed
+    /// in or leaving it for another, which must survive typing to be any use.
+    /// Position is part of it because every radio button in a group shares one
+    /// name.
+    /// </summary>
+    public bool IsSamePlaceAs(FormFieldInfo other) =>
+        PageIndex == other.PageIndex
+        && Name == other.Name
+        && Math.Abs(X - other.X) < 0.5
+        && Math.Abs(Y - other.Y) < 0.5;
 }
 
 public enum FormFieldKind
@@ -83,8 +100,13 @@ public sealed partial class PdfDocument
             // The channel order is BGR, not the RGB the PDFium header implies:
             // passing 0x3399FF renders peach (verified on screen), so the value
             // reaches the BGRA render buffer without being swizzled.
+            //
+            // Kept deliberately faint: the viewer strokes each field's edge
+            // itself (PdfViewer.DrawFormFieldBorders), so the wash only has to
+            // say "there is a field here" — at the old alpha of 40 it competed
+            // with the document's own text.
             const uint FieldHighlightBgr = 0xFF9933; // -> rgb(51, 153, 255)
-            PdfiumNative.SetFormFieldHighlight(_formEnv.Handle, FieldHighlightBgr, 40);
+            PdfiumNative.SetFormFieldHighlight(_formEnv.Handle, FieldHighlightBgr, 28);
             PdfiumNative.FormDoDocumentOpenAction(_formEnv.Handle);
         }
     }

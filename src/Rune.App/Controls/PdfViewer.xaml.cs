@@ -1935,6 +1935,7 @@ public sealed partial class PdfViewer : UserControl
             }
 
             DrawHighlights(session, i, pageRect);
+            DrawFormFieldBorders(session, i, pageRect);
             session.DrawRectangle(pageXamlRect, borderColor, 1);
         }
 
