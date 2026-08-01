@@ -354,7 +354,7 @@
                         ItemClick="RecentThumbs_ItemClick">
                         <GridView.ItemTemplate>
                             <DataTemplate x:DataType="controls:RecentCard">
-                                <StackPanel Width="168" Margin="0,0,8,8" Spacing="6">
+                                <StackPanel Width="168" Margin="0,0,8,8" Spacing="6" RightTapped="RecentCard_RightTapped">
                                     <Grid Width="168" Height="212" Style="{StaticResource CardSurfaceStyle}">
                                         <FontIcon
                                             Glyph="&#xEA90;"

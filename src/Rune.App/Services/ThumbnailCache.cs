@@ -71,6 +71,44 @@ public sealed class ThumbnailCache : IDisposable
         });
     }
 
+    /// <summary>
+    /// Deletes a file's cached thumbnail.
+    ///
+    /// Called when a document is removed from recents: the cached PNG is a
+    /// picture of that document's first page, so leaving it behind would keep
+    /// the contents of a file the user asked Rune to forget.
+    /// </summary>
+    public void Forget(string pdfPath)
+    {
+        try
+        {
+            string cachePath = Path.Combine(_dir, CacheKey(pdfPath) + ".png");
+            if (File.Exists(cachePath))
+            {
+                File.Delete(cachePath);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A locked file just stays cached; it is only a render of page 1.
+        }
+    }
+
+    /// <summary>Deletes every cached thumbnail.</summary>
+    public void ForgetAll()
+    {
+        try
+        {
+            foreach (var file in new DirectoryInfo(_dir).GetFiles("*.png"))
+            {
+                try { file.Delete(); } catch (IOException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
     /// <summary>Raw BGRA pixels detached from the pooled render buffer, safe to hand off the PDFium thread.</summary>
     private readonly record struct RawImage(byte[] Pixels, int Width, int Height);
 

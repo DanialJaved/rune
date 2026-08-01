@@ -142,6 +142,30 @@ public sealed class AppState
     }
 
     /// <summary>
+    /// Forgets one file: drops it from recents and from the restore session, so
+    /// it does not reappear as a tab on the next launch. Returns true if there
+    /// was anything to remove.
+    ///
+    /// Unlike <see cref="TrimRecents"/> this discards bookmarks with the entry —
+    /// eviction is Rune's decision and must not lose them, but this one is the
+    /// user's, and keeping a hidden record of a file they asked to be forgotten
+    /// is the opposite of what they asked for.
+    /// </summary>
+    public bool ForgetRecent(string path)
+    {
+        int removed = Recents.RemoveAll(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
+        Session.OpenPaths.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        return removed > 0;
+    }
+
+    /// <summary>Forgets every recent file, and the session that referenced them.</summary>
+    public void ForgetAllRecents()
+    {
+        Recents.Clear();
+        Session.OpenPaths.Clear();
+    }
+
+    /// <summary>
     /// Evicts past <see cref="MaxRecents"/>, but never an entry that carries
     /// bookmarks — silently losing bookmarks because other files were opened
     /// would be a betrayal.

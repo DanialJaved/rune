@@ -58,6 +58,12 @@ public sealed partial class MainWindow : Window
         ((UIElement)Content).PreviewKeyDown += Content_PreviewKeyDown;
         // The pen panel is built lazily on first use (BuildInkFlyout).
 
+        // handledEventsToo, because TabViewItem marks the press handled for its
+        // own selection before it would ever bubble to the TabView. Declaring
+        // this in XAML silently never fires.
+        Tabs.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler(Tabs_PointerPressed), handledEventsToo: true);
+
         PopulateRecents();
 
         Activated += MainWindow_FirstActivated;
@@ -495,6 +501,25 @@ public sealed partial class MainWindow : Window
         UpdateStartPageVisibility();
         if (!_showHome)
         {
+            UpdateToolbarForActive();
+        }
+    }
+
+    /// <summary>
+    /// Any press on the tab strip leaves Home for that tab.
+    ///
+    /// <see cref="Tabs_SelectionChanged"/> already clears the flag, but it only
+    /// fires when the selection actually changes — so clicking the tab that is
+    /// already selected did nothing, and with a single document open that is
+    /// every tab. The wordmark was the only way back, which is not where anyone
+    /// looks for it.
+    /// </summary>
+    private void Tabs_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (_showHome && Tabs.TabItems.Count > 0)
+        {
+            _showHome = false;
+            UpdateStartPageVisibility();
             UpdateToolbarForActive();
         }
     }
@@ -1064,7 +1089,13 @@ public sealed partial class MainWindow : Window
     /// <summary>GNOME-style two-column shortcuts window, fed by <see cref="ShortcutCatalog"/>.</summary>
     private async Task ShowShortcutsAsync()
     {
-        var grid = new Grid { ColumnSpacing = 40, MinWidth = 620 };
+        // Fixed width rather than MinWidth: a minimum only states what the grid
+        // will not go below, so when the dialog's content area came out narrower
+        // the grid overflowed and the second column's key chips were clipped off
+        // the right edge — the overlay listed half its actions with no keys
+        // beside them. Pinning both this and the dialog's MaxWidth means the
+        // content area is known to be wider than the content.
+        var grid = new Grid { ColumnSpacing = 40, Width = 760 };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var columns = new[] { new StackPanel { Spacing = 20 }, new StackPanel { Spacing = 20 } };
@@ -1114,12 +1145,26 @@ public sealed partial class MainWindow : Window
             weight[target] += group.Shortcuts.Length + 2;
         }
 
-        await ShowDialogAsync(new ContentDialog
+        var dialog = new ContentDialog
         {
             Title = "Keyboard shortcuts",
-            Content = new ScrollViewer { Content = grid, MaxHeight = 540 },
+            Content = new ScrollViewer
+            {
+                Content = grid,
+                MaxHeight = 540,
+                HorizontalScrollMode = ScrollMode.Disabled,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            },
             CloseButtonText = "Close",
-        });
+        };
+        // A ContentDialog's width comes from the ContentDialogMaxWidth theme
+        // resource, NOT from the MaxWidth property — setting the property alone
+        // leaves the default ~548px cap in force, the content overflows it, and
+        // the overflow is clipped. That is what cut the key chips off the second
+        // column. Overriding the resource on this instance is the supported way
+        // to widen one dialog without touching every other.
+        dialog.Resources["ContentDialogMaxWidth"] = 880.0;
+        await ShowDialogAsync(dialog);
     }
 
     // ---------------------------------------------------------------- command palette
@@ -1278,6 +1323,56 @@ public sealed partial class MainWindow : Window
                 PopulateRecents();
             }
         }
+    }
+
+    /// <summary>
+    /// Right-click on a recent card: forget this one, or all of them.
+    ///
+    /// Removal also deletes the cached first-page thumbnail. That PNG is a
+    /// picture of the document, so leaving it on disk would keep the contents of
+    /// a file the user just asked Rune to forget.
+    /// </summary>
+    private void RecentCard_RightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: RecentCard card })
+        {
+            return;
+        }
+        e.Handled = true;
+
+        var forget = new MenuFlyoutItem { Text = "Remove from recents" };
+        // Bookmarks hang off the recent entry, so forgetting the file forgets
+        // them. Say so rather than discovering it later.
+        int bookmarks = _state.FindRecent(card.Path)?.Bookmarks.Count ?? 0;
+        if (bookmarks > 0)
+        {
+            forget.Text = bookmarks == 1
+                ? "Remove from recents (discards 1 bookmark)"
+                : $"Remove from recents (discards {bookmarks} bookmarks)";
+        }
+        forget.Click += (_, _) =>
+        {
+            _state.ForgetRecent(card.Path);
+            _thumbnails.Forget(card.Path);
+            _store.Save(_state);
+            PopulateRecents();
+        };
+
+        var forgetAll = new MenuFlyoutItem { Text = "Clear all recent documents" };
+        forgetAll.Click += (_, _) =>
+        {
+            _state.ForgetAllRecents();
+            _thumbnails.ForgetAll();
+            _store.Save(_state);
+            PopulateRecents();
+        };
+
+        var flyout = new MenuFlyout();
+        flyout.Items.Add(forget);
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        flyout.Items.Add(forgetAll);
+        var target = (FrameworkElement)sender;
+        flyout.ShowAt(target, e.GetPosition(target));
     }
 
     // ---------------------------------------------------------------- accelerators
