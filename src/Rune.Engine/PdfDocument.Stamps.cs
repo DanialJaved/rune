@@ -54,19 +54,10 @@ public sealed partial class PdfDocument
 
             try
             {
-                var (ptW, ptH) = _pageSizes[pageIndex];
-                int sizeX = Math.Max(1, (int)MathF.Round(ptW));
-                int sizeY = Math.Max(1, (int)MathF.Round(ptH));
-
                 // Top-left page-local points → PDF page space (bottom-left).
-                var (left, top) = PdfiumNative.DeviceToPage(page, sizeX, sizeY, (int)Math.Round(x), (int)Math.Round(y));
-                var (right, bottom) = PdfiumNative.DeviceToPage(
-                    page, sizeX, sizeY, (int)Math.Round(x + widthPt), (int)Math.Round(y + heightPt));
-
-                float l = (float)Math.Min(left, right);
-                float r = (float)Math.Max(left, right);
-                float b = (float)Math.Min(top, bottom);
-                float t = (float)Math.Max(top, bottom);
+                // Shared with MoveAnnotation so a placed stamp and a moved one
+                // can never disagree about where a given point lands.
+                var (l, b, r, t) = ToPageRectLocked(page, pageIndex, x, y, widthPt, heightPt);
 
                 IntPtr annot = PdfiumNative.CreateAnnot(page, PdfiumNative.AnnotStamp);
                 if (annot == IntPtr.Zero)
@@ -105,6 +96,167 @@ public sealed partial class PdfDocument
         IsDirty = true;
         return spec;
     }
+
+    /// <summary>
+    /// Moves an existing annotation so its top-left sits at (<paramref name="x"/>,
+    /// <paramref name="y"/>) in page-local points. Returns the rect it
+    /// previously occupied (PDF page space, bottom-left origin) so the caller
+    /// can make the move undoable, or null if there was no such annotation.
+    ///
+    /// **Size is preserved, not taken as a parameter.** PDFium translates a
+    /// stamp's appearance to the annotation rect but does not scale it to fit,
+    /// so a rect of a different size would report one thing and draw another —
+    /// see <see cref="ApplyAnnotationRectLocked"/> for the measurements.
+    ///
+    /// A move is a rect change rather than a delete-and-re-create because
+    /// re-creating needs the stamp's pixels, and <see cref="StampImage"/> exists
+    /// precisely because PDFium will not hand them back out of a live
+    /// annotation. Rune only holds them for stamps it placed this session, so a
+    /// re-create would refuse to move a signature that was already in the file
+    /// when it was opened.
+    /// </summary>
+    public (float L, float B, float R, float T)? MoveAnnotation(
+        int pageIndex, int annotIndex, double x, double y)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(annotIndex);
+
+        (float, float, float, float) previous;
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = AcquirePageLocked(pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            try
+            {
+                IntPtr annot = PdfiumNative.GetAnnot(page, annotIndex);
+                if (annot == IntPtr.Zero)
+                {
+                    return null;
+                }
+                try
+                {
+                    if (!PdfiumNative.GetAnnotRect(annot, out float ol, out float ot, out float or, out float ob))
+                    {
+                        return null;
+                    }
+                    // GetAnnotRect reports top/bottom by name, not by order.
+                    float oldL = Math.Min(ol, or), oldR = Math.Max(ol, or);
+                    float oldB = Math.Min(ot, ob), oldT = Math.Max(ot, ob);
+                    previous = (oldL, oldB, oldR, oldT);
+
+                    // Keep the size the appearance is actually drawn at.
+                    var (newL, newB, newR, newT) =
+                        ToPageRectLocked(page, pageIndex, x, y, oldR - oldL, oldT - oldB);
+                    ApplyAnnotationRectLocked(annot, newL, newB, newR, newT);
+                }
+                finally
+                {
+                    PdfiumNative.CloseAnnot(annot);
+                }
+
+                // Without this the move is visible in the live document but is
+                // not serialized, so it vanishes on save.
+                PdfiumNative.GenerateContent(page);
+            }
+            finally
+            {
+                ReleasePageLocked(pageIndex);
+            }
+        }
+
+        IsDirty = true;
+        return previous;
+    }
+
+    /// <summary>
+    /// Restores an annotation to a rect already expressed in PDF page space —
+    /// the undo counterpart of <see cref="MoveAnnotation"/>, which hands its
+    /// caller exactly this shape.
+    /// </summary>
+    public bool RestoreAnnotationRect(int pageIndex, int annotIndex, (float L, float B, float R, float T) rect)
+    {
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = AcquirePageLocked(pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return false;
+            }
+            try
+            {
+                IntPtr annot = PdfiumNative.GetAnnot(page, annotIndex);
+                if (annot == IntPtr.Zero)
+                {
+                    return false;
+                }
+                try
+                {
+                    ApplyAnnotationRectLocked(annot, rect.L, rect.B, rect.R, rect.T);
+                }
+                finally
+                {
+                    PdfiumNative.CloseAnnot(annot);
+                }
+                PdfiumNative.GenerateContent(page);
+            }
+            finally
+            {
+                ReleasePageLocked(pageIndex);
+            }
+        }
+
+        IsDirty = true;
+        return true;
+    }
+
+    /// <summary>Page-local top-left points → a normalized PDF page-space rect.</summary>
+    private (float L, float B, float R, float T) ToPageRectLocked(
+        IntPtr page, int pageIndex, double x, double y, double widthPt, double heightPt)
+    {
+        var (ptW, ptH) = _pageSizes[pageIndex];
+        int sizeX = Math.Max(1, (int)MathF.Round(ptW));
+        int sizeY = Math.Max(1, (int)MathF.Round(ptH));
+
+        var (left, top) = PdfiumNative.DeviceToPage(page, sizeX, sizeY, (int)Math.Round(x), (int)Math.Round(y));
+        var (right, bottom) = PdfiumNative.DeviceToPage(
+            page, sizeX, sizeY, (int)Math.Round(x + widthPt), (int)Math.Round(y + heightPt));
+
+        return ((float)Math.Min(left, right), (float)Math.Min(top, bottom),
+                (float)Math.Max(left, right), (float)Math.Max(top, bottom));
+    }
+
+    /// <summary>
+    /// Repositions an annotation by setting its rect.
+    ///
+    /// PDFium draws a stamp's appearance stream translated to the annotation
+    /// rect's origin, so setting the rect is all a move needs — and it works
+    /// for any stamp, including one that was already in the file when it was
+    /// opened, which is what makes this the move mechanism rather than
+    /// delete-and-re-create (see <see cref="MoveAnnotation"/>).
+    ///
+    /// It does NOT scale the appearance to the rect. Measured on PDFium
+    /// 152.0.7961: after setting a 100×40 stamp's rect to 300×120 the
+    /// annotation reports 300×120 while the image still renders at 100×40.
+    /// Transforming the annotation's image object with FPDFPageObj_Transform
+    /// does not help either — the object changes, but the appearance stream it
+    /// was parsed from is not regenerated, and PDFium exposes no call that
+    /// forces regeneration. **Resizing therefore has to go through
+    /// delete-and-re-create**, which needs the pixels — see
+    /// <see cref="StampImage"/> for why those are only available for a stamp
+    /// Rune placed in this session.
+    ///
+    /// Caller must hold <see cref="PdfiumLibrary.Lock"/> and a page lease.
+    /// </summary>
+    private static void ApplyAnnotationRectLocked(
+        IntPtr annot, float newL, float newB, float newR, float newT)
+        => PdfiumNative.SetAnnotRect(annot, newL, newB, newR, newT);
 
     /// <summary>
     /// Attaches an image object to a stamp annotation, scaled into the given
