@@ -27,6 +27,13 @@ public sealed partial class PdfViewer
     private Point _signatureEnd;
 
     /// <summary>
+    /// Where the pointer is while the Sign tool is armed but nothing has been
+    /// pressed yet, so the ghost can show the landing spot *before* you commit
+    /// to it. Null when the pointer is outside the canvas.
+    /// </summary>
+    private Point? _signatureHover;
+
+    /// <summary>
     /// Width in page points used by a plain click. Remembered across placements
     /// (and persisted by the shell) so repeat signing is consistent.
     /// </summary>
@@ -71,6 +78,48 @@ public sealed partial class PdfViewer
         Canvas.Invalidate();
         return true;
     }
+
+    // ---- hover preview ----
+
+    /// <summary>
+    /// Tracks the pointer so the pending signature can be previewed under it.
+    /// Returns true when the ghost needs redrawing.
+    /// </summary>
+    private bool UpdateSignatureHover(Point? docPoint)
+    {
+        if (!HasPendingSignature || _activeTool != AnnotationTool.Signature || _rotation != 0)
+        {
+            bool had = _signatureHover is not null;
+            _signatureHover = null;
+            return had;
+        }
+        _signatureHover = docPoint;
+        return true;
+    }
+
+    /// <summary>
+    /// Scales the pending signature before it is placed. Returns true when the
+    /// wheel was consumed, which is what stops the page scrolling underneath a
+    /// resize gesture.
+    /// </summary>
+    public bool TryResizePendingSignature(int wheelDelta)
+    {
+        if (!HasPendingSignature || _activeTool != AnnotationTool.Signature)
+        {
+            return false;
+        }
+
+        // Multiplicative so each notch feels the same at any size; the range is
+        // wide enough for an initial box and a full-page flourish alike.
+        double factor = wheelDelta > 0 ? 1.1 : 1 / 1.1;
+        SignatureWidthPt = Math.Clamp(SignatureWidthPt * factor, 24, 720);
+        SignatureResized?.Invoke(this, SignatureWidthPt);
+        Canvas.Invalidate();
+        return true;
+    }
+
+    /// <summary>Raised when the wheel resizes the pending signature, so the panel can show the size.</summary>
+    public event EventHandler<double>? SignatureResized;
 
     // ---- gesture ----
 
@@ -176,7 +225,27 @@ public sealed partial class PdfViewer
     /// </summary>
     private void DrawSignatureGhost(CanvasDrawingSession session)
     {
-        if (!_placingSignature || _signatureBgra is not { } bgra)
+        if (_signatureBgra is not { } bgra)
+        {
+            return;
+        }
+
+        // Two states share one preview: hovering before the press (so you can
+        // see where it will land and how big it will be), and mid-drag. Without
+        // the first, the preview only ever appeared once the spot had already
+        // been chosen, which made placement a guess.
+        Rect box;
+        if (_placingSignature)
+        {
+            box = SignatureBox();
+        }
+        else if (_signatureHover is { } hover)
+        {
+            double aspect = _signaturePixelH / (double)Math.Max(1, _signaturePixelW);
+            double w = SignatureWidthPt * _zoom;
+            box = new Rect(hover.X, hover.Y, w, w * aspect);
+        }
+        else
         {
             return;
         }
@@ -185,7 +254,6 @@ public sealed partial class PdfViewer
             Canvas, bgra, _signaturePixelW, _signaturePixelH,
             DirectXPixelFormat.B8G8R8A8UIntNormalized, 96, CanvasAlphaMode.Straight);
 
-        var box = SignatureBox();
         session.DrawImage(_signatureGhost, box, _signatureGhost.Bounds, 0.75f);
         // A dashed outline reads as "not placed yet" even where the signature
         // itself is faint.

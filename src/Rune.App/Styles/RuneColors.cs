@@ -47,6 +47,16 @@ internal static class RuneColors
     public static Color ActiveSearch(bool night) =>
         night ? Color.FromArgb(170, 255, 150, 40) : Color.FromArgb(150, 255, 140, 0);
 
+    // ---- Selected signature ----
+
+    /// <summary>Dashed frame around a placed signature that is selected for moving.</summary>
+    public static Color SelectedStampBorder(bool night) =>
+        night ? Color.FromArgb(230, 150, 200, 255) : Color.FromArgb(230, 0, 100, 200);
+
+    /// <summary>Faint fill so the whole grabbable area reads as one object, not just its edge.</summary>
+    public static Color SelectedStampWash(bool night) =>
+        night ? Color.FromArgb(45, 120, 180, 255) : Color.FromArgb(35, 0, 120, 215);
+
     // ---- Form fields ----
     //
     // PDFium's FFLDraw pass fills widgets and draws no edge, so two fields that

@@ -1440,12 +1440,26 @@ public sealed partial class MainWindow : Window
             {
                 // Abandon a half-drawn placement before disarming the tool.
             }
+            else if (_activeViewer?.ClearSignatureSelection() == true)
+            {
+                // Deselect a placed signature before disarming anything.
+            }
             else if (_activeViewer?.ActiveTool is not (null or AnnotationTool.None))
             {
                 _activeViewer?.ClearPendingSignature();
                 SetActiveTool(AnnotationTool.None); // finally, put the tool away
             }
         }, requiresDocument: false);
+
+        // Delete removes the selected signature. Guarded on there being one, so
+        // Delete keeps deleting pages when the thumbnail sidebar has focus.
+        AddAccelerator(VirtualKey.Delete, VirtualKeyModifiers.None, () =>
+        {
+            if (_activeViewer?.HasSelectedSignature == true)
+            {
+                _activeViewer.DeleteSelectedSignature();
+            }
+        }, skipWhenTextInputFocused: true);
 
         // Ctrl+C/X/V must fall through to focused text boxes (find box, page box).
         AddAccelerator(VirtualKey.C, VirtualKeyModifiers.Control, CopySelection, skipWhenTextInputFocused: true);
