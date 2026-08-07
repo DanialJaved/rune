@@ -33,6 +33,9 @@ public sealed partial class PdfViewer
     /// </summary>
     private Point? _signatureHover;
 
+    /// <summary>Latched when the ghost bitmap can't be built, so it isn't retried every frame.</summary>
+    private bool _ghostFailed;
+
     /// <summary>
     /// Width in page points used by a plain click. Remembered across placements
     /// (and persisted by the shell) so repeat signing is consistent.
@@ -55,6 +58,7 @@ public sealed partial class PdfViewer
         _signaturePixelH = height;
         _signatureGhost?.Dispose();
         _signatureGhost = null;
+        _ghostFailed = false;
         CancelSignaturePlacement();
     }
 
@@ -63,6 +67,7 @@ public sealed partial class PdfViewer
         _signatureBgra = null;
         _signatureGhost?.Dispose();
         _signatureGhost = null;
+        _ghostFailed = false;
         CancelSignaturePlacement();
     }
 
@@ -250,17 +255,68 @@ public sealed partial class PdfViewer
             return;
         }
 
-        _signatureGhost ??= CanvasBitmap.CreateFromBytes(
-            Canvas, bgra, _signaturePixelW, _signaturePixelH,
-            DirectXPixelFormat.B8G8R8A8UIntNormalized, 96, CanvasAlphaMode.Straight);
+        // Past MaxSingleTilePx a bitmap silently fails to draw inside a
+        // CanvasVirtualControl session, taking the dashed outline below down
+        // with it and leaving no preview at all. Both callers cap their pixels
+        // at decode time so this should be unreachable; degrade to an
+        // outline-only preview rather than to nothing if one ever slips past.
+        EnsureGhostBitmap(bgra);
+        if (_signatureGhost is { } ghost)
+        {
+            session.DrawImage(ghost, box, ghost.Bounds, 0.75f);
+        }
 
-        session.DrawImage(_signatureGhost, box, _signatureGhost.Bounds, 0.75f);
         // A dashed outline reads as "not placed yet" even where the signature
-        // itself is faint.
+        // itself is faint — and it is drawn outside the bitmap's try/catch so a
+        // failed ghost degrades to an outline rather than to nothing at all.
         session.DrawRectangle(box, Color.FromArgb(180, 0, 120, 215), 1,
             new Microsoft.Graphics.Canvas.Geometry.CanvasStrokeStyle
             {
                 DashStyle = Microsoft.Graphics.Canvas.Geometry.CanvasDashStyle.Dash,
             });
+    }
+
+    /// <summary>
+    /// Builds the ghost bitmap once per armed signature.
+    ///
+    /// PREMULTIPLIED, and converted here rather than stored that way: Direct2D
+    /// rejects a straight-alpha bitmap outright with
+    /// WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT (0x88982F80), while PDFium needs the
+    /// straight buffer this converts from. Asking for CanvasAlphaMode.Straight
+    /// is what made the hover preview show nothing at all — the throw escaped
+    /// DrawSignatureGhost and took the dashed outline with it, so the whole
+    /// preview vanished rather than degrading.
+    ///
+    /// Failures are swallowed after logging: a preview that cannot be built is
+    /// never a reason to take the page's draw pass down.
+    /// </summary>
+    private void EnsureGhostBitmap(byte[] bgra)
+    {
+        if (_signatureGhost is not null || _ghostFailed)
+        {
+            return;
+        }
+
+        // Past MaxSingleTilePx a bitmap silently fails to draw inside a
+        // CanvasVirtualControl session. Both callers cap their pixels at decode
+        // time, so this should be unreachable.
+        if (_signaturePixelW > TileMath.MaxSingleTilePx || _signaturePixelH > TileMath.MaxSingleTilePx)
+        {
+            _ghostFailed = true;
+            return;
+        }
+
+        try
+        {
+            _signatureGhost = CanvasBitmap.CreateFromBytes(
+                Canvas, SignatureMatte.ToPremultiplied(bgra), _signaturePixelW, _signaturePixelH,
+                DirectXPixelFormat.B8G8R8A8UIntNormalized, 96, CanvasAlphaMode.Premultiplied);
+        }
+        catch (Exception ex)
+        {
+            // Latched so a broken buffer doesn't retry on every single frame.
+            _ghostFailed = true;
+            Rune.Services.ErrorLog.Default.Write(nameof(PdfViewer), ex);
+        }
     }
 }

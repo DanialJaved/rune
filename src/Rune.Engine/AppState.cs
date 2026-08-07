@@ -78,6 +78,21 @@ public sealed class AppSettings
     public double SignatureWidthPt { get; set; } = 180;
 
     /// <summary>
+    /// Key the paper out of an imported signature photo, so only the ink lands
+    /// on the page. On by default: a photo of a signature is the common import,
+    /// and without it the paper stamps as an opaque rectangle.
+    /// </summary>
+    /// <remarks>
+    /// No <see cref="MigrateToolStyles"/> entry, deliberately. That method exists
+    /// only because Pen and Highlighter are nullable REFERENCE types, which
+    /// deserialize to null when the key is absent and would then NRE. A bool with
+    /// a property initializer just keeps its default, because System.Text.Json
+    /// only overwrites a property when the key is present — the same reason
+    /// <see cref="SignatureWidthPt"/> needs no migration either.
+    /// </remarks>
+    public bool SignatureRemoveBackground { get; set; } = true;
+
+    /// <summary>
     /// Fills in the per-tool styles the first time a pre-v0.6 state file is
     /// loaded, seeding the pen from the old flat InkColor/InkWidth so a user's
     /// chosen pen isn't silently reset. Mirrors the Folio→Rune migration below.

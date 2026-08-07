@@ -100,6 +100,35 @@ public class AppStateTests
         }
     }
 
+    /// <summary>
+    /// Stands in for the migration deliberately not written: a value type with a
+    /// property initializer keeps its default when the key is absent, because
+    /// System.Text.Json only overwrites properties the file actually carries. If
+    /// this ever fails, every settings bool added since needs a MigrateToolStyles
+    /// entry after all.
+    /// </summary>
+    [Fact]
+    public void SignatureRemoveBackground_DefaultsWhenAbsentFromAnOlderStateFile()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "rune-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(dir, "state.json"),
+                """{"Settings":{"Theme":"Dark","SignatureWidthPt":200}}""");
+
+            var state = new AppStateStore(dir).Load();
+
+            Assert.True(state.Settings.SignatureRemoveBackground);
+            Assert.Equal("Dark", state.Settings.Theme); // the file's own keys still win
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void ForgetRecent_AlsoDropsItFromTheRestoreSession()
     {
