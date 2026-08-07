@@ -1,6 +1,6 @@
 # Privacy Policy — Rune PDF Reader
 
-_Last updated: 31 July 2026_
+_Last updated: 8 August 2026_
 
 **Rune does not collect, transmit, or share any personal data.**
 
@@ -25,6 +25,10 @@ All of it lives in `%LOCALAPPDATA%\Rune` on your own machine:
 file in `%LOCALAPPDATA%\Rune\signatures`, is never uploaded or transmitted, and
 is only written into a PDF when you place it on a page yourself. You can delete
 any saved signature from the Sign tool, or by deleting that folder.
+
+When you import a photo of your signature, Rune removes the paper background
+itself, on your machine. No online service, no AI model and no upload is
+involved — the photo is read, processed and saved without ever leaving Rune.
 
 You can delete all of it at any time by deleting the `%LOCALAPPDATA%\Rune`
 folder. Uninstalling Rune from the Microsoft Store removes it automatically.

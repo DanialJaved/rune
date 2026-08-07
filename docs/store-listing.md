@@ -46,7 +46,7 @@ One slim toolbar. Everything else lives in a single menu, so the page gets the s
 • Sidebar with page thumbnails, chapters and your own bookmarks
 • Text selection, copy, and find-in-document with highlight-all
 • Form filling — click a field and type; text boxes, dropdowns and checkboxes all save back into the PDF (standard AcroForm documents; XFA forms are not supported)
-• Sign a document — draw or import your signature, place it on the page, and reuse it next time. Signatures are stored only on your device
+• Sign a document — draw your signature, or photograph one on paper and import it: Rune removes the paper automatically, on your device, so only the ink lands on the page. Place it, move it, and reuse it next time. Signatures are stored only on your device
 • Flatten — bake annotations and filled fields into the page so they can't be edited out
 • Signature details — read what a digitally signed document reports, including whether the signature covers the whole file
 • Annotations — highlight, underline, strikeout, sticky notes and freehand pen — saved as standard PDF annotations that any reader can see
@@ -155,13 +155,19 @@ The current set in `docs/store-screenshots/`, shot against v0.5.0 at 1920×1080:
 4. `04-annotation-toolbar` — the highlighter's colour/style/opacity panel
 5. `05-form-filling` — a form field focused mid-typing
 6. `06-presentation` — presentation mode (F5), fullscreen
+7. `07-signature` — a photographed signature imported with the paper keyed out,
+   previewed over a checkerboard so the transparency is legible in a thumbnail
 
-Still to shoot: the **signature flow** (draw/place), the **page-editing
-sidebar** with pages selected, and the **shortcuts overlay** — the last is
-blocked on a layout bug (the right-hand column's key chips are clipped at the
-dialog edge), so it must not be published until that is fixed.
+Still to shoot: the **page-editing sidebar** with pages selected, and the
+**shortcuts overlay** (the clipping bug that blocked it was fixed in `99617b8`,
+so it is now only a matter of taking the shot).
 
 Capture at 1920×1080 with `PrintWindow(PW_RENDERFULLCONTENT)` (PROJECT.md §7),
-windowed, using a licence-safe document. **Shoot on an empty Rune profile** —
-the tab strip and recents grid otherwise leak real filenames into a
-commercially published image.
+windowed, using a licence-safe document. `PrintWindow` returns a solid black
+bitmap if it is called before the window has finished its first composition —
+wait for the app to actually draw, don't shoot immediately after launch. It is
+still the right call over `Graphics.CopyFromScreen`, which cannot produce a
+clean 1920×1080 on a 1080-tall display because the taskbar overlays the bottom
+edge. **Shoot on an empty Rune profile** — the tab strip and recents grid
+otherwise leak real filenames into a commercially published image, and a saved
+signature is personal data.

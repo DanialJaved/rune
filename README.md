@@ -35,7 +35,7 @@ Windows never had a PDF reader that is fast **and** lightweight **and** modern-l
 - **Flatten**: bake annotations and filled fields into the page so they can't be edited back out
 - **Signature details**: for a digitally signed PDF, shows the signer's stated reason, time and format, and whether the signature covers the whole file. Rune does **not** verify signatures — it has no cryptography and never claims a signature is valid
 - **Annotation toolbar**: pen, highlighter, note, sign and eraser sit together in the middle of the header; picking one opens its colours, size and opacity right beneath it. The highlighter works in a single gesture — just drag across the text — and still writes real PDF markup, so highlights stay attached to the words and other readers understand them
-- **Sign a document**: draw your signature with the mouse or pen, or import a picture of one, then click to place it (drag if you want a specific size). Saved signatures are reusable and stay on your machine. This is a *visible* signature — ink on the page, like signing a printout — not a cryptographic one
+- **Sign a document**: draw your signature with the mouse or pen, or **photograph one on paper and import it — Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document. It runs entirely on your machine: no upload, no online service. A semi-transparent preview follows the cursor so you can see exactly where it will land (scroll to resize it first), click to place, and drag it afterwards if it's not quite right. Saved signatures are reusable and stay on your machine. This is a *visible* signature — ink on the page, like signing a printout — not a cryptographic one
 - **Annotations**: highlight, underline, strikeout, sticky notes, and **freehand pen/ink** — saved as standard PDF annotations any reader can see (`Ctrl+H` highlight, `Ctrl+E` pen, `Esc` to put the tool away, right-click menu, `Ctrl+S` / `Ctrl+Shift+S`)
 - **Page editing** in the thumbnail sidebar: multi-select, drag to reorder, `Delete`, copy/cut/paste pages (`Ctrl+C`/`X`/`V`, works across open tabs), or drop a PDF onto the sidebar to insert its pages
 - **Undo / redo** for annotations and page edits (`Ctrl+Z` / `Ctrl+Y`)
@@ -115,9 +115,9 @@ The debug build is an unpackaged self-contained exe — just run it.
 
 ## Roadmap
 
-**Next:** typed signatures (draw and import already ship), resizing a signature after placing it, page extraction to a new file, more formats (ePub, CBZ), code signing for the portable build, smaller packages.
+**Next:** typed signatures in a handwriting font (draw and import already ship), resizing a signature after placing it, colour and size for form-filling text, page extraction to a new file, more formats (ePub, CBZ), code signing for the portable build, smaller packages.
 
-**Known limits:** form JavaScript needs a V8-enabled PDFium build; text selection, annotation and form filling are disabled while the view is rotated; signature *validation* would need a cryptography stack Rune doesn't ship.
+**Known limits:** form JavaScript needs a V8-enabled PDFium build; text selection, annotation, form filling **and the whole signature flow** are disabled while the view is rotated; a signature can be moved after placing but not resized; signature *validation* would need a cryptography stack Rune doesn't ship.
 
 ## License
 
