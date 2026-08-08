@@ -47,11 +47,10 @@ public sealed class AppSettings
     /// <summary>Enable j/k/g/G-style navigation keys.</summary>
     public bool VimKeys { get; set; } = true;
 
-    /// <summary>Check GitHub for a newer release once per launch (≥24h apart).</summary>
-    public bool AutoCheckUpdates { get; set; } = true;
-
-    /// <summary>Last time an update check ran, to rate-limit automatic checks.</summary>
-    public DateTime LastUpdateCheckUtc { get; set; } = DateTime.MinValue;
+    // AutoCheckUpdates / LastUpdateCheckUtc used to live here. Rune no longer
+    // updates itself — the Store does — so both are gone. Existing state.json
+    // files still carry the keys; System.Text.Json ignores unknown properties,
+    // so no migration is needed.
 
     /// <summary>Show a thumbnail grid of recent documents on the start page.</summary>
     public bool ShowRecentThumbnails { get; set; } = true;
@@ -77,6 +76,21 @@ public sealed class AppSettings
 
     /// <summary>Width in points a click-placed signature uses; remembered from the last placement.</summary>
     public double SignatureWidthPt { get; set; } = 180;
+
+    /// <summary>
+    /// Key the paper out of an imported signature photo, so only the ink lands
+    /// on the page. On by default: a photo of a signature is the common import,
+    /// and without it the paper stamps as an opaque rectangle.
+    /// </summary>
+    /// <remarks>
+    /// No <see cref="MigrateToolStyles"/> entry, deliberately. That method exists
+    /// only because Pen and Highlighter are nullable REFERENCE types, which
+    /// deserialize to null when the key is absent and would then NRE. A bool with
+    /// a property initializer just keeps its default, because System.Text.Json
+    /// only overwrites a property when the key is present — the same reason
+    /// <see cref="SignatureWidthPt"/> needs no migration either.
+    /// </remarks>
+    public bool SignatureRemoveBackground { get; set; } = true;
 
     /// <summary>
     /// Fills in the per-tool styles the first time a pre-v0.6 state file is
@@ -140,6 +154,30 @@ public sealed class AppState
             Bookmarks = existing?.Bookmarks ?? [],
         });
         TrimRecents();
+    }
+
+    /// <summary>
+    /// Forgets one file: drops it from recents and from the restore session, so
+    /// it does not reappear as a tab on the next launch. Returns true if there
+    /// was anything to remove.
+    ///
+    /// Unlike <see cref="TrimRecents"/> this discards bookmarks with the entry —
+    /// eviction is Rune's decision and must not lose them, but this one is the
+    /// user's, and keeping a hidden record of a file they asked to be forgotten
+    /// is the opposite of what they asked for.
+    /// </summary>
+    public bool ForgetRecent(string path)
+    {
+        int removed = Recents.RemoveAll(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase));
+        Session.OpenPaths.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        return removed > 0;
+    }
+
+    /// <summary>Forgets every recent file, and the session that referenced them.</summary>
+    public void ForgetAllRecents()
+    {
+        Recents.Clear();
+        Session.OpenPaths.Clear();
     }
 
     /// <summary>

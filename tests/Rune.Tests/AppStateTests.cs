@@ -99,4 +99,91 @@ public class AppStateTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    /// <summary>
+    /// Stands in for the migration deliberately not written: a value type with a
+    /// property initializer keeps its default when the key is absent, because
+    /// System.Text.Json only overwrites properties the file actually carries. If
+    /// this ever fails, every settings bool added since needs a MigrateToolStyles
+    /// entry after all.
+    /// </summary>
+    [Fact]
+    public void SignatureRemoveBackground_DefaultsWhenAbsentFromAnOlderStateFile()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "rune-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(dir, "state.json"),
+                """{"Settings":{"Theme":"Dark","SignatureWidthPt":200}}""");
+
+            var state = new AppStateStore(dir).Load();
+
+            Assert.True(state.Settings.SignatureRemoveBackground);
+            Assert.Equal("Dark", state.Settings.Theme); // the file's own keys still win
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ForgetRecent_AlsoDropsItFromTheRestoreSession()
+    {
+        var state = new AppState();
+        state.Remember(@"C:\docs\keep.pdf", "keep", 0, 1, 0, 0);
+        state.Remember(@"C:\docs\forget.pdf", "forget", 0, 1, 0, 0);
+        state.Session.OpenPaths.AddRange([@"C:\docs\keep.pdf", @"C:\docs\forget.pdf"]);
+
+        Assert.True(state.ForgetRecent(@"C:\docs\forget.pdf"));
+
+        // Leaving it in the session would reopen it as a tab on next launch —
+        // which is exactly the file the user asked to be forgotten.
+        Assert.DoesNotContain(@"C:\docs\forget.pdf", state.Session.OpenPaths);
+        Assert.Null(state.FindRecent(@"C:\docs\forget.pdf"));
+        Assert.NotNull(state.FindRecent(@"C:\docs\keep.pdf"));
+    }
+
+    [Fact]
+    public void ForgetRecent_MatchesPathsCaseInsensitively()
+    {
+        var state = new AppState();
+        state.Remember(@"C:\docs\Report.pdf", "Report", 0, 1, 0, 0);
+
+        // Windows paths are case-insensitive; recents must not keep a duplicate
+        // alive just because the casing differs.
+        Assert.True(state.ForgetRecent(@"c:\DOCS\report.PDF"));
+        Assert.Empty(state.Recents);
+    }
+
+    [Fact]
+    public void ForgetRecent_DiscardsBookmarks_UnlikeEviction()
+    {
+        var state = new AppState();
+        state.Remember(@"C:\docs\book.pdf", "book", 0, 1, 0, 0);
+        state.FindRecent(@"C:\docs\book.pdf")!.Bookmarks.Add(new BookmarkEntry { Name = "Chapter 2", PageIndex = 40 });
+
+        state.ForgetRecent(@"C:\docs\book.pdf");
+
+        // Eviction deliberately preserves bookmarked entries; an explicit
+        // "forget this" must not, or the file stays on record after the user
+        // asked for it to be gone.
+        Assert.Empty(state.Recents);
+    }
+
+    [Fact]
+    public void ForgetAllRecents_ClearsRecentsAndSession()
+    {
+        var state = new AppState();
+        state.Remember(@"C:\a.pdf", "a", 0, 1, 0, 0);
+        state.Remember(@"C:\b.pdf", "b", 0, 1, 0, 0);
+        state.Session.OpenPaths.Add(@"C:\a.pdf");
+
+        state.ForgetAllRecents();
+
+        Assert.Empty(state.Recents);
+        Assert.Empty(state.Session.OpenPaths);
+    }
 }

@@ -4,7 +4,9 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
+using Rune.Engine;
 using Rune.Services;
 using Windows.Foundation;
 using Windows.Storage.Pickers;
@@ -13,13 +15,17 @@ using Windows.UI;
 namespace Rune.Controls;
 
 /// <summary>
-/// Captures a signature — drawn by hand or imported from an image file — and
-/// hands back straight (non-premultiplied) BGRA pixels ready for
+/// Captures a signature — drawn by hand or imported from a photo — and hands
+/// back straight (non-premultiplied) BGRA pixels ready for
 /// <c>PdfDocument.AddStamp</c>.
 ///
 /// Input goes through <see cref="InkCanvas"/>; Win2D is used only offscreen to
 /// rasterise the finished strokes, because a Win2D control hosted in a
 /// ContentDialog's popup does not reliably get a device.
+///
+/// An imported photo runs through <see cref="SignatureMatte"/> so the paper
+/// becomes transparent — without it a JPEG, which has no alpha at all, stamps
+/// as an opaque rectangle over whatever it is placed on.
 /// </summary>
 public sealed partial class SignaturePad : UserControl
 {
@@ -27,6 +33,21 @@ public sealed partial class SignaturePad : UserControl
 
     /// <summary>An imported image, if one was chosen. Takes precedence over drawing.</summary>
     private SavedSignature? _imported;
+
+    /// <summary>
+    /// Reused across every re-key. Safe to hold because the preview always runs
+    /// uncropped, so its dimensions never change while an import is loaded.
+    /// </summary>
+    private WriteableBitmap? _preview;
+
+    /// <summary>Transparent margin left around the ink when the result is cropped.</summary>
+    private const int CropPadding = 4;
+
+    private const string DefaultCaption = "Draw your signature below, or import a photo of one.";
+    private const string UnreadableCaption = "That image couldn't be read. Try a PNG or a JPEG.";
+
+    /// <summary>The preview never crops, so the bitmap allocated at import stays the right size.</summary>
+    private static readonly MatteOptions PreviewOptions = new() { Crop = false };
 
     /// <summary>Stroke width in pad pixels. Chosen to read like a pen at this size.</summary>
     private const double StrokeWidth = 3.4;
@@ -45,13 +66,42 @@ public sealed partial class SignaturePad : UserControl
     /// <summary>True when there is something worth saving.</summary>
     public bool HasContent => _imported is not null || _strokes.Any(s => s.Count > 1);
 
+    /// <summary>Key the paper out of an imported photo. Seeded from settings, read back after Save.</summary>
+    public bool RemoveBackground
+    {
+        get => RemoveBackgroundCheck.IsChecked == true;
+        set => RemoveBackgroundCheck.IsChecked = value;
+    }
+
+    /// <summary>
+    /// True once the user has ticked or unticked the box themselves.
+    ///
+    /// The pad also changes it on its own — off for a source that already has
+    /// transparency, off again when the matte finds no ink — and those are
+    /// decisions about ONE image. Persisting them as the global default would
+    /// mean importing a single transparent PNG silently turned background
+    /// removal off for every future import, which the user never asked for.
+    /// </summary>
+    public bool RemoveBackgroundChosenByUser { get; private set; }
+
+    /// <summary>
+    /// Why the last import failed, or null.
+    ///
+    /// A property rather than an event, deliberately: the host can only show
+    /// this after the dialog closes (ShowNotice renders an InfoBar inside
+    /// DocumentView, which sits BEHIND the modal dialog), and an event handed
+    /// the host a message it then had to remember to clear — so importing a bad
+    /// file and then a good one reported failure on top of a successful save.
+    /// Reset at the top of every import, so it cannot go stale.
+    /// </summary>
+    public string? LastFailure { get; private set; }
+
     // ---- drawing ----
 
     private void Pad_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         // Starting to draw replaces any imported image — one or the other.
-        _imported = null;
-        ImportedPreview.Source = null;
+        ClearImport();
 
         _current = [e.GetCurrentPoint(Pad).Position];
         _strokes.Add(_current);
@@ -135,11 +185,48 @@ public sealed partial class SignaturePad : UserControl
         _current = null;
         _currentLine = null;
         Pad.Children.Clear();
-        _imported = null;
-        ImportedPreview.Source = null;
+        ClearImport();
     }
 
-    private async void ImportButton_Click(object sender, RoutedEventArgs e)
+    private void ClearImport()
+    {
+        if (_imported is null)
+        {
+            return; // called on every stroke start; nothing to undo
+        }
+        _imported = null;
+        _preview = null;
+        ImportedPreview.Source = null;
+        RemoveBackgroundCheck.IsEnabled = false;
+        Caption.Text = DefaultCaption;
+    }
+
+    private async void ImportButton_Click(object sender, RoutedEventArgs e) => await StartImportAsync();
+
+    /// <summary>
+    /// Runs the picker and loads the chosen image. Public so the Sign flyout's
+    /// "Import image…" can open this dialog straight into the picker.
+    /// </summary>
+    public async Task StartImportAsync()
+    {
+        LastFailure = null;
+        try
+        {
+            await ImportAsync();
+        }
+        catch (Exception ex)
+        {
+            // Never allowed to escape. Both callers are async void — the button
+            // handler and the dialog's Opened event — where an unhandled
+            // exception takes the whole process down rather than failing the
+            // import. PickSingleFileAsync alone can throw for a second picker
+            // already open or a dead owner window.
+            Rune.Services.ErrorLog.Default.Write(nameof(SignaturePad), ex);
+            Fail(UnreadableCaption);
+        }
+    }
+
+    private async Task ImportAsync()
     {
         var picker = new FileOpenPicker();
         picker.FileTypeFilter.Add(".png");
@@ -155,9 +242,22 @@ public sealed partial class SignaturePad : UserControl
             return;
         }
 
-        var loaded = await SignatureStore.TryLoadAsync(file.Path);
+        // Capped at decode time so WIC does the scaling. Past MaxSingleTilePx a
+        // bitmap silently fails to draw inside a CanvasVirtualControl session,
+        // which is where the on-page hover ghost lives — a 4000px phone photo
+        // would arm a signature that simply never appears.
+        //
+        // OpenReadAsync rather than the path: a picked file can be a OneDrive
+        // placeholder or a Phone Link item whose Path is empty.
+        SavedSignature? loaded;
+        using (var stream = await file.OpenReadAsync())
+        {
+            loaded = await SignatureStore.TryLoadAsync(stream, file.Path, TileMath.MaxSingleTilePx);
+        }
+
         if (loaded is null)
         {
+            Fail(UnreadableCaption);
             return;
         }
 
@@ -165,14 +265,114 @@ public sealed partial class SignaturePad : UserControl
         _strokes.Clear();
         Pad.Children.Clear();
         _imported = loaded;
+        _preview = new WriteableBitmap(loaded.Width, loaded.Height);
+        ImportedPreview.Source = _preview;
+        RemoveBackgroundCheck.IsEnabled = true;
 
-        var preview = new Microsoft.UI.Xaml.Media.Imaging.WriteableBitmap(loaded.Width, loaded.Height);
-        using (var stream = preview.PixelBuffer.AsStream())
+        // A hand-made transparent PNG is already done, so arrive with the box
+        // unticked rather than proposing to key something that has no paper.
+        // Programmatic, so it raises no Click and never counts as a choice.
+        RemoveBackground = !SignatureMatte.HasMeaningfulAlpha(loaded.Bgra, loaded.Width, loaded.Height);
+        RefreshImportedPreview();
+    }
+
+    private void Fail(string message)
+    {
+        LastFailure = message;
+        Caption.Text = message;
+    }
+
+    /// <summary>Only ever raised by a real click or keypress — see the XAML for why that matters.</summary>
+    private void RemoveBackground_Click(object sender, RoutedEventArgs e)
+    {
+        RemoveBackgroundChosenByUser = true;
+        RefreshImportedPreview();
+    }
+
+    /// <summary>Re-keys the imported image and shows the result over a checkerboard.</summary>
+    private void RefreshImportedPreview()
+    {
+        if (_imported is not { } img || _preview is null)
         {
-            stream.Write(loaded.Bgra, 0, loaded.Bgra.Length);
+            return;
         }
-        preview.Invalidate();
-        ImportedPreview.Source = preview;
+
+        byte[] shown = img.Bgra;
+        if (RemoveBackground)
+        {
+            var keyed = SignatureMatte.RemoveBackground(img.Bgra, img.Width, img.Height, PreviewOptions);
+            switch (keyed.Outcome)
+            {
+                case MatteOutcome.Keyed:
+                    shown = keyed.Bgra;
+                    Caption.Text = DefaultCaption;
+                    break;
+
+                case MatteOutcome.SkippedHasAlpha:
+                    Caption.Text = "That image already has a transparent background.";
+                    break;
+
+                case MatteOutcome.NoInkFound:
+                    // Untick rather than leaving a checkbox on that does nothing.
+                    // Programmatic, so it raises no Click: it neither re-enters
+                    // here nor counts as the user choosing a default.
+                    Caption.Text = "Nothing in that photo looks like ink, so the background was left alone. "
+                        + "A brighter, flatter shot usually fixes it.";
+                    RemoveBackground = false;
+                    break;
+            }
+        }
+        else
+        {
+            Caption.Text = DefaultCaption;
+        }
+
+        var composited = CompositeOverChecker(shown, img.Width, img.Height);
+        using (var stream = _preview.PixelBuffer.AsStream())
+        {
+            stream.Write(composited, 0, composited.Length);
+        }
+        _preview.Invalidate();
+    }
+
+    /// <summary>
+    /// Composites straight-alpha BGRA over a checkerboard, opaque.
+    ///
+    /// Two reasons for the checkerboard rather than a flat fill. The pad is
+    /// deliberately white (see the XAML), so transparency composited over it is
+    /// invisible and the user cannot tell whether the paper actually went away.
+    /// And a WriteableBitmap's PixelBuffer is PREMULTIPLIED while everything
+    /// downstream of decode here is straight — compositing to an opaque result
+    /// makes the two conventions agree, because at alpha 255 they are the same
+    /// bytes. (Writing straight pixels into the buffer directly, as this used
+    /// to, previewed any soft-alpha PNG with bright edges and a colour halo.)
+    /// </summary>
+    private static byte[] CompositeOverChecker(byte[] straight, int width, int height)
+    {
+        // Scaled with the image rather than fixed at 8px: the preview is shown
+        // Stretch="Uniform" in a box a few hundred pixels tall, so a fixed cell
+        // on a 1024px import would render about two screen pixels wide and read
+        // as noise.
+        int cell = Math.Max(4, Math.Max(width, height) / 24);
+
+        var output = new byte[width * height * 4];
+        for (int y = 0; y < height; y++)
+        {
+            bool evenRow = (y / cell % 2) == 0;
+            int row = y * width;
+            for (int x = 0; x < width; x++)
+            {
+                int i = (row + x) * 4;
+                byte back = ((x / cell % 2) == 0) == evenRow ? (byte)0xFF : (byte)0xD8;
+                int a = straight[i + 3];
+                int inverse = 255 - a;
+                output[i] = (byte)((straight[i] * a + back * inverse) / 255);
+                output[i + 1] = (byte)((straight[i + 1] * a + back * inverse) / 255);
+                output[i + 2] = (byte)((straight[i + 2] * a + back * inverse) / 255);
+                output[i + 3] = 255;
+            }
+        }
+        return output;
     }
 
     // ---- output ----
@@ -188,6 +388,31 @@ public sealed partial class SignaturePad : UserControl
     {
         if (_imported is { } img)
         {
+            // Keyed here rather than reusing the preview's buffer, because the
+            // preview deliberately runs uncropped and what gets saved must be
+            // cropped — for exactly the reason the drawn path is cropped below.
+            // ~17ms in Release on a 1024px import, so doing it synchronously as
+            // the dialog closes costs nothing anyone can see.
+            if (RemoveBackground)
+            {
+                var keyed = SignatureMatte.RemoveBackground(
+                    img.Bgra, img.Width, img.Height, new MatteOptions { Padding = CropPadding });
+                if (keyed.Outcome == MatteOutcome.Keyed)
+                {
+                    return (keyed.Bgra, keyed.Width, keyed.Height);
+                }
+            }
+
+            // Not keyed — but a source that arrived with its own transparency
+            // still wants the crop. Skipped when the bounds already cover the
+            // whole frame, which is always the case for an opaque import: the
+            // copy would be several megabytes to produce the input again.
+            if (SignatureMatte.AlphaBounds(img.Bgra, img.Width, img.Height, CropPadding) is { } opaque
+                && (opaque.Width != img.Width || opaque.Height != img.Height))
+            {
+                return SignatureMatte.CropTo(
+                    img.Bgra, img.Width, img.Height, opaque.X, opaque.Y, opaque.Width, opaque.Height);
+            }
             return (img.Bgra, img.Width, img.Height);
         }
 

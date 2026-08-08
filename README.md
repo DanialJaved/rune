@@ -35,7 +35,7 @@ Windows never had a PDF reader that is fast **and** lightweight **and** modern-l
 - **Flatten**: bake annotations and filled fields into the page so they can't be edited back out
 - **Signature details**: for a digitally signed PDF, shows the signer's stated reason, time and format, and whether the signature covers the whole file. Rune does **not** verify signatures — it has no cryptography and never claims a signature is valid
 - **Annotation toolbar**: pen, highlighter, note, sign and eraser sit together in the middle of the header; picking one opens its colours, size and opacity right beneath it. The highlighter works in a single gesture — just drag across the text — and still writes real PDF markup, so highlights stay attached to the words and other readers understand them
-- **Sign a document**: draw your signature with the mouse or pen, or import a picture of one, then click to place it (drag if you want a specific size). Saved signatures are reusable and stay on your machine. This is a *visible* signature — ink on the page, like signing a printout — not a cryptographic one
+- **Sign a document**: draw your signature with the mouse or pen, or **photograph one on paper and import it — Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document. It runs entirely on your machine: no upload, no online service. A semi-transparent preview follows the cursor so you can see exactly where it will land (scroll to resize it first), click to place, and drag it afterwards if it's not quite right. Saved signatures are reusable and stay on your machine. This is a *visible* signature — ink on the page, like signing a printout — not a cryptographic one
 - **Annotations**: highlight, underline, strikeout, sticky notes, and **freehand pen/ink** — saved as standard PDF annotations any reader can see (`Ctrl+H` highlight, `Ctrl+E` pen, `Esc` to put the tool away, right-click menu, `Ctrl+S` / `Ctrl+Shift+S`)
 - **Page editing** in the thumbnail sidebar: multi-select, drag to reorder, `Delete`, copy/cut/paste pages (`Ctrl+C`/`X`/`V`, works across open tabs), or drop a PDF onto the sidebar to insert its pages
 - **Undo / redo** for annotations and page edits (`Ctrl+Z` / `Ctrl+Y`)
@@ -47,7 +47,6 @@ Windows never had a PDF reader that is fast **and** lightweight **and** modern-l
 - Command palette (`Ctrl+K`) with fuzzy filtering and go-to-page
 - Session restore: reopens your tabs at the exact scroll position
 - Pinch-to-zoom (touch/touchpad) and `Ctrl`+scroll, zoom at the cursor
-- **Self-updating**: checks GitHub for new releases and updates in place (portable build; toggle in Settings)
 - Printing with live preview and page ranges
 - Opens damaged PDFs gracefully; 4 GB-file streaming without loading into memory
 
@@ -78,20 +77,13 @@ Vim-style keys (`j k h l`, `gg`/`G`, `p`/`n`) can be enabled in Settings. Right-
 
 ## Install
 
-**[Microsoft Store](https://apps.microsoft.com/detail/9NH37840QDM6) (recommended):** one click, automatic updates, and it registers as a PDF handler — no certificate step, and nothing for SmartScreen to warn about.
+### [![Get Rune PDF Reader from the Microsoft Store](https://img.shields.io/badge/Get%20it%20from%20the-Microsoft%20Store-0078D4?style=for-the-badge&logo=microsoftstore&logoColor=white)](https://apps.microsoft.com/detail/9NH37840QDM6)
 
-**Portable:** grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract anywhere, run `Rune.exe`. No installation, no registry. This is the build to use if you want Rune without the Store, or want to carry it on a USB stick.
+**This is the way to install Rune.** One click, automatic updates, it registers as a PDF handler, and Microsoft signs the package — so there's no certificate step and nothing for SmartScreen or Smart App Control to warn about. Works from the Store app or [on the web](https://apps.microsoft.com/detail/9NH37840QDM6).
 
-**Sideloaded MSIX:** download the `.msix` and `rune-signing.cer` from Releases, then trust the certificate once (admin PowerShell):
+**Portable:** if you want Rune without the Store — on a USB stick, or on a machine where you can't install anything — grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract anywhere, run `Rune.exe`. No installation, no registry.
 
-```powershell
-Import-Certificate -FilePath rune-signing.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
-Add-AppxPackage -Path Rune.App_x.y.z.0_x64.msix
-```
-
-> **Smart App Control / SmartScreen** apply to the GitHub downloads only — the Store build is signed by Microsoft. The portable and sideloaded builds are not yet code-signed, so machines with Smart App Control enabled will block them and SmartScreen may warn on first run ("More info → Run anyway").
->
-> The GitHub packages aren't size-optimized — they carry the full self-contained .NET + Windows App SDK runtimes.
+> The portable build is **not code-signed**: machines with Smart App Control enabled will block it, and SmartScreen may warn on first run ("More info → Run anyway"). It also doesn't update itself — check back here, or use the Store build. And it isn't size-optimized; it carries the full self-contained .NET and Windows App SDK runtimes.
 
 ## Tech
 
@@ -123,9 +115,9 @@ The debug build is an unpackaged self-contained exe — just run it.
 
 ## Roadmap
 
-**Next:** visible signature stamps (draw or import a signature and place it on the page), page extraction to a new file, more formats (ePub, CBZ), code signing for the GitHub builds, smaller packages.
+**Next:** typed signatures in a handwriting font (draw and import already ship), resizing a signature after placing it, colour and size for form-filling text, page extraction to a new file, more formats (ePub, CBZ), code signing for the portable build, smaller packages.
 
-**Known limits:** form JavaScript needs a V8-enabled PDFium build; text selection and annotation are disabled while the view is rotated; signature *validation* would need a cryptography stack Rune doesn't ship.
+**Known limits:** form JavaScript needs a V8-enabled PDFium build; text selection, annotation, form filling **and the whole signature flow** are disabled while the view is rotated; a signature can be moved after placing but not resized; signature *validation* would need a cryptography stack Rune doesn't ship.
 
 ## License
 

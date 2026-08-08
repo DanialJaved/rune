@@ -132,6 +132,19 @@ public sealed partial class MainWindow
             };
             root.Children.Add(draw);
 
+            var import = new Button
+            {
+                Content = "Import image…",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+            };
+            ToolTipService.SetToolTip(import, "Use a photo or scan of your signature; the paper is removed for you");
+            import.Click += async (_, _) =>
+            {
+                panel.Flyout.Hide();
+                await ShowSignatureDialogAsync(startWithImport: true);
+            };
+            root.Children.Add(import);
+
             panel.Flyout.Content = root;
             panel.Flyout.Placement = FlyoutPlacementMode.Bottom;
             panel.Flyout.Opened += (_, _) => _ = RefreshSignatureListAsync();
@@ -344,9 +357,10 @@ public sealed partial class MainWindow
     private StackPanel? _signatureList;
 
     /// <summary>Opens the capture pad; a saved signature is armed immediately.</summary>
-    private async Task ShowSignatureDialogAsync()
+    /// <param name="startWithImport">Run the file picker as soon as the dialog is up.</param>
+    private async Task ShowSignatureDialogAsync(bool startWithImport = false)
     {
-        var pad = new SignaturePad();
+        var pad = new SignaturePad { RemoveBackground = _state.Settings.SignatureRemoveBackground };
         var dialog = new ContentDialog
         {
             Title = "Add a signature",
@@ -356,10 +370,38 @@ public sealed partial class MainWindow
             DefaultButton = ContentDialogButton.Primary,
         };
 
-        if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary)
+        if (startWithImport)
+        {
+            // From Opened, not before ShowAsync — the picker needs the dialog
+            // already on screen behind it or it opens against a bare window.
+            // StartImportAsync swallows its own exceptions, which matters here:
+            // this is async void, so anything escaping would kill the process.
+            dialog.Opened += async (_, _) => await pad.StartImportAsync();
+        }
+
+        var result = await ShowDialogAsync(dialog);
+
+        // Read after the dialog closes rather than pushed while it was open:
+        // ShowNotice renders an InfoBar inside DocumentView, which sits behind
+        // the modal dialog, so raising it any earlier shows the user nothing.
+        if (pad.LastFailure is { } failure)
+        {
+            ShowError(failure);
+        }
+        if (result != ContentDialogResult.Primary)
         {
             return;
         }
+
+        // Only when the user actually touched the checkbox. The pad also
+        // unticks it by itself for an image that has no paper to remove, and
+        // saving that as the default would turn the feature off for good.
+        if (pad.RemoveBackgroundChosenByUser)
+        {
+            _state.Settings.SignatureRemoveBackground = pad.RemoveBackground;
+            _store.Save(_state);
+        }
+
         if (pad.Rasterize() is not { } image)
         {
             ShowNotice("Nothing was drawn, so there was no signature to save.", InfoBarSeverity.Informational);
@@ -387,7 +429,12 @@ public sealed partial class MainWindow
             return;
         }
 
-        var saved = await _signatures.ListAsync();
+        // Capped for the same reason the import path is: the on-page hover ghost
+        // hands this buffer to CanvasBitmap inside a CanvasVirtualControl
+        // session, where anything past MaxSingleTilePx silently draws nothing.
+        // Signatures saved by earlier builds are still on disk at full
+        // resolution, so the cap has to be here too, not only at import.
+        var saved = await _signatures.ListAsync(TileMath.MaxSingleTilePx);
         list.Children.Clear();
 
         if (saved.Count == 0)

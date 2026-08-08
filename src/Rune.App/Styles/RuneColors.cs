@@ -47,6 +47,34 @@ internal static class RuneColors
     public static Color ActiveSearch(bool night) =>
         night ? Color.FromArgb(170, 255, 150, 40) : Color.FromArgb(150, 255, 140, 0);
 
+    // ---- Selected signature ----
+
+    /// <summary>Dashed frame around a placed signature that is selected for moving.</summary>
+    public static Color SelectedStampBorder(bool night) =>
+        night ? Color.FromArgb(230, 150, 200, 255) : Color.FromArgb(230, 0, 100, 200);
+
+    /// <summary>Faint fill so the whole grabbable area reads as one object, not just its edge.</summary>
+    public static Color SelectedStampWash(bool night) =>
+        night ? Color.FromArgb(45, 120, 180, 255) : Color.FromArgb(35, 0, 120, 215);
+
+    // ---- Form fields ----
+    //
+    // PDFium's FFLDraw pass fills widgets and draws no edge, so two fields that
+    // touch — a name box directly above an email box — merge into one wash with
+    // no seam between them. These strokes are Rune's, drawn over the tiles.
+
+    /// <summary>Edge of an editable field that does not have focus.</summary>
+    public static Color FormFieldBorder(bool night) =>
+        night ? Color.FromArgb(150, 120, 180, 255) : Color.FromArgb(140, 0, 90, 180);
+
+    /// <summary>Edge of the field currently taking keystrokes.</summary>
+    public static Color FormFieldFocusBorder(bool night) =>
+        night ? Color.FromArgb(255, 150, 200, 255) : Color.FromArgb(255, 0, 100, 200);
+
+    /// <summary>Edge of a read-only field — present, but not an invitation to type.</summary>
+    public static Color FormFieldReadOnlyBorder(bool night) =>
+        night ? Color.FromArgb(110, 160, 160, 170) : Color.FromArgb(110, 120, 120, 130);
+
     // ---- Window caption buttons ----
     //
     // AppWindow.TitleBar is not a XAML element, so it cannot consume a

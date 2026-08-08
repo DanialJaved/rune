@@ -199,4 +199,107 @@ public class StampTests
         Assert.Empty(doc.GetAnnotations(0));
         Assert.False(doc.IsDirty);
     }
+
+    // ---- moving a placed stamp ----
+    //
+    // The failure these guard against is subtle: setting only the annotation's
+    // rect moves its bounding box while the image inside keeps its own matrix,
+    // so the signature reports a new home and is still drawn at the old one.
+    // Asserting on the rect alone would pass while the page looked unchanged,
+    // which is why these count ink in the raster.
+
+    /// <summary>Dark pixels inside a page-local rect, at 1 px per point.</summary>
+    private static int DarkInside(PageBitmap bmp, int x, int y, int w, int h)
+    {
+        int dark = 0;
+        for (int py = Math.Max(0, y); py < Math.Min(bmp.Height, y + h); py++)
+        {
+            for (int px = Math.Max(0, x); px < Math.Min(bmp.Width, x + w); px++)
+            {
+                var (b, g, r) = PixelAssert.Pixel(bmp, px, py);
+                if (r < 100 && g < 100 && b < 100)
+                {
+                    dark++;
+                }
+            }
+        }
+        return dark;
+    }
+
+    [Fact]
+    public void MoveAnnotation_TakesTheImageWithTheRect()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+
+        var before = doc.RenderPage(0, 1.0f);
+        Assert.True(DarkInside(before, 60, 400, 200, 80) > 5000, "stamp did not land where it was placed");
+
+        var previous = doc.MoveAnnotation(0, 0, 60, 600);
+        Assert.NotNull(previous);
+
+        var after = doc.RenderPage(0, 1.0f);
+        Assert.True(DarkInside(after, 60, 600, 200, 80) > 5000, "the image did not follow the rect");
+        Assert.True(DarkInside(after, 60, 400, 200, 80) < 500, "ink was left behind at the old position");
+    }
+
+    [Fact]
+    public void MoveAnnotation_KeepsTheStampsSize()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+        var placed = doc.GetAnnotations(0)[0];
+
+        doc.MoveAnnotation(0, 0, 300, 620);
+        var moved = doc.GetAnnotations(0)[0];
+
+        // A move must not silently rescale. It cannot: PDFium translates a
+        // stamp's appearance to the rect but never scales it to fit, so a rect
+        // of a different size would report one size and draw another. Resizing
+        // an already-placed stamp is therefore not offered — see
+        // ApplyAnnotationRectLocked for the measurement behind that.
+        Assert.Equal(placed.Width, moved.Width, precision: 1);
+        Assert.Equal(placed.Height, moved.Height, precision: 1);
+    }
+
+    [Fact]
+    public void RestoreAnnotationRect_PutsAMovedStampBack()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+
+        // This is exactly the pair the undo stack replays.
+        var original = doc.MoveAnnotation(0, 0, 300, 650);
+        Assert.NotNull(original);
+        Assert.True(doc.RestoreAnnotationRect(0, 0, original!.Value));
+
+        var restored = doc.RenderPage(0, 1.0f);
+        Assert.True(DarkInside(restored, 60, 400, 200, 80) > 5000, "undo did not return the stamp");
+        Assert.True(DarkInside(restored, 300, 650, 200, 80) < 500, "a copy was left at the moved position");
+    }
+
+    [Fact]
+    public void MoveAnnotation_SurvivesASaveAndReopen()
+    {
+        string path = TempPdf();
+        try
+        {
+            using (var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf")))
+            {
+                doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+                doc.MoveAnnotation(0, 0, 60, 620);
+                doc.SaveAs(path);
+            }
+
+            // GenerateContent is what makes the move part of the file rather
+            // than a live-object edit; without it this reopens at the old spot.
+            using var reopened = PdfDocument.Open(path);
+            var page = reopened.RenderPage(0, 1.0f);
+            Assert.True(DarkInside(page, 60, 620, 200, 80) > 5000, "the move was not serialized");
+        }
+        finally
+        {
+            if (File.Exists(path)) { File.Delete(path); }
+        }
+    }
 }

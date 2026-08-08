@@ -313,6 +313,7 @@ public sealed partial class PdfViewer : UserControl
         };
 
         Canvas.PointerMoved += Canvas_PointerMoved;
+        Canvas.PointerExited += Canvas_PointerExited;
         Canvas.PointerPressed += Canvas_PointerPressed;
         Canvas.PointerReleased += Canvas_PointerReleased;
         Canvas.RightTapped += Canvas_RightTapped;
@@ -916,7 +917,20 @@ public sealed partial class PdfViewer : UserControl
         bool ctrl = Microsoft.UI.Input.InputKeyboardSource
             .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-        if (!ctrl || point.Properties.MouseWheelDelta == 0 || _layout is null)
+        if (point.Properties.MouseWheelDelta == 0)
+        {
+            return;
+        }
+
+        // Plain wheel resizes the signature waiting to be placed. Only while one
+        // is actually pending, so the wheel keeps scrolling the rest of the time.
+        if (!ctrl && TryResizePendingSignature(point.Properties.MouseWheelDelta))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (!ctrl || _layout is null)
         {
             return; // plain wheel: let it bubble to the ScrollViewer and scroll
         }
@@ -1270,6 +1284,13 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
+        if (_draggingStamp)
+        {
+            UpdateStampDrag(doc);
+            e.Handled = true;
+            return;
+        }
+
         if (_isSelecting)
         {
             UpdateSelection(doc);
@@ -1277,10 +1298,25 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
+        // Preview the pending signature under the cursor before it is placed.
+        if (UpdateSignatureHover(doc))
+        {
+            Canvas.Invalidate();
+        }
+
         // Only offer the link cursor while reading; an armed tool owns the pointer.
         if (_activeTool == AnnotationTool.None)
         {
             SetLinkCursor(HitTestLink(doc) is not null);
+        }
+    }
+
+    private void Canvas_PointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        // Leave no ghost stranded at the edge when the pointer goes elsewhere.
+        if (UpdateSignatureHover(null))
+        {
+            Canvas.Invalidate();
         }
     }
 
@@ -1325,6 +1361,14 @@ public sealed partial class PdfViewer : UserControl
                 BeginSignaturePlacement(docPoint, e.Pointer);
                 e.Handled = true;
                 return;
+        }
+
+        // A placed signature is grabbed before anything else claims the press,
+        // so dragging one never turns into a text selection through it.
+        if (TryHandleStampPress(docPoint, e.Pointer))
+        {
+            e.Handled = true;
+            return;
         }
 
         // Form fields come before links and selection: a widget sitting on top
@@ -1382,6 +1426,13 @@ public sealed partial class PdfViewer : UserControl
         if (_placingSignature)
         {
             CommitSignaturePlacement();
+            Canvas.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+            return;
+        }
+        if (_draggingStamp)
+        {
+            CommitStampDrag();
             Canvas.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
             return;
@@ -1935,10 +1986,12 @@ public sealed partial class PdfViewer : UserControl
             }
 
             DrawHighlights(session, i, pageRect);
+            DrawFormFieldBorders(session, i, pageRect);
             session.DrawRectangle(pageXamlRect, borderColor, 1);
         }
 
         DrawLiveInk(session);
+        DrawStampSelection(session);
         DrawSignatureGhost(session);
     }
 

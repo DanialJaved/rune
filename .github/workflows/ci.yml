@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Build and test need nothing but the source. Without this the workflow gets
+# whatever the repository default grants, which is usually write.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: windows-latest
@@ -17,8 +22,14 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Build app
+      - name: Build app (x64)
         run: dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 -p:WindowsPackageType=None
+
+      # Releases ship an x64+ARM64 bundle, so an ARM64-only break would reach
+      # the Store unseen if CI only ever built x64. Build only — the runner is
+      # x64, so the ARM64 output cannot be executed here.
+      - name: Build app (ARM64)
+        run: dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=ARM64 -p:WindowsPackageType=None
 
       - name: Test
         run: dotnet test tests/Rune.Tests/Rune.Tests.csproj -c Release

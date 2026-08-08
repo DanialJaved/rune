@@ -239,4 +239,43 @@ public class FormFillTests
         // never calls it, typing looks like nothing happened.
         Assert.Contains(0, invalidated);
     }
+
+    // IsSamePlaceAs is what lets the viewer tell "click inside the field I am
+    // already typing in" (move the caret) from "click on a different field"
+    // (commit the old one first). Getting it wrong either strands focus on the
+    // old widget — which is what made clicking a second field do nothing until
+    // you pressed Escape — or resets the caret every time you click mid-text.
+
+    [Fact]
+    public void IsSamePlaceAs_IgnoresTheValue()
+    {
+        var before = Field(name: "email", value: "");
+        var after = before with { Value = "typed while editing" };
+
+        // Record equality would say false here, once per keystroke.
+        Assert.True(before.IsSamePlaceAs(after));
+    }
+
+    [Fact]
+    public void IsSamePlaceAs_SeparatesRadiosSharingOneName()
+    {
+        var first = Field(name: "choice", y: 100);
+        var second = Field(name: "choice", y: 140);
+
+        // Every radio in a group carries the group's name, so position is the
+        // only thing telling two of them apart.
+        Assert.False(first.IsSamePlaceAs(second));
+    }
+
+    [Fact]
+    public void IsSamePlaceAs_SeparatesSameNameOnDifferentPages()
+    {
+        var onPage0 = Field(name: "signature", page: 0);
+        var onPage1 = Field(name: "signature", page: 1);
+
+        Assert.False(onPage0.IsSamePlaceAs(onPage1));
+    }
+
+    private static FormFieldInfo Field(string name, string value = "", int page = 0, double y = 100) =>
+        new(page, FormFieldKind.Text, name, value, IsReadOnly: false, X: 50, Y: y, Width: 200, Height: 20);
 }

@@ -61,6 +61,46 @@ public class PdfDocumentTests
     }
 
     [Fact]
+    public void RenderRegion_RequestPastBudget_ThrowsInsteadOfOverflowing()
+    {
+        using var doc = PdfDocument.Open(CorpusPath("hello.pdf"));
+
+        // width × 4 × height silently overflows int here (32768 × 4 × 32768 =
+        // 4.3e9), which used to surface as an ArgumentOutOfRangeException from
+        // ArrayPool.Rent on a *negative* length. The guard has to fire first,
+        // and has to do so before anything is allocated.
+        var ex = Assert.Throws<PdfiumException>(
+            () => doc.RenderRegion(0, scale: 1.0f, rotation: 0, srcX: 0, srcY: 0, width: 32768, height: 32768));
+
+        Assert.Contains("too large", ex.Message);
+    }
+
+    [Fact]
+    public void ClampScaleToBudget_OrdinaryPage_LeavesScaleAlone()
+    {
+        // US Letter at print resolution: ~2 Mpx, nowhere near the cap.
+        Assert.Equal(150f / 72f, PdfDocument.ClampScaleToBudget(612f, 792f, 150f / 72f));
+    }
+
+    [Fact]
+    public void ClampScaleToBudget_MaximumSizedPage_FitsTheBudget()
+    {
+        // 14400 pt is the largest page the PDF spec allows, and a hostile file
+        // can declare it. At 150 DPI that is 30000 × 30000 px — 900 Mpx.
+        const float side = 14400f;
+        float clamped = PdfDocument.ClampScaleToBudget(side, side, 150f / 72f);
+
+        Assert.True(clamped < 150f / 72f, "an oversized page must have its scale reduced");
+
+        // Check the whole-pixel dimensions, not the real-valued area: those are
+        // what RenderRegion's guard sees, and rounding up to them is exactly how
+        // a clamp aimed at the cap would still throw.
+        long side_px = (int)MathF.Round(side * clamped);
+        Assert.True(side_px * side_px <= PdfDocument.MaxRenderPixels,
+            $"clamped render is {side_px}×{side_px}, past the {PdfDocument.MaxRenderPixels} budget");
+    }
+
+    [Fact]
     public void Open_CorruptFile_ThrowsPdfiumException()
     {
         var ex = Assert.Throws<PdfiumException>(() => PdfDocument.Open(CorpusPath("corrupt.pdf")));

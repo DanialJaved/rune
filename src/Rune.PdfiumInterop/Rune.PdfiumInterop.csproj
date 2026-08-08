@@ -7,7 +7,7 @@
 
   <ItemGroup>
     <!-- Prebuilt pdfium.dll (x64/x86/arm64) from https://github.com/bblanchon/pdfium-binaries -->
-    <PackageReference Include="bblanchon.PDFium.Win32" Version="152.0.7934" />
+    <PackageReference Include="bblanchon.PDFium.Win32" Version="152.0.7961" />
   </ItemGroup>
 
 </Project>

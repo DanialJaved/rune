@@ -1,6 +1,6 @@
 # Privacy Policy — Rune PDF Reader
 
-_Last updated: 31 July 2026_
+_Last updated: 8 August 2026_
 
 **Rune does not collect, transmit, or share any personal data.**
 
@@ -26,18 +26,21 @@ file in `%LOCALAPPDATA%\Rune\signatures`, is never uploaded or transmitted, and
 is only written into a PDF when you place it on a page yourself. You can delete
 any saved signature from the Sign tool, or by deleting that folder.
 
+When you import a photo of your signature, Rune removes the paper background
+itself, on your machine. No online service, no AI model and no upload is
+involved — the photo is read, processed and saved without ever leaving Rune.
+
 You can delete all of it at any time by deleting the `%LOCALAPPDATA%\Rune`
 folder. Uninstalling Rune from the Microsoft Store removes it automatically.
 
 ## Network access
 
-**The Microsoft Store version of Rune makes no network requests at all.**
+**Rune makes no network requests at all.**
 
-The portable version downloaded from GitHub can check GitHub's public releases
-API to see whether a newer version exists. That check sends nothing but an
-ordinary web request; it includes no personal information and no data about the
-documents you have open. It can be turned off in Settings, and it is disabled
-entirely in the Store build because the Store handles updates.
+Not on startup, not while you read, not ever — there is no networking code left
+in the application. Earlier versions of the portable build could ask GitHub
+whether a newer release existed; that check was removed, and updates now come
+from the Microsoft Store.
 
 ## Your documents
 

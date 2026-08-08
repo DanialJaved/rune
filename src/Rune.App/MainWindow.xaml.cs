@@ -58,10 +58,12 @@ public sealed partial class MainWindow : Window
         ((UIElement)Content).PreviewKeyDown += Content_PreviewKeyDown;
         // The pen panel is built lazily on first use (BuildInkFlyout).
 
-        // Packaged/Store builds don't self-update — the Store does. Hide the
-        // entry point entirely rather than offer a link out to GitHub.
-        UpdatesMenuItem.Visibility = UpdateService.UpdatesSupported
-            ? Visibility.Visible : Visibility.Collapsed;
+        // handledEventsToo, because TabViewItem marks the press handled for its
+        // own selection before it would ever bubble to the TabView. Declaring
+        // this in XAML silently never fires.
+        Tabs.AddHandler(UIElement.PointerPressedEvent,
+            new PointerEventHandler(Tabs_PointerPressed), handledEventsToo: true);
+
         PopulateRecents();
 
         Activated += MainWindow_FirstActivated;
@@ -199,7 +201,6 @@ public sealed partial class MainWindow : Window
         try
         {
             await RestoreSessionAsync();
-            await CheckForUpdatesAsync(userInitiated: false);
         }
         catch (Exception ex)
         {
@@ -504,6 +505,25 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Any press on the tab strip leaves Home for that tab.
+    ///
+    /// <see cref="Tabs_SelectionChanged"/> already clears the flag, but it only
+    /// fires when the selection actually changes — so clicking the tab that is
+    /// already selected did nothing, and with a single document open that is
+    /// every tab. The wordmark was the only way back, which is not where anyone
+    /// looks for it.
+    /// </summary>
+    private void Tabs_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (_showHome && Tabs.TabItems.Count > 0)
+        {
+            _showHome = false;
+            UpdateStartPageVisibility();
+            UpdateToolbarForActive();
+        }
+    }
+
     private void UpdateStartPageVisibility()
     {
         bool hasTabs = Tabs.TabItems.Count > 0;
@@ -724,7 +744,6 @@ public sealed partial class MainWindow : Window
     private void SaveButton_Click(object sender, RoutedEventArgs e) => _ = SaveActiveAsync();
     private void SaveAsButton_Click(object sender, RoutedEventArgs e) => _ = SaveAsActiveAsync();
     private void PropertiesButton_Click(object sender, RoutedEventArgs e) => _ = ShowPropertiesAsync();
-    private void UpdatesButton_Click(object sender, RoutedEventArgs e) => _ = CheckForUpdatesAsync(userInitiated: true);
     private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
     private void PresentMenuItem_Click(object sender, RoutedEventArgs e) => TogglePresentation();
     private void UndoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.UndoAsync();
@@ -1022,46 +1041,6 @@ public sealed partial class MainWindow : Window
         var sidebarCheck = new CheckBox { Content = "Show the sidebar when a document opens", IsChecked = _state.Settings.SidebarOpenByDefault };
         var thumbsCheck = new CheckBox { Content = "Show recent documents as thumbnails on the start page", IsChecked = _state.Settings.ShowRecentThumbnails };
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
-        var updateCheck = new CheckBox
-        {
-            Content = "Check for updates automatically",
-            IsChecked = _state.Settings.AutoCheckUpdates,
-            // Meaningless in a Store build — the Store updates the app.
-            Visibility = UpdateService.UpdatesSupported ? Visibility.Visible : Visibility.Collapsed,
-        };
-
-        // Applies the dialog's controls to settings. Shared by Save and by the
-        // "check now" button, which treats itself as an implicit Save so the
-        // user's in-flight edits aren't discarded when the dialog closes.
-        void ApplySettings()
-        {
-            _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
-            _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
-            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
-            _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
-            _state.Settings.VimKeys = vimCheck.IsChecked == true;
-            _state.Settings.AutoCheckUpdates = updateCheck.IsChecked == true;
-            ApplyTheme(_state.Settings.Theme);
-            _store.Save(_state);
-            PopulateRecents(); // reflect the thumbnails toggle immediately
-        }
-
-        // This button lives INSIDE the Settings dialog, so running the check
-        // here would try to open the update dialog while Settings is still up —
-        // WinUI allows only one ContentDialog at a time, and the resulting throw
-        // used to kill the app. Close Settings first, run the check after.
-        bool checkAfterClosing = false;
-        ContentDialog? dialog = null;
-        var checkNowButton = new Button
-        {
-            Content = "Check for updates now",
-            Visibility = UpdateService.UpdatesSupported ? Visibility.Visible : Visibility.Collapsed,
-        };
-        checkNowButton.Click += (_, _) =>
-        {
-            checkAfterClosing = true;
-            dialog?.Hide();
-        };
 
         var panel = new StackPanel { Spacing = 12 };
         panel.Children.Add(new TextBlock { Text = "Theme", Opacity = 0.7 });
@@ -1070,16 +1049,14 @@ public sealed partial class MainWindow : Window
         panel.Children.Add(sidebarCheck);
         panel.Children.Add(thumbsCheck);
         panel.Children.Add(vimCheck);
-        panel.Children.Add(updateCheck);
-        panel.Children.Add(checkNowButton);
         panel.Children.Add(new TextBlock
         {
-            Text = $"Rune {UpdateService.CurrentVersion.ToString(3)}",
+            Text = $"Rune {CurrentVersion}",
             Opacity = 0.5,
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
         });
 
-        dialog = new ContentDialog
+        var dialog = new ContentDialog
         {
             Title = "Settings",
             Content = panel,
@@ -1088,15 +1065,22 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Primary,
         };
 
-        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary || checkAfterClosing)
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary)
         {
-            ApplySettings();
-        }
-        if (checkAfterClosing)
-        {
-            await CheckForUpdatesAsync(userInitiated: true); // Settings is closed by now
+            _state.Settings.Theme = themeBox.SelectedItem as string ?? "System";
+            _state.Settings.RestoreSession = restoreCheck.IsChecked == true;
+            _state.Settings.SidebarOpenByDefault = sidebarCheck.IsChecked == true;
+            _state.Settings.ShowRecentThumbnails = thumbsCheck.IsChecked == true;
+            _state.Settings.VimKeys = vimCheck.IsChecked == true;
+            ApplyTheme(_state.Settings.Theme);
+            _store.Save(_state);
+            PopulateRecents(); // reflect the thumbnails toggle immediately
         }
     }
+
+    /// <summary>The running build's version, for the Settings footer.</summary>
+    private static string CurrentVersion =>
+        (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0)).ToString(3);
 
     // ---------------------------------------------------------------- shortcuts overlay
 
@@ -1105,7 +1089,13 @@ public sealed partial class MainWindow : Window
     /// <summary>GNOME-style two-column shortcuts window, fed by <see cref="ShortcutCatalog"/>.</summary>
     private async Task ShowShortcutsAsync()
     {
-        var grid = new Grid { ColumnSpacing = 40, MinWidth = 620 };
+        // Fixed width rather than MinWidth: a minimum only states what the grid
+        // will not go below, so when the dialog's content area came out narrower
+        // the grid overflowed and the second column's key chips were clipped off
+        // the right edge — the overlay listed half its actions with no keys
+        // beside them. Pinning both this and the dialog's MaxWidth means the
+        // content area is known to be wider than the content.
+        var grid = new Grid { ColumnSpacing = 40, Width = 760 };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var columns = new[] { new StackPanel { Spacing = 20 }, new StackPanel { Spacing = 20 } };
@@ -1155,150 +1145,26 @@ public sealed partial class MainWindow : Window
             weight[target] += group.Shortcuts.Length + 2;
         }
 
-        await ShowDialogAsync(new ContentDialog
-        {
-            Title = "Keyboard shortcuts",
-            Content = new ScrollViewer { Content = grid, MaxHeight = 540 },
-            CloseButtonText = "Close",
-        });
-    }
-
-    // ---------------------------------------------------------------- updates
-
-    private readonly UpdateService _updater = new();
-
-    /// <summary>True while a check is running, so two can never overlap.</summary>
-    private bool _updateCheckRunning;
-
-    /// <summary>Runs on launch (rate-limited) and from the Settings/menu/palette "check now".</summary>
-    private async Task CheckForUpdatesAsync(bool userInitiated)
-    {
-        if (!UpdateService.UpdatesSupported)
-        {
-            return; // packaged/Store build — the Store handles updates
-        }
-        if (_updateCheckRunning)
-        {
-            return; // a check is already in flight — its dialog is the one to show
-        }
-
-        if (!userInitiated)
-        {
-            if (!_state.Settings.AutoCheckUpdates ||
-                (DateTime.UtcNow - _state.Settings.LastUpdateCheckUtc) < TimeSpan.FromHours(24))
-            {
-                return;
-            }
-            // Don't burn the 24h rate limit on a check whose result we'd have to
-            // suppress anyway because the user is busy in another dialog.
-            if (DialogHost.IsOpen)
-            {
-                return;
-            }
-        }
-
-        _updateCheckRunning = true;
-        try
-        {
-            _state.Settings.LastUpdateCheckUtc = DateTime.UtcNow;
-            _store.Save(_state);
-
-            var update = await _updater.CheckAsync();
-            if (update is null)
-            {
-                if (userInitiated)
-                {
-                    await ShowDialogAsync(new ContentDialog
-                    {
-                        Title = "You're up to date",
-                        Content = $"Rune {UpdateService.CurrentVersion.ToString(3)} is the latest version.",
-                        CloseButtonText = "OK",
-                    });
-                }
-                return;
-            }
-
-            await ShowUpdateDialogAsync(update);
-        }
-        catch (Exception ex)
-        {
-            ErrorLog.Default.Write("CheckForUpdates", ex);
-            if (userInitiated)
-            {
-                ShowError($"Couldn't check for updates: {ex.Message}");
-            }
-        }
-        finally
-        {
-            _updateCheckRunning = false;
-        }
-    }
-
-    private async Task ShowUpdateDialogAsync(UpdateInfo update)
-    {
-        bool portable = UpdateService.IsPortable() && update.ZipUrl is not null;
-
-        var notes = new TextBlock
-        {
-            Text = string.IsNullOrWhiteSpace(update.Notes) ? "" : update.Notes,
-            TextWrapping = TextWrapping.Wrap,
-        };
         var dialog = new ContentDialog
         {
-            Title = $"Update available — Rune {update.Version.ToString(3)}",
-            Content = new ScrollViewer { Content = notes, MaxHeight = 320, MinWidth = 420 },
-            PrimaryButtonText = portable ? "Download and install" : "Open releases page",
-            CloseButtonText = "Later",
-            DefaultButton = ContentDialogButton.Primary,
+            Title = "Keyboard shortcuts",
+            Content = new ScrollViewer
+            {
+                Content = grid,
+                MaxHeight = 540,
+                HorizontalScrollMode = ScrollMode.Disabled,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            },
+            CloseButtonText = "Close",
         };
-
-        if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary)
-        {
-            return;
-        }
-
-        if (portable)
-        {
-            // Settle unsaved work BEFORE downloading: installing ends with
-            // Close(), and going straight there would discard annotations
-            // silently. Asking first also means cancelling leaves nothing
-            // downloaded and no updater process spawned.
-            if (!await EnsureSafeToCloseAsync())
-            {
-                return;
-            }
-
-            var (ok, error) = await _updater.DownloadAndApplyAsync(update);
-            if (ok)
-            {
-                _closeApproved = true;
-                Close(); // apply-update.cmd waits for exit, swaps files, relaunches
-            }
-            else
-            {
-                await OpenReleasesPageFallbackAsync(
-                    $"Rune couldn't install the update automatically ({error ?? "unknown error"}). Opening the releases page instead.");
-            }
-        }
-        else
-        {
-            await Windows.System.Launcher.LaunchUriAsync(new Uri(update.HtmlUrl));
-        }
-    }
-
-    private async Task OpenReleasesPageFallbackAsync(string message)
-    {
-        var result = await ShowDialogAsync(new ContentDialog
-        {
-            Title = "Manual update needed",
-            Content = message,
-            PrimaryButtonText = "Open releases page",
-            CloseButtonText = "Cancel",
-        });
-        if (result == ContentDialogResult.Primary)
-        {
-            await Windows.System.Launcher.LaunchUriAsync(new Uri(_updater.ReleasesPageUrl));
-        }
+        // A ContentDialog's width comes from the ContentDialogMaxWidth theme
+        // resource, NOT from the MaxWidth property — setting the property alone
+        // leaves the default ~548px cap in force, the content overflows it, and
+        // the overflow is clipped. That is what cut the key chips off the second
+        // column. Overriding the resource on this instance is the supported way
+        // to widen one dialog without touching every other.
+        dialog.Resources["ContentDialogMaxWidth"] = 880.0;
+        await ShowDialogAsync(dialog);
     }
 
     // ---------------------------------------------------------------- command palette
@@ -1311,10 +1177,6 @@ public sealed partial class MainWindow : Window
             new("Keyboard shortcuts", "F1", () => _ = ShowShortcutsAsync()),
             new("Settings", "", () => SettingsButton_Click(this, null!)),
         };
-        if (UpdateService.UpdatesSupported)
-        {
-            commands.Add(new PaletteCommand("Check for updates", "", () => _ = CheckForUpdatesAsync(userInitiated: true)));
-        }
 
         if (_activeViewer is { } viewer && CurrentView is { IsDocumentLoaded: true, LoadError: null })
         {
@@ -1463,6 +1325,56 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Right-click on a recent card: forget this one, or all of them.
+    ///
+    /// Removal also deletes the cached first-page thumbnail. That PNG is a
+    /// picture of the document, so leaving it on disk would keep the contents of
+    /// a file the user just asked Rune to forget.
+    /// </summary>
+    private void RecentCard_RightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: RecentCard card })
+        {
+            return;
+        }
+        e.Handled = true;
+
+        var forget = new MenuFlyoutItem { Text = "Remove from recents" };
+        // Bookmarks hang off the recent entry, so forgetting the file forgets
+        // them. Say so rather than discovering it later.
+        int bookmarks = _state.FindRecent(card.Path)?.Bookmarks.Count ?? 0;
+        if (bookmarks > 0)
+        {
+            forget.Text = bookmarks == 1
+                ? "Remove from recents (discards 1 bookmark)"
+                : $"Remove from recents (discards {bookmarks} bookmarks)";
+        }
+        forget.Click += (_, _) =>
+        {
+            _state.ForgetRecent(card.Path);
+            _thumbnails.Forget(card.Path);
+            _store.Save(_state);
+            PopulateRecents();
+        };
+
+        var forgetAll = new MenuFlyoutItem { Text = "Clear all recent documents" };
+        forgetAll.Click += (_, _) =>
+        {
+            _state.ForgetAllRecents();
+            _thumbnails.ForgetAll();
+            _store.Save(_state);
+            PopulateRecents();
+        };
+
+        var flyout = new MenuFlyout();
+        flyout.Items.Add(forget);
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        flyout.Items.Add(forgetAll);
+        var target = (FrameworkElement)sender;
+        flyout.ShowAt(target, e.GetPosition(target));
+    }
+
     // ---------------------------------------------------------------- accelerators
 
     private void RegisterAccelerators()
@@ -1528,12 +1440,26 @@ public sealed partial class MainWindow : Window
             {
                 // Abandon a half-drawn placement before disarming the tool.
             }
+            else if (_activeViewer?.ClearSignatureSelection() == true)
+            {
+                // Deselect a placed signature before disarming anything.
+            }
             else if (_activeViewer?.ActiveTool is not (null or AnnotationTool.None))
             {
                 _activeViewer?.ClearPendingSignature();
                 SetActiveTool(AnnotationTool.None); // finally, put the tool away
             }
         }, requiresDocument: false);
+
+        // Delete removes the selected signature. Guarded on there being one, so
+        // Delete keeps deleting pages when the thumbnail sidebar has focus.
+        AddAccelerator(VirtualKey.Delete, VirtualKeyModifiers.None, () =>
+        {
+            if (_activeViewer?.HasSelectedSignature == true)
+            {
+                _activeViewer.DeleteSelectedSignature();
+            }
+        }, skipWhenTextInputFocused: true);
 
         // Ctrl+C/X/V must fall through to focused text boxes (find box, page box).
         AddAccelerator(VirtualKey.C, VirtualKeyModifiers.Control, CopySelection, skipWhenTextInputFocused: true);

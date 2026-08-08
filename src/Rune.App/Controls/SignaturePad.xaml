@@ -5,7 +5,8 @@
 
     <StackPanel Spacing="10" Width="440">
         <TextBlock
-            Text="Draw your signature below, or import a picture of one."
+            x:Name="Caption"
+            Text="Draw your signature below, or import a photo of one."
             Style="{StaticResource CaptionTextBlockStyle}"
             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
             TextWrapping="Wrap" />
@@ -42,6 +43,24 @@
                     IsHitTestVisible="False" />
             </Grid>
         </Border>
+
+        <!-- Always present, never collapsed. Showing or hiding a row re-centres
+             the ContentDialog, so the whole dialog would jump the moment an
+             image is imported; disabled-until-relevant costs one row, never
+             moves, and advertises the feature to someone who has only drawn. -->
+        <!-- Click, NOT Checked/Unchecked. Those fire for programmatic changes
+             too, and the pad sets this box itself (off for a source that is
+             already transparent, off again when the matte finds no ink) — so
+             they cannot tell "the user chose this" from "the pad decided this
+             for one image", and the difference decides what gets persisted.
+             Click only ever comes from a real pointer or keyboard press. -->
+        <CheckBox
+            x:Name="RemoveBackgroundCheck"
+            Content="Remove background"
+            IsEnabled="False"
+            IsChecked="True"
+            Click="RemoveBackground_Click"
+            ToolTipService.ToolTip="Make the paper transparent so only the ink lands on the page" />
 
         <Grid ColumnSpacing="8">
             <Grid.ColumnDefinitions>

@@ -2,7 +2,8 @@
 
 > A single-file brain-dump so a fresh session (human or AI) can understand
 > and continue this project without re-deriving context. Last updated for
-> **v0.4.1** (2026-07-29), including Microsoft Store submission prep.
+> **v0.5.0** (2026-07-31), including the pre-submission security pass and the
+> move to Store-first distribution.
 >
 > **Start here:** §1 what it is · §4 how rendering works (the load-bearing part)
 > · §7 gotchas (read before debugging) · §10 known bugs · §13 current state.
@@ -21,7 +22,6 @@ Preview / GNOME Papers **and** a lightweight footprint — no existing Windows
 viewer is all three at once. Keyboard-first, in the spirit of SumatraPDF and
 Flow Launcher.
 
-- **Repo (local):** `C:\Users\djkho\code\pdf reader`
 - **GitHub:** https://github.com/DanialJaved/rune (public; `gh` CLI is
   authenticated as `DanialJaved`)
 - **Owner/dev:** Danial Javed — new to C#/.NET, Rust, and web stacks; explain
@@ -83,7 +83,7 @@ src/
                           merges Styles/Tokens.xaml + Styles/Controls.xaml
     MainWindow.xaml(.cs)  Shell: TabView-in-titlebar, SLIM header + hamburger menu,
                           floating zoom pill, find bar, presentation/shortcuts/bookmark/
-                          undo wiring, settings/palette/update, drag-drop, homepage grid
+                          undo wiring, settings/palette, drag-drop, homepage grid
     ShortcutCatalog.cs    Single source of truth for the F1 shortcuts overlay
     Styles/Tokens.xaml, Styles/Controls.xaml   spacing scale + shared control styles
     Controls/
@@ -100,14 +100,12 @@ src/
       DialogHost.cs           Serializes every ContentDialog (WinUI allows ONE — see §7)
       PageClipboard.cs        App-wide page clipboard (serialized bytes, cross-tab)
       PrintService.cs         PrintManagerInterop + PrintDocument (live preview, page ranges)
-      UpdateService.cs        GitHub-Releases self-update; UpdatesSupported gates it OFF
-                              for packaged/Store builds (§8b)
       ThumbnailCache.cs       Homepage first-page thumbnails (disk-cached PNGs)
     Package.appxmanifest      Store identity + .pdf file-type association (§8b)
     Assets/                   rune.ico + MSIX visual assets (generated)
 
 tests/
-  Rune.Tests/           xUnit — 118 tests against a generated corpus (see §6)
+  Rune.Tests/           xUnit — 244 tests against a generated corpus (see §6)
 
 tools/
   gen-corpus.ps1        Hand-authors the test PDFs (no PDF lib needed)
@@ -178,7 +176,7 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 
 ---
 
-## 5. Feature set (as shipped in v0.4.1)
+## 5. Feature set (as shipped in v0.5.1)
 
 - Tabs **in the title bar** (Chrome/Terminal style), lazy-loaded per tab
 - Continuous virtualized scroll; zoom 10–640% at cursor; fit-width/page; rotate
@@ -208,8 +206,21 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 - **Command palette** (Ctrl+K): fuzzy filter + "Go to page N" + recents
 - **Recent-docs homepage**: clean grid of aspect-correct thumbnail cards with
   theme-aware placeholders + empty state (thumbnails a Settings toggle)
+- **Form filling** (AcroForm text/checkbox/radio/combo/list): PDFium's form-fill
+  environment drives every edit through `FORM_OnChar` — there is no programmatic
+  setter — with Rune-drawn field borders over the top. Values round-trip through
+  save.
+- **Signing**: draw a signature, or **import a photo or scan and have the paper
+  keyed out automatically** (`SignatureMatte`). Placed as a stamp annotation with
+  a live semi-transparent preview under the cursor, wheel-sizing before
+  placement, and drag-to-move after. Saved signatures are reusable and stay on
+  the device.
+- **Signature details**: reports what a signed document *claims*, including
+  whole-file coverage. Deliberately does **not** verify — see the disclaimer in
+  `MainWindow.xaml.cs`, which must never be softened.
+- **Flatten** (`PdfDocument.Flatten`): bakes annotations and form values into
+  page content for a fixed, non-editable copy.
 - Session restore; printing with preview + page ranges; document properties
-- **Self-update** from GitHub Releases (Settings toggle / "check now")
 
 ### Keyboard shortcuts (see `ShortcutCatalog.cs` for the authoritative list)
 | Action | Keys |
@@ -226,6 +237,7 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 | Rotate right / left | `Ctrl+R` / `Ctrl+Shift+R` |
 | Presentation / bookmark | `F5` / `Ctrl+B` |
 | Highlight / pen / save / save as | `Ctrl+H` / `Ctrl+E` / `Ctrl+S` / `Ctrl+Shift+S` |
+| Pen, highlighter, note, sign, eraser | annotation toolbar (no direct chords) |
 | Copy / cut / paste (text or pages) | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
@@ -245,7 +257,7 @@ dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
 # Run (accepts an optional PDF path; also --page N --zoom Z for scripted tests)
 src/Rune.App/bin/x64/Debug/net10.0-windows10.0.19041.0/win-x64/Rune.exe [file.pdf]
 
-# Test (118 tests)
+# Test (244 tests)
 dotnet test tests/Rune.Tests/Rune.Tests.csproj
 
 # Regenerate assets when needed
@@ -361,6 +373,32 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
   place the conversion happens; a fully transparent or fully opaque pixel is
   identical either way, which is why the earlier transparency test couldn't
   detect the difference.
+- **`BitmapTransform.ScaledWidth` is in STORED space; the buffer arrives in
+  ORIENTED space.** Measured against a 1600x1200 JPEG carrying EXIF orientation
+  6 (so it displays 1200x1600): asking for `ScaledWidth=1024, ScaledHeight=768`
+  alongside `ExifOrientationMode.RespectExifOrientation` returns an upright
+  **768x1024** buffer. So scale off `decoder.PixelWidth/PixelHeight`, then
+  transpose the *requested* numbers to describe the result — never scale
+  `OrientedPixelWidth/Height` separately, and never report `PixelWidth` as the
+  buffer's width (that was a real bug: a portrait phone photo stamped as a
+  diagonal smear). Both orderings yield byte-identical buffer *lengths*, so no
+  assertion can catch getting this wrong; only looking at the pixels can.
+  `SignatureStore.DecodeAsync` is the one place this is handled.
+- **`BitmapDecoder.CreateAsync` throws a bare `COMException` on a bad file** —
+  not `ArgumentException`. A renamed `.pdf` reaches it as a WIC HRESULT, and
+  since the import handler is `async void`, a filtered catch there takes the
+  whole process down. `SignatureStore` catches everything and logs.
+- **Direct2D refuses straight-alpha bitmaps.** `CanvasBitmap.CreateFromBytes(...,
+  CanvasAlphaMode.Straight)` throws `COMException 0x88982F80`
+  (`WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT`) — D2D only draws PREMULTIPLIED (or
+  ignored) alpha. This shipped in the signature hover preview and made it draw
+  **nothing at all**: the throw escaped `DrawSignatureGhost` and took the dashed
+  outline down with it, so the whole preview vanished instead of degrading. Rune
+  holds signature pixels as straight alpha because that is what PDFium
+  composites, so anything handing them to Win2D must go through
+  `SignatureMatte.ToPremultiplied` first. A draw path that builds a bitmap
+  should also keep that build in its own try/catch, so a bad buffer costs the
+  bitmap and not the rest of the frame.
 - **No Visual Studio** — everything is `dotnet` CLI. Don't suggest VS-only flows.
 - **Line endings:** commits warn `LF will be replaced by CRLF` (harmless);
   `.gitattributes` marks PDFs/images binary so autocrlf can't corrupt them.
@@ -378,6 +416,12 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
   pixels, so nothing on top can intrude. In-app `Flyout`s (e.g. the pen panel)
   *are* captured; a `MenuFlyout` shown via `ShowAt(element, point)` may render in
   its own HWND and **not** appear — screen-capture those instead.
+  **It returns a solid black bitmap if called before the window has finished its
+  first composition** — wait for the app to actually draw rather than shooting a
+  second after launch. Black output means "too early", not "unsupported"; that
+  misreading cost a session's worth of confusion. `CopyFromScreen` is the
+  fallback for flyouts, but it cannot produce a clean 1920×1080 on a 1080-tall
+  display, because the taskbar overlays the bottom edge even for a topmost window.
 - **`ScrollViewer.ViewportWidth` is STALE inside `SizeChanged`.** A ScrollViewer
   refreshes it during its own arrange pass, which runs *after* the event. Reading
   it there lays the document out against the previous size. Use
@@ -409,33 +453,28 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
 
 ## 8. Release process
 
-Two artifacts per release; `gh` handles GitHub.
+**The Microsoft Store is the install path Rune promotes** (§8b). GitHub Releases
+carry **one artifact — the portable zip** — for people who want Rune without the
+Store. As of v0.5.0 the sideloaded MSIX and its self-signed certificate are no
+longer published: the cert obliged every user to run an admin PowerShell command
+to trust a certificate, which is a worse security ask than the Store's
+Microsoft-signed package solves for free.
 
 ```powershell
-# Portable zip (primary)
+# Portable zip — the only GitHub artifact
 dotnet publish src/Rune.App/Rune.App.csproj -c Release -r win-x64 --self-contained `
   -p:Platform=x64 -p:WindowsPackageType=None
 Compress-Archive <publish>\* artifacts/rune-vX.Y.Z-win-x64.zip
 
-# Signed MSIX (for .pdf association / "default app")
-dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
-  -p:WindowsPackageType=MSIX -p:GenerateAppxPackageOnBuild=true `
-  -p:AppxPackageSigningEnabled=true `
-  -p:PackageCertificateThumbprint=D467A67B3240FD78931730C9E33B895191A5DA9A `
-  -p:AppxPackageDir="..\..\artifacts\msix\"
-
-# Publish
-gh release create vX.Y.Z <zip> <msix> artifacts/rune-signing.cer --title "Rune vX.Y.Z" --notes-file notes.md
+gh release create vX.Y.Z <zip> --title "Rune vX.Y.Z" --notes-file notes.md
 ```
 
 - **Version bump:** `<Version>` in `Rune.App.csproj` **and** `Version=` in
   `Package.appxmanifest`.
-- **Signing cert:** self-signed `CN=Rune`, thumbprint
-  `D467A67B3240FD78931730C9E33B895191A5DA9A`, expires 2027, in
-  `Cert:\CurrentUser\My`; public `.cer` at `artifacts/rune-signing.cer`. Users
-  must trust it (`Cert:\LocalMachine\Root`, admin) before `Add-AppxPackage`.
-  **Installing the cert is a security action left to the user — don't automate it.**
-- **CI:** `.github/workflows/ci.yml` runs build + test on `windows-latest`.
+- The portable zip is **unsigned**, so SAC/SmartScreen apply to it — documented
+  honestly in the README. Signing it is still open (§11).
+- **CI:** `.github/workflows/ci.yml` runs build + test on `windows-latest`, with
+  `permissions: contents: read`.
 - **Always confirm with the user before anything goes public** (repo/release).
 - Compliance: `LICENSE` (GPLv3) + `THIRD-PARTY-NOTICES.md` +
   `third_party/WindowsAppSDK-NOTICE.txt` ship inside every binary (PDFium's
@@ -454,11 +493,13 @@ repo and icon all stay `Rune`; only the display name differs.
 | Identity/Name | `Danimite.RunePDFReader` |
 | Identity/Publisher | `CN=513DE1BC-C862-44F8-AEAD-F60E359F4BBF` |
 | PublisherDisplayName | `Danimite` |
-| Partner Center account | m.danial.javed@gmail.com, developer name **Danimite** |
+| Partner Center | developer name **Danimite** (sign in with the account that reserved the name) |
 
 These must match Partner Center **exactly** or the upload is rejected. The
-self-signed cert is NOT used here — the Store re-signs, which is also why Store
-installs get no SmartScreen/SAC warning.
+bundle is uploaded unsigned — the Store re-signs it, which is why Store installs
+get no SmartScreen/SAC warning.
+
+**Product ID `9NH37840QDM6`** — live at https://apps.microsoft.com/detail/9NH37840QDM6
 
 ```powershell
 # Store upload bundle (unsigned — the Store signs it), x64 + ARM64
@@ -472,13 +513,13 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
 # → artifacts/store/Rune.App_X.Y.Z.0_x64_arm64_bundle.msixupload  (~106 MB)
 ```
 
-- **The self-updater MUST stay disabled for packaged builds**
-  (`UpdateService.UpdatesSupported`). Offering a Store user a link to GitHub
-  Releases sends them outside the Store for a competing build — a certification
-  failure — and the `WindowsApps` install dir is read-only anyway. It also means
-  a Store build makes **no network requests at all**, which is what lets the
-  privacy declaration and the `runFullTrust` justification say "no network,
-  collects no data". **Re-enabling it invalidates both.**
+- **Rune contains no networking code, and must not gain any.** `UpdateService`
+  was deleted in v0.5.0. That is what lets the privacy declaration and the
+  `runFullTrust` justification both say "makes no network connections, collects
+  no data" *unconditionally* — previously the claim held only because the
+  updater was gated off for packaged builds. Adding a network call back
+  invalidates both, and pointing a Store user at a download outside the Store is
+  a certification failure on its own.
 - `runFullTrust` is flagged at submission as a restricted capability needing
   approval. Expected for every WinUI 3 desktop app; justification text is in
   `docs/store-listing.md`.
@@ -493,6 +534,23 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
 
 ## 9. Version history
 
+- **v0.5.1** (2026-08-08) — signature import that actually works on a photo.
+  **Added:** `SignatureMatte`, an adaptive local matte that keys the paper out
+  of a photographed or scanned signature automatically — tiled 90th-percentile
+  paper estimate with ink-tile refill, a data-driven ink level (which is what
+  removes the need for a sensitivity slider), alpha unmixing so soft edges stay
+  faithful, and an alpha-sum crop. One "Remove background" checkbox, on by
+  default, auto-unticked for a source that already has transparency. Imports are
+  downscaled at decode time to `TileMath.MaxSingleTilePx`.
+  **Fixed:** three real bugs on that path — `BitmapDecoder.CreateAsync` throws a
+  bare `COMException` for an unreadable file and, through an `async void`
+  handler, killed the process; `SignatureStore` reported `PixelWidth` for an
+  EXIF-rotated photo, which stamped a portrait phone shot as a diagonal smear;
+  and full-resolution buffers silently broke the on-page hover ghost.
+  **Also fixed:** the hover ghost had *never* rendered — it asked Win2D for
+  `CanvasAlphaMode.Straight`, which Direct2D rejects outright
+  (`WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT`), and the throw took the dashed outline
+  down with it so the preview vanished instead of degrading. 209 → 244 tests.
 - **v0.1.0** — viewer core: tabs-in-titlebar, thumbnails/outline sidebar,
   links, text selection, search, night mode, print, command palette, session
   restore. (Built as milestones M0–M6.)
@@ -588,6 +646,19 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
   message channel, replacing the error bar that had the same stretch bug and
   was announcing successful flattens in red with error semantics. Dialogs also
   now inherit the app theme instead of the OS's. 118 → 197 tests.
+  **Pre-submission security pass** (same release, before the Store upload):
+  PDFium bumped to **152.0.7961** — it parses untrusted input, so its releases
+  carry Chrome's PDF fixes and a stale pin is the largest avoidable risk in a
+  submission. **`UpdateService` deleted**: with distribution moving to the Store,
+  the self-updater had nothing to update from, and removing it took with it the
+  app's only network code *and* a download path that verified neither hash nor
+  signature. Rune now makes no network requests in any build, which is what turns
+  the privacy declaration and the `runFullTrust` justification from conditional
+  claims into unconditional ones. Whole-page renders are clamped to a pixel
+  budget: `RenderRegion` computed `width × 4 × height` in `int`, and a page may
+  declare a MediaBox up to the PDF maximum of 14400 pt, which overflows to a
+  negative at print resolution and threw out of `ArrayPool.Rent`. Tiles were
+  never exposed (capped at 1024 px); print and thumbnails were. 197 → 209 tests.
 
 ---
 
@@ -620,14 +691,19 @@ because each one's cause is worth remembering.
 
 - **Typed signatures** (a script font) — Draw and Import shipped; typing is the
   least convincing of the three and is easy to add to `SignaturePad` later.
-- **Resize handles on a placed signature** — today the size is chosen during
-  placement (click = last-used width, drag = custom) and is final once placed;
-  erase and re-place to change it.
+- **Resize handles on a placed signature** — size is chosen before placement
+  (click = last-used width, drag = custom, wheel = scale the preview) and a
+  placed signature can be dragged to a new spot, but not resized. PDFium
+  translates a stamp's appearance to the rect without scaling it, so resizing
+  has to go through delete-and-re-create — which needs the pixels, and those are
+  only retained for a stamp Rune placed in this session. See
+  `PdfDocument.Stamps.cs` for the measurement.
 - **Form JavaScript** — needs a V8-enabled PDFium build (`bblanchon.PDFium.V8.*`,
   a one-line csproj swap for a much larger binary). Without it, auto-calculating
   fields accept typed values but never recalculate.
-- **Form filling and annotation while rotated** — every interactive path still
-  early-returns when `_rotation != 0`. `PdfiumNative.DeviceToPage` now takes a
+- **Form filling, annotation and signing while rotated** — every interactive
+  path still early-returns when `_rotation != 0`, including the whole signature
+  flow (place, select, move). `PdfiumNative.DeviceToPage` now takes a
   rotation argument, but the viewer's `ToPageLocal`/`HighlightRect` still assume
   the unrotated view, and so do `PageText` and `AnnotationInfo`.
 - **Signature validation** — out of reach without a crypto stack. Rune reports
@@ -635,14 +711,15 @@ because each one's cause is worth remembering.
 - Page **extract** to a new file (reorder/delete/insert already shipped in v0.4)
 - More formats (ePub, CBZ — would need MuPDF; note AGPL implications)
 - **Code signing** — *solved for Store installs* (the Store re-signs). Still open
-  for the portable/GitHub build: Azure Trusted Signing ~$10/mo. Deferred.
-- **winget** submission — deferred (winget does NOT bypass SAC; signing is the
-  actual unblock).
+  for the portable zip: Azure Trusted Signing ~$10/mo. Deferred.
+- **winget** — the community `winget-pkgs` route needs a downloadable installer
+  URL, which Store-only binary distribution doesn't provide. The route that fits
+  is the **`msstore` source**, where a published Store app installs by product
+  ID: `winget install --id 9NH37840QDM6 --source msstore --exact`. Not every
+  listing is mapped, so **check whether it already resolves** before planning any
+  work — if it does, winget support is done and needs only a README line.
 - Smaller / size-optimized packages (zip ~88 MB, Store bundle ~106 MB — both
   carry the self-contained .NET + WindowsAppSDK runtimes)
-- Harden the updater script (`UpdateService.cs:141-152`): `%` in paths breaks the
-  generated `.cmd`, it `rmdir`s its own directory, `robocopy` exit ≥ 8 is
-  ignored, and the downloaded zip is neither hash- nor signature-verified.
 
 ---
 
@@ -658,23 +735,43 @@ because each one's cause is worth remembering.
 - Verify features by **driving the real app** (screenshots), not just tests, for
   anything with a runtime surface — then commit. This session, on-screen checks
   caught three bugs that compiled and passed 118 tests.
-- Ship **unsigned** on GitHub; document the SAC/SmartScreen limitation honestly.
+- **The Store is the promoted install path.** GitHub carries the portable zip
+  only, shipped unsigned with the SAC/SmartScreen limitation documented honestly.
   Store builds are signed by Microsoft.
 - Danial is **new to C#/.NET** — explain non-obvious concepts (P/Invoke, async
   void, XAML binding, MSIX) while building.
-- Plan files from past sessions live in `C:\Users\djkho\.claude\plans\`.
+- Plan files from past sessions live in `~\.claude\plans\`.
+- **This file is public.** Keep local paths, account addresses and anything else
+  personal out of it — it ships in the repo like any other source file.
 
 ---
 
-## 13. Current state (2026-07-29)
+## 13. Current state (2026-08-08)
 
-- `main` @ `1db901e` — v0.4.1 source + Store submission prep, all merged.
-- **GitHub releases: latest published is v0.4.0.** `main` and the Store package
-  are both **0.4.1**, so *the crash fix has not reached GitHub users yet* —
-  anyone on v0.4.0 who checks for updates with a document open still crashes.
-  **Cutting the v0.4.1 release is the top outstanding task.**
-- Microsoft Store: package uploaded and accepted, identity/listing/privacy/
-  screenshots all ready; **not yet submitted** (user's call).
-- 118 tests passing; x64 and ARM64 Release builds clean.
-- Uncommitted at time of writing: `docs/store-listing.md` tweak (short
-  `runFullTrust` justification) and this PROJECT.md update.
+- Working branch `fix/v0.6.0` (a label — the release is versioned **0.5.1**)
+  holds the signature-import work plus the fixes listed in §9.
+- **`origin/main` is behind, and merging must happen BEFORE the Store
+  submission.** `main` still carries `UpdateService.cs` and a `PRIVACY.md` that
+  describes the portable build's GitHub API check, while `docs/store-listing.md`
+  tells Partner Center there is "no networking code in the application" — and
+  the privacy-policy URL submitted for certification points at `main`. The
+  pre-submission security pass (`eca53e4`) never landed there; PR #7 merged only
+  as far as `e712901`.
+- **Security pass (v0.5.0):** PDFium bumped 152.0.7934 → **152.0.7961**
+  (two builds of Chrome's PDF fixes); `UpdateService` deleted, so the app now has
+  no networking code at all; whole-page render size clamped against an `int`
+  overflow reachable from a hostile MediaBox via print; the Partner Center email
+  and local `C:\Users\…` paths removed from this file; `permissions: contents:
+  read` added to CI.
+- **244 tests passing**; x64 and ARM64 Release builds clean. CI now builds both
+  architectures — it was x64-only, so an ARM64 break could have reached the
+  Store unseen.
+- **GitHub releases: latest published is still v0.4.0**, two versions behind the
+  Store. Neither v0.4.1 nor v0.5.0 was ever tagged.
+- Microsoft Store: **live** at product `9NH37840QDM6`, currently **v0.5.0**.
+  The 0.5.1 bundle is **not yet built**; `artifacts/store/` still holds 0.4.1.
+- Store screenshots were re-shot against v0.5.0 (`3058f5e`), and `07-signature`
+  covers the import flow this release adds.
+- `docs/screenshot-dark.png` / `screenshot-night.png` (the README pair) still
+  show real document filenames in the tab strip and a v0.2-era UI. Reviewed and
+  **deliberately left as-is** — a recorded decision, not an oversight.

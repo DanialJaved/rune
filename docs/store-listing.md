@@ -46,7 +46,7 @@ One slim toolbar. Everything else lives in a single menu, so the page gets the s
 • Sidebar with page thumbnails, chapters and your own bookmarks
 • Text selection, copy, and find-in-document with highlight-all
 • Form filling — click a field and type; text boxes, dropdowns and checkboxes all save back into the PDF (standard AcroForm documents; XFA forms are not supported)
-• Sign a document — draw or import your signature, place it on the page, and reuse it next time. Signatures are stored only on your device
+• Sign a document — draw your signature, or photograph one on paper and import it: Rune removes the paper automatically, on your device, so only the ink lands on the page. Place it, move it, and reuse it next time. Signatures are stored only on your device
 • Flatten — bake annotations and filled fields into the page so they can't be edited out
 • Signature details — read what a digitally signed document reports, including whether the signature covers the whole file
 • Annotations — highlight, underline, strikeout, sticky notes and freehand pen — saved as standard PDF annotations that any reader can see
@@ -101,9 +101,9 @@ Expected result: **everyone / 3+**.
 
 ## Privacy
 
-**Rune collects no data whatsoever.** The Store build makes no network requests
-at all — the self-updater is compiled out for packaged builds (see
-`UpdateService.UpdatesSupported`), because the Store handles updates.
+**Rune collects no data whatsoever,** and makes no network requests at all —
+there is no networking code in the application. The self-updater that used to
+serve the portable build was removed; the Store handles updates.
 
 Everything Rune stores stays on the device, in `%LOCALAPPDATA%\Rune`:
 recently-opened file paths, per-document reading positions and bookmarks, and
@@ -131,10 +131,9 @@ Paste the following verbatim:
 > collects no user data. Rune is open source under the GPLv3 and the full source
 > is at https://github.com/DanialJaved/rune
 
-**The "no network connections" claim depends on the Store build keeping
-`UpdateService.UpdatesSupported == false`** (see `Services/UpdateService.cs`).
-If the self-updater is ever re-enabled for packaged builds, this justification
-and the privacy declaration both stop being true and must be revised.
+The "no network connections" claim is unconditional as of v0.5.0: `UpdateService`
+was deleted, so no build of Rune contains networking code. Adding any would
+invalidate this justification and the privacy declaration together.
 
 ---
 
@@ -148,16 +147,27 @@ and the privacy declaration both stop being true and must be revised.
 ## Screenshots
 
 Store requires at least one 1366×768 or larger desktop screenshot; up to 10.
-Recommended set, in this order:
+The current set in `docs/store-screenshots/`, shot against v0.5.0 at 1920×1080:
 
-1. A document open in light mode, sidebar showing thumbnails — the everyday view
-2. Night mode on the same document
-3. A form being filled in, with a field focused
-4. The annotation pen panel open, with a highlight visible on the page
-5. The page-editing sidebar with several pages selected
-6. Presentation mode (F5), fullscreen
-7. The keyboard shortcuts overlay (F1)
-8. The recent-documents start page
+1. `01-reading-light` — light mode, thumbnails sidebar, the everyday view
+2. `02-night-mode` — night mode on the same page (thumbnails invert too)
+3. `03-chapters` — the chapters/TOC pane
+4. `04-annotation-toolbar` — the highlighter's colour/style/opacity panel
+5. `05-form-filling` — a form field focused mid-typing
+6. `06-presentation` — presentation mode (F5), fullscreen
+7. `07-signature` — a photographed signature imported with the paper keyed out,
+   previewed over a checkerboard so the transparency is legible in a thumbnail
 
-Capture at 1920×1080, windowed (not maximized over a busy desktop), with a
-neutral document — avoid anything containing personal data.
+Still to shoot: the **page-editing sidebar** with pages selected, and the
+**shortcuts overlay** (the clipping bug that blocked it was fixed in `99617b8`,
+so it is now only a matter of taking the shot).
+
+Capture at 1920×1080 with `PrintWindow(PW_RENDERFULLCONTENT)` (PROJECT.md §7),
+windowed, using a licence-safe document. `PrintWindow` returns a solid black
+bitmap if it is called before the window has finished its first composition —
+wait for the app to actually draw, don't shoot immediately after launch. It is
+still the right call over `Graphics.CopyFromScreen`, which cannot produce a
+clean 1920×1080 on a 1080-tall display because the taskbar overlays the bottom
+edge. **Shoot on an empty Rune profile** — the tab strip and recents grid
+otherwise leak real filenames into a commercially published image, and a saved
+signature is personal data.

@@ -303,11 +303,6 @@
                                 <FontIcon Glyph="&#xE765;" />
                             </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
-                        <MenuFlyoutItem x:Name="UpdatesMenuItem" Text="Check for updates" Click="UpdatesButton_Click">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE895;" />
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="SettingsMenuItem" Text="Settings" Click="SettingsButton_Click">
                             <MenuFlyoutItem.Icon>
                                 <FontIcon Glyph="&#xE713;" />
@@ -359,7 +354,7 @@
                         ItemClick="RecentThumbs_ItemClick">
                         <GridView.ItemTemplate>
                             <DataTemplate x:DataType="controls:RecentCard">
-                                <StackPanel Width="168" Margin="0,0,8,8" Spacing="6">
+                                <StackPanel Width="168" Margin="0,0,8,8" Spacing="6" RightTapped="RecentCard_RightTapped">
                                     <Grid Width="168" Height="212" Style="{StaticResource CardSurfaceStyle}">
                                         <FontIcon
                                             Glyph="&#xEA90;"
