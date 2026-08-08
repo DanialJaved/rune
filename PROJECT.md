@@ -772,6 +772,15 @@ because each one's cause is worth remembering.
   The 0.5.1 bundle is **not yet built**; `artifacts/store/` still holds 0.4.1.
 - Store screenshots were re-shot against v0.5.0 (`3058f5e`), and `07-signature`
   covers the import flow this release adds.
-- `docs/screenshot-dark.png` / `screenshot-night.png` (the README pair) still
-  show real document filenames in the tab strip and a v0.2-era UI. Reviewed and
-  **deliberately left as-is** — a recorded decision, not an oversight.
+- **README rebuilt** on the store-screenshot set: `01-reading-light` as a hero,
+  then a 2×2 grid of `02`, `03`, `04`, `07`. The Store CTA is now Microsoft's own
+  badge from `get.microsoft.com`, in a `<picture>` so it follows the reader's
+  GitHub theme, and `assets/rune.svg` finally appears on the page. The
+  release-version shields badge was dropped: it advertised v0.4.0 while the Store
+  shipped v0.5.0. Prose was rewritten to carry **no em dashes** and the 24-bullet
+  feature dump was regrouped under Reading / Markup / Signing / Forms / Pages.
+- `docs/screenshot-dark.png` / `screenshot-night.png` (the old README pair) were
+  **deleted**. They showed real document filenames in the tab strip and a v0.2-era
+  UI. The earlier decision to keep them stood only while nothing better was on the
+  page; the store set replaces them, so keeping stale unreferenced copies of a
+  filename leak had no upside.

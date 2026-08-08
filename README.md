@@ -1,56 +1,85 @@
 <div align="center">
 
-# ᚱ Rune
+<img src="assets/rune.svg" width="88" alt="">
+
+# Rune
 
 **A fast, free, modern PDF reader for Windows.**
 
-[![Microsoft Store](https://img.shields.io/badge/Microsoft%20Store-Rune%20PDF%20Reader-0078D4?logo=microsoftstore&logoColor=white)](https://apps.microsoft.com/detail/9NH37840QDM6)
+<a href="https://apps.microsoft.com/detail/9NH37840QDM6">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://get.microsoft.com/images/en-us%20dark.svg">
+    <img src="https://get.microsoft.com/images/en-us%20light.svg" alt="Get Rune PDF Reader from the Microsoft Store" height="60">
+  </picture>
+</a>
+
 [![CI](https://github.com/DanialJaved/rune/actions/workflows/ci.yml/badge.svg)](https://github.com/DanialJaved/rune/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/DanialJaved/rune)](https://github.com/DanialJaved/rune/releases)
 
-**[Install from the Microsoft Store →](https://apps.microsoft.com/detail/9NH37840QDM6)**
+<img src="docs/store-screenshots/01-reading-light.png" alt="Rune reading a 297-page document, with page thumbnails in the sidebar and the annotation toolbar in the header">
 
 </div>
 
-Windows never had a PDF reader that is fast **and** lightweight **and** modern-looking at the same time. SumatraPDF is legendary for speed but wears a 2009 UI; Edge and Acrobat are heavy; Okular's Windows port doesn't feel native. Rune combines:
+Windows never had a PDF reader that is fast **and** lightweight **and** modern-looking at the same time. SumatraPDF is legendary for speed but wears a 2009 UI. Edge and Acrobat are heavy. Okular's Windows port never quite feels native. Rune takes:
 
-- the **speed** of SumatraPDF / Zathura — instant open, smooth scrolling through 1,000-page documents, strict memory budget
-- the **look and feel of GNOME Papers** — a slim single header bar, a floating zoom control, a big-thumbnail sidebar — rebuilt natively on Windows 11 (Mica, dark mode, tabs in the title bar)
-- a **keyboard-first** workflow — command palette, full arrow/vim navigation, a shortcuts overlay (`F1`), every action reachable without the mouse
+- the **speed** of SumatraPDF and Zathura: instant open, smooth scrolling through 1,000-page documents, a strict memory budget
+- the **look of GNOME Papers**: one slim header bar, a floating zoom control, a big-thumbnail sidebar, rebuilt natively on Windows 11 with Mica, dark mode and tabs in the title bar
+- a **keyboard-first** workflow: a command palette, full arrow and vim navigation, a shortcuts overlay (`F1`), every action reachable without the mouse
 
-| Dark | Night mode (inverted pages) |
+No account, no subscription, no telemetry, no ads. Rune contains no networking code at all.
+
+|  |  |
 |---|---|
-| ![Rune in dark mode](docs/screenshot-dark.png) | ![Rune night mode](docs/screenshot-night.png) |
+| <img src="docs/store-screenshots/02-night-mode.png" alt="Rune in night mode, page colours inverted"><br>**Night mode** inverts page colours on the GPU, thumbnails included. | <img src="docs/store-screenshots/03-chapters.png" alt="Chapter list in the sidebar"><br>**Chapters** from the document outline, alongside thumbnails and your own bookmarks. |
+| <img src="docs/store-screenshots/04-annotation-toolbar.png" alt="Highlighter colour, style and opacity options open under the toolbar"><br>**One toolbar for markup.** Pick a tool and its colours, size and opacity open beneath it. | <img src="docs/store-screenshots/07-signature.png" alt="Add a signature dialog with an imported photo, paper removed"><br>**Photograph a signature** on paper and Rune keys the paper out for you, on your machine. |
 
 ## Features
 
-- Tabs in the title bar (Chrome-style), lazy-loaded — background tabs cost nothing until shown
-- Continuous virtualized scrolling with tile-based progressive rendering (blurry-fast → crisp), rock-steady even while searching and scrolling a 1,000-page document at once
-- Zoom 10–640% at the cursor from a floating zoom pill, fit-width / fit-page, rotation
-- **Sidebar** (open by default, `F9`) with a switcher for **thumbnails / chapters / bookmarks**; internal & web links; back/forward history
-- Full keyboard navigation — arrows scroll and page, `PageUp`/`PageDown`, `Home`/`End` (plus optional vim keys)
-- Text selection & copy, find-in-document with highlight-all and hit stepping
-- **Form filling**: click a field and type — text boxes, dropdowns and checkboxes, saved back into the PDF. Standard AcroForm documents only; XFA forms (some tax and government PDFs) say so plainly instead of silently ignoring your typing, and form JavaScript doesn't run, so auto-calculating fields won't recalculate
-- **Flatten**: bake annotations and filled fields into the page so they can't be edited back out
-- **Signature details**: for a digitally signed PDF, shows the signer's stated reason, time and format, and whether the signature covers the whole file. Rune does **not** verify signatures — it has no cryptography and never claims a signature is valid
-- **Annotation toolbar**: pen, highlighter, note, sign and eraser sit together in the middle of the header; picking one opens its colours, size and opacity right beneath it. The highlighter works in a single gesture — just drag across the text — and still writes real PDF markup, so highlights stay attached to the words and other readers understand them
-- **Sign a document**: draw your signature with the mouse or pen, or **photograph one on paper and import it — Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document. It runs entirely on your machine: no upload, no online service. A semi-transparent preview follows the cursor so you can see exactly where it will land (scroll to resize it first), click to place, and drag it afterwards if it's not quite right. Saved signatures are reusable and stay on your machine. This is a *visible* signature — ink on the page, like signing a printout — not a cryptographic one
-- **Annotations**: highlight, underline, strikeout, sticky notes, and **freehand pen/ink** — saved as standard PDF annotations any reader can see (`Ctrl+H` highlight, `Ctrl+E` pen, `Esc` to put the tool away, right-click menu, `Ctrl+S` / `Ctrl+Shift+S`)
-- **Page editing** in the thumbnail sidebar: multi-select, drag to reorder, `Delete`, copy/cut/paste pages (`Ctrl+C`/`X`/`V`, works across open tabs), or drop a PDF onto the sidebar to insert its pages
-- **Undo / redo** for annotations and page edits (`Ctrl+Z` / `Ctrl+Y`)
-- **Bookmarks** (`Ctrl+B`): name a page and jump back later; saved per document
-- **Presentation mode** (`F5`): fullscreen, one page at a time, arrows / space / click to advance
-- **Keyboard shortcuts overlay** (`F1`)
-- **Night mode**: GPU-inverted page colors for dark-room reading (`Ctrl+I`)
-- **Recent-documents homepage**: a clean grid of first-page thumbnails of your last files
-- Command palette (`Ctrl+K`) with fuzzy filtering and go-to-page
-- Session restore: reopens your tabs at the exact scroll position
-- Pinch-to-zoom (touch/touchpad) and `Ctrl`+scroll, zoom at the cursor
-- Printing with live preview and page ranges
-- Opens damaged PDFs gracefully; 4 GB-file streaming without loading into memory
+### Reading
 
-The interface follows GNOME Papers' proportions — one compact header row, with the rest tucked into a single menu — but is built entirely from native Windows 11 controls.
+- Tabs in the title bar, Chrome-style and lazy-loaded, so background tabs cost nothing until you show them
+- Continuous virtualized scrolling with tile-based progressive rendering: a fast blurry pass first, then a crisp one. It stays steady even while you search and scroll a 1,000-page document at once
+- Zoom 10–640% at the cursor from a floating pill, plus fit-width, fit-page and rotation. Pinch to zoom on touch and touchpad, `Ctrl` + scroll everywhere else
+- Sidebar (`F9`, open by default) that switches between thumbnails, chapters and bookmarks
+- Internal and web links, with back and forward history (`Alt` + arrows)
+- Text selection and copy, plus find-in-document with highlight-all and hit stepping
+- Night mode (`Ctrl+I`) for reading in the dark, and presentation mode (`F5`) for showing a document fullscreen
+- A recent-documents homepage laid out as first-page thumbnails, and session restore that reopens your tabs at the exact scroll position
+- Opens damaged PDFs gracefully, and streams 4 GB files without loading them into memory
+
+### Markup
+
+- Highlight, underline, strikeout, sticky notes and freehand pen, all written as standard PDF annotations that any reader can open
+- Pen, highlighter, note, sign and eraser sit together in the middle of the header. Pick one and its colours, size and opacity open right beneath it
+- The highlighter works in a single gesture: drag across the text. It still writes real markup, so highlights stay attached to the words rather than floating over them
+- Undo and redo (`Ctrl+Z` / `Ctrl+Y`) across annotations and page edits alike
+- Flatten bakes annotations and filled fields into the page so they can't be edited back out
+
+### Signing
+
+- Draw a signature with the mouse or a pen, or photograph one on paper and import it. **Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document
+- The matting runs entirely on your machine. Nothing is uploaded and no online service is involved
+- A semi-transparent preview follows the cursor so you can see exactly where it will land. Scroll to size it, click to place it, drag it afterwards if it isn't quite right
+- Saved signatures are reusable and stay on your machine
+- This is a *visible* signature, ink on the page like signing a printout, not a cryptographic one
+- **Signature details** reads back what a digitally signed PDF claims: the signer's stated reason, time and format, and whether the signature covers the whole file. Rune does **not** verify signatures. It ships no cryptography and never calls a signature valid
+
+### Forms
+
+- Click a field and type. Text boxes, dropdowns, checkboxes and radio buttons all save back into the PDF
+- Standard AcroForm documents only. XFA forms, which some tax and government PDFs use, say so plainly instead of silently swallowing your typing
+- Form JavaScript doesn't run, so auto-calculating fields keep what you type but won't recalculate
+
+### Pages and keyboard
+
+- Page editing in the thumbnail sidebar: multi-select, drag to reorder, `Delete`, and copy, cut and paste pages across open tabs. Drop a PDF onto the sidebar to insert its pages
+- Command palette (`Ctrl+K`) with fuzzy filtering and go-to-page
+- Shortcuts overlay (`F1`) listing every binding in two columns
+- Bookmarks (`Ctrl+B`): name a page, jump back to it later, saved per document
+- Vim-style keys (`j k h l`, `gg` / `G`, `p` / `n`) can be switched on in Settings
+- Printing with live preview and page ranges
+
+The interface follows GNOME Papers' proportions, one compact header row with the rest tucked into a single menu, but every control is a native Windows 11 one.
 
 ## Keyboard shortcuts
 
@@ -73,25 +102,30 @@ Press `F1` in the app for the full list. The essentials:
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
 
-Vim-style keys (`j k h l`, `gg`/`G`, `p`/`n`) can be enabled in Settings. Right-click a selection for underline/strikeout, or anywhere to add a note. Pen colour and width appear when you click the pen. In the thumbnail sidebar, `Ctrl+C`/`X`/`V` copy/cut/paste **pages**; elsewhere they act on selected text.
+Right-click a selection for underline and strikeout, or right-click anywhere to add a note. In the thumbnail sidebar, `Ctrl+C`, `Ctrl+X` and `Ctrl+V` act on **pages**; everywhere else they act on selected text.
 
 ## Install
 
-### [![Get Rune PDF Reader from the Microsoft Store](https://img.shields.io/badge/Get%20it%20from%20the-Microsoft%20Store-0078D4?style=for-the-badge&logo=microsoftstore&logoColor=white)](https://apps.microsoft.com/detail/9NH37840QDM6)
+<a href="https://apps.microsoft.com/detail/9NH37840QDM6">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://get.microsoft.com/images/en-us%20dark.svg">
+    <img src="https://get.microsoft.com/images/en-us%20light.svg" alt="Get Rune PDF Reader from the Microsoft Store" height="60">
+  </picture>
+</a>
 
-**This is the way to install Rune.** One click, automatic updates, it registers as a PDF handler, and Microsoft signs the package — so there's no certificate step and nothing for SmartScreen or Smart App Control to warn about. Works from the Store app or [on the web](https://apps.microsoft.com/detail/9NH37840QDM6).
+**The Store is the way to install Rune.** One click, automatic updates, and it registers itself as a PDF handler. Microsoft signs the package, so there is no certificate step and nothing for SmartScreen or Smart App Control to warn about. It installs from the Store app or [from the web](https://apps.microsoft.com/detail/9NH37840QDM6).
 
-**Portable:** if you want Rune without the Store — on a USB stick, or on a machine where you can't install anything — grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract anywhere, run `Rune.exe`. No installation, no registry.
+**Portable:** if you want Rune without the Store, on a USB stick or on a machine where you can't install anything, grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract it anywhere and run `Rune.exe`. No installation, no registry.
 
-> The portable build is **not code-signed**: machines with Smart App Control enabled will block it, and SmartScreen may warn on first run ("More info → Run anyway"). It also doesn't update itself — check back here, or use the Store build. And it isn't size-optimized; it carries the full self-contained .NET and Windows App SDK runtimes.
+> The portable build is **not code-signed**. Machines with Smart App Control enabled will block it, and SmartScreen may warn on first run (choose "More info", then "Run anyway"). It also doesn't update itself, so check back here or use the Store build. And it isn't size-optimized: it carries the full self-contained .NET and Windows App SDK runtimes.
 
-## Tech
+## Built with
 
 | Layer | Choice |
 |---|---|
-| UI | WinUI 3 (Windows App SDK 2.x), C# / .NET 10 |
-| PDF engine | [PDFium](https://pdfium.googlesource.com/pdfium/) (Chrome's renderer, BSD-3-Clause/Apache-2.0) via [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) |
-| Rendering | Win2D virtualized canvas ← LRU tile cache ← single render thread (PDFium is not thread-safe) ← thin P/Invoke |
+| UI | WinUI 3 (Windows App SDK 2.x), C# on .NET 10 |
+| PDF engine | [PDFium](https://pdfium.googlesource.com/pdfium/), the renderer Chrome uses (BSD-3-Clause / Apache-2.0), via [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) |
+| Rendering | A Win2D virtualized canvas over an LRU tile cache, fed by a single render thread (PDFium is not thread-safe) through thin P/Invoke |
 
 ```
 src/
@@ -104,14 +138,14 @@ tests/
 
 ## Building
 
-.NET 10 SDK on Windows — no Visual Studio required:
+.NET 10 SDK on Windows, no Visual Studio required:
 
 ```
 dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
 dotnet test tests/Rune.Tests/Rune.Tests.csproj
 ```
 
-The debug build is an unpackaged self-contained exe — just run it.
+The debug build is an unpackaged self-contained exe, so you can just run it.
 
 ## Roadmap
 
@@ -121,12 +155,12 @@ The debug build is an unpackaged self-contained exe — just run it.
 
 ## License
 
-[GPLv3](LICENSE) — free forever, and derivatives stay free. Built on PDFium (BSD-3-Clause/Apache-2.0), Win2D (MIT), the Windows App SDK, and .NET (MIT); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+[GPLv3](LICENSE). Free forever, and derivatives stay free. Rune is built on PDFium (BSD-3-Clause / Apache-2.0), Win2D (MIT), the Windows App SDK and .NET (MIT); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Rune makes no network requests and collects nothing, which [PRIVACY.md](PRIVACY.md) sets out in full.
 
 ### A note on the Microsoft Store
 
 Rune is published on the Microsoft Store as **[Rune PDF Reader](https://apps.microsoft.com/detail/9NH37840QDM6)**, where it is covered by the Store's Standard Application License Terms. Those terms are generally considered incompatible with the GPL, so this deserves an explicit word:
 
-Rune's own source is written entirely by its copyright holder, and its dependencies are permissively licensed (PDFium is BSD-3-Clause/Apache-2.0, Win2D and .NET are MIT) — there is no third-party copyleft code in it. As the sole copyright holder I can distribute my own work under whatever terms I choose, and I choose to make it available both under the GPLv3 here and through the Store for people who want automatic updates and one-click installation.
+Rune's own source is written entirely by its copyright holder, and its dependencies are permissively licensed (PDFium is BSD-3-Clause / Apache-2.0, Win2D and .NET are MIT), so there is no third-party copyleft code in it. As the sole copyright holder I can distribute my own work under whatever terms I choose, and I choose to make it available both under the GPLv3 here and through the Store for people who want automatic updates and one-click installation.
 
 **This does not change anything about the GPLv3 grant.** The source in this repository is, and will remain, GPLv3: you may use, study, modify and redistribute it under those terms. The Store listing is an additional distribution channel, not a replacement, and every release is always available here as a portable download.
