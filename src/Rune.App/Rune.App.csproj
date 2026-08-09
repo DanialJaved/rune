@@ -25,6 +25,9 @@
          Release MSIX overrides on the command line: -p:WindowsPackageType=MSIX -->
     <WindowsPackageType Condition="'$(WindowsPackageType)' == ''">None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- Rune's UI is English only, so per-culture satellite assemblies are dead
+         weight in a self-contained build. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <AppxPackageSigningEnabled Condition="'$(WindowsPackageType)' == 'MSIX'">true</AppxPackageSigningEnabled>
   </PropertyGroup>
 
@@ -46,7 +49,27 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.2.0" />
+    <!-- The Microsoft.WindowsAppSDK meta-package is deliberately NOT referenced.
+         It hard-depends on .Widgets, .AI and .ML, and .ML drags in
+         Microsoft.Windows.AI.MachineLearning, whose onnxruntime.dll (20.7 MB)
+         and DirectML.dll (17.8 MB) alone were ~38 MB of a self-contained build.
+         Rune calls none of it: no widgets, no AI, no inference. Shipping an ML
+         runtime and an OAuth component inside an app whose Store listing and
+         runFullTrust justification both say "no network connections, collects no
+         data" also invites a fair question from anyone who looks inside the
+         package.
+
+         These are the meta-package's other dependencies, at the versions it
+         pins. None of them depends on AI, ML or Widgets. The cost of this is
+         that a WindowsAppSDK upgrade means bumping six lines instead of one, and
+         checking the meta-package's nuspec for any new dependency Rune does
+         need. -->
+    <PackageReference Include="Microsoft.WindowsAppSDK.Base" Version="2.0.4" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.1.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.0.15" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.2.1" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.DWrite" Version="2.1.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.2.0" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2270" />
     <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.4.0" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />

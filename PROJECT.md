@@ -295,6 +295,18 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
   pinned to **1024** in `Tiles.cs` — do **not** raise it. (This was the root
   cause of the "rotate shows blank page" bug: only rotated landscape pages
   produced tiles that wide.)
+- **Do not add `Microsoft.WindowsAppSDK` back as a package reference.**
+  `Rune.App.csproj` deliberately references the six sub-packages it needs
+  (Base, Foundation, InteractiveExperiences, WinUI, DWrite, Runtime) instead.
+  The meta-package hard-depends on `.Widgets`, `.AI` and `.ML`, and `.ML` pulls
+  in `Microsoft.Windows.AI.MachineLearning` — `onnxruntime.dll` (20.7 MB) plus
+  `DirectML.dll` (17.8 MB) in a PDF reader that runs no inference. There is no
+  supported opt-out property; the sub-package list is the only route, and none
+  of the six depends on AI, ML or Widgets. **Upgrading the SDK means bumping six
+  lines and re-reading the meta-package's nuspec** for any newly added
+  dependency Rune actually needs. Verify by *launching* the build, not just
+  compiling: a missing WinAppSDK binary fails at first XAML load. Night mode is
+  the sharpest single check — it goes through Win2D's `InvertEffect`.
 - **PDFium form-fill landmines** (all cost real time in v0.5.0; see
   `PdfiumFormEnvironment.cs` and `PdfDocument.Forms.cs`):
   - **`FPDFAnnot_SetFormFieldValue` does not exist.** The only way to change a
@@ -723,8 +735,10 @@ because each one's cause is worth remembering.
 - More formats (ePub, CBZ — would need MuPDF; note AGPL implications)
 - **Code signing** — *solved for Store installs* (the Store re-signs). Still open
   for the portable zip: Azure Trusted Signing ~$10/mo. Deferred.
-- Smaller / size-optimized packages (zip ~88 MB, Store bundle ~106 MB — both
-  carry the self-contained .NET + WindowsAppSDK runtimes)
+- Smaller packages still. v0.6.0 took the zip from ~88 MB to **69 MB** by
+  dropping the Windows App SDK's AI, ML and Widgets payload (see §7); what
+  remains is the self-contained .NET + WinUI runtime, and trimming that is a
+  much harder problem — `PublishTrimmed` and XAML's reflection do not get along.
 
 ---
 
