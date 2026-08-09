@@ -3,7 +3,7 @@
 > A single-file brain-dump so a fresh session (human or AI) can understand
 > and continue this project without re-deriving context. Last updated for
 > **v0.6.0** (2026-08-09): interaction while rotated, page extract, typed
-> signatures, PDFium 153, and 19 MB off the package.
+> signatures, signature resize, PDFium 153, and 19 MB off the package.
 >
 > **Start here:** §1 what it is · §4 how rendering works (the load-bearing part)
 > · §7 gotchas (read before debugging) · §10 known bugs · §13 current state.
@@ -105,7 +105,7 @@ src/
     Assets/                   rune.ico + MSIX visual assets (generated)
 
 tests/
-  Rune.Tests/           xUnit — 301 tests against a generated corpus (see §6)
+  Rune.Tests/           xUnit — 312 tests against a generated corpus (see §6)
 
 tools/
   gen-corpus.ps1        Hand-authors the test PDFs (no PDF lib needed)
@@ -220,8 +220,8 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
   (`SignatureFonts`, nothing bundled), or **import a photo or scan and have the
   paper keyed out automatically** (`SignatureMatte`). Placed as a stamp annotation
   with a live semi-transparent preview under the cursor, wheel-sizing before
-  placement, and drag-to-move after. Saved signatures are reusable and stay on
-  the device.
+  placement, and drag-to-move **or aspect-locked corner-handle resize** after.
+  Saved signatures are reusable and stay on the device.
 - **Signature details**: reports what a signed document *claims*, including
   whole-file coverage. Deliberately does **not** verify — see the disclaimer in
   `MainWindow.xaml.cs`, which must never be softened.
@@ -264,7 +264,7 @@ dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
 # Run (accepts an optional PDF path; also --page N --zoom Z for scripted tests)
 src/Rune.App/bin/x64/Debug/net10.0-windows10.0.19041.0/win-x64/Rune.exe [file.pdf]
 
-# Test (301 tests)
+# Test (312 tests)
 dotnet test tests/Rune.Tests/Rune.Tests.csproj
 
 # Regenerate assets when needed
@@ -593,6 +593,21 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
   thumbnail context-menu entry, a palette entry, and a save picker. Extracting
   over the open document is refused rather than pulling the file out from under
   the read handle.
+  **Added: resizing a placed signature**, with aspect-locked corner handles.
+  This was attempted, backed out, and then solved from the other end, which is
+  worth recording. Editing the appearance in place —
+  `FPDFPageObj_SetMatrix` plus `FPDFAnnot_UpdateObject` — is exact once and then
+  compounds: `UpdateObject` re-serializes the appearance while keeping the old
+  `/BBox`, PDFium maps that BBox onto the annotation rect, and so growing a stamp
+  and shrinking it back drew it at half the size asked for, with `GetMatrix`
+  reading back correct all the while. Clearing the appearance first to reset the
+  BBox destroys its objects. What broke the deadlock was disproving the premise
+  in the old roadmap note: PDFium *will* hand a stamp's pixels back, through
+  `FPDFImageObj_GetRenderedBitmap`, straight-alpha and intact after a save and
+  reopen. So `ResizeStamp` reads the pixels, removes the annotation and re-creates
+  it through `AddStamp`, which builds a fresh appearance every time and therefore
+  cannot accumulate. It also works on a signature that was already in the file,
+  which a session-side pixel cache never would have.
   **Added: typed signatures**, the third input mode beside draw and import. No
   font is bundled — Segoe Script, Segoe Print and Ink Free ship with Windows, and
   bundling one would undo part of the size work below. `SignatureFonts` resolves
@@ -622,9 +637,7 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
   reaches anyone. Issue templates ask for the same details up front.
   **Also:** winget turned out to already work through the `msstore` source, so it
   needed a README line and not a project; `MaxVersionTested` was two Windows
-  builds behind. 244 → 301 tests. **Signature resize was attempted and backed
-  out** — see §11 for the measurements, since the obvious approach works once and
-  then compounds.
+  builds behind. 244 → 312 tests.
 - **v0.5.1** (2026-08-08) — signature import that actually works on a photo.
   **Added:** `SignatureMatte`, an adaptive local matte that keys the paper out
   of a photographed or scanned signature automatically — tiled 90th-percentile
@@ -780,38 +793,6 @@ because each one's cause is worth remembering.
 
 ## 11. Roadmap (not yet built)
 
-- **Resize handles on a placed signature** — size is chosen before placement
-  (click = last-used width, drag = custom, wheel = scale the preview) and a
-  placed signature can be dragged to a new spot, but not resized.
-
-  **Attempted in v0.6.0 and backed out.** Worth reading before trying again,
-  because the obvious route works and then fails on the second call:
-
-  - Resizing by matrix *nearly* works and needs no pixels at all. Bind
-    `FPDFPageObj_SetMatrix` (absolute, unlike the already-bound
-    `FPDFPageObj_Transform`), reach the appearance via `FPDFAnnot_GetObject`,
-    write `[w 0 0 h l b]`, and then `FPDFAnnot_UpdateObject` — that last call is
-    mandatory, since the appearance stream is what gets drawn and it does not
-    follow the object.
-  - **The blocker:** each `UpdateObject` re-serializes the appearance while
-    keeping the old `/BBox`, and PDFium maps that BBox onto the annotation rect
-    when drawing. So the scale compounds. A single resize is exact; the second
-    one comes out at half what was asked for. Measured: place 200×80 → correct;
-    resize to 400×160 → correct; resize back to 200×80 → drawn at 100×40, with
-    `GetMatrix` reading back the correct `[200 0 0 80 …]`. Reordering rect and
-    appearance writes does not help.
-  - `FPDFAnnot_SetAP(annot, NORMAL, null)` to clear the stale BBox first
-    **destroys the objects with it** — `GetAnnotObjectCount` then returns 0 and
-    nothing draws.
-  - Delete-and-re-create avoids all of it but needs the pixels, and
-    `CaptureAnnotation` deliberately returns null for subtype 13 because PDFium
-    will not hand them back. It would need a session-side `StampImage` cache
-    keyed by page and annotation index, and would then only ever resize stamps
-    placed in the current session — never one that was already in the file.
-
-  So the two candidate designs are: a session pixel cache with the
-  session-only limitation, or finding the right incantation to reset the
-  appearance BBox without dropping the objects.
 - **Form JavaScript** — needs a V8-enabled PDFium build (`bblanchon.PDFium.V8.*`,
   a one-line csproj swap for a much larger binary). Without it, auto-calculating
   fields accept typed values but never recalculate.
@@ -856,7 +837,7 @@ because each one's cause is worth remembering.
   the local `main` — PR #10 had merged there). Seven commits, listed in §9.
 - **Nothing has been published.** No tag, no GitHub release, no Store bundle.
   Per §12 that all waits for the user.
-- **301 tests passing**; x64 and ARM64 Release both build clean.
+- **312 tests passing**; x64 and ARM64 Release both build clean.
 - **PDFium 153.0.7988** (was 152.0.7961).
 - **Package set changed** — `Microsoft.WindowsAppSDK` is no longer referenced;
   see §7 before upgrading the SDK. Portable zip measured at **69.4 MB** (was
@@ -883,30 +864,50 @@ because each one's cause is worth remembering.
    v0.6.0 and say in the notes that the intervening versions went out through
    the Store.
 
-### Verified by driving the app, and what was not
 
-Rotation was checked on screen at all four rotations: a find hit lands exactly
-on its word and moves to the correct corner as the view turns (top-left →
-top-right → bottom-right → bottom-left), and hits now survive the turn. Typed
-signatures were checked end to end: typed, saved to the reusable list, placed on
-the page with transparency intact. The trimmed package was checked by launching
-it, including night mode, which is the sharpest single test because it goes
-through Win2D's `InvertEffect`.
+### Verified by driving the app
 
-**Not verified on screen: drag-to-select, click-to-fill-a-form and
-drag-to-place-a-signature while rotated.** Injected pointer input reaches XAML
-controls in this environment but not the Win2D `CanvasVirtualControl`, so those
-gestures cannot be scripted here — a right-click on the page produces no context
-menu even though the same injection works on sidebar items. They need a human
-with a mouse. `PageRotationParityTests` covers the same arithmetic by
-cross-checking `PageRotationTransform` against PDFium's own
-`FPDF_DeviceToPage` on a real page at all four rotations, which is why the code
-is trustworthy without them, but it is not the same as clicking.
+Everything below was checked on screen, not just by test:
 
-A reusable driver script (DPI-aware `SendInput` + `PrintWindow`) lives in the
-session scratchpad. Two traps worth remembering if it is rebuilt: the `INPUT`
-struct must be exactly 40 bytes on x64 or `SendInput` fails with
-`ERROR_INVALID_PARAMETER`, and the process must declare per-monitor DPI
-awareness or `GetWindowRect` returns logical coordinates while `PrintWindow`
-renders physical pixels, silently cropping every capture to the left ~80% of the
-window.
+- **Rotation, both directions.** A find hit lands exactly on its word and moves
+  to the correct corner as the view turns (top-left → top-right → bottom-right →
+  bottom-left), and hits survive the turn instead of being cleared. Drag-to-select
+  was then checked at all four rotations: the selection wash lands on the glyphs,
+  following the text line whichever way it runs.
+- **Typed signatures**, end to end: typed, saved to the reusable list, placed on
+  the page with transparency intact.
+- **Signature resize**, end to end: a stamp already in the file, selected with a
+  plain click, corner handles drawn, bottom-right handle dragged. 259×86 → 512×179
+  on screen, with the ink filling the new box rather than the frame growing around
+  an unchanged image.
+- **The trimmed package**, by launching it — including night mode, the sharpest
+  single check because it runs through Win2D's `InvertEffect`.
+
+Not driven on screen: form-field filling while rotated. The arithmetic is the
+same `PageRotationTransform` every other path uses, and
+`PageRotationParityTests` cross-checks it against PDFium's own
+`FPDF_DeviceToPage` at all four rotations, but nobody has clicked a rotated form
+field.
+
+### Notes on the screenshot harness
+
+A DPI-aware `SendInput` + `PrintWindow` driver lives in the session scratchpad.
+Three traps cost real time here and will again if it is rebuilt:
+
+1. **The `INPUT` struct must be exactly 40 bytes on x64.** Any trailing padding
+   makes `SendInput` fail with `ERROR_INVALID_PARAMETER`, silently — the cursor
+   still moves because `SetCursorPos` is a separate call, so it looks like the
+   app is ignoring clicks.
+2. **Declare per-monitor DPI awareness before anything else.** Without it
+   `GetWindowRect` returns logical coordinates while `PrintWindow` renders
+   physical pixels, so on this 125% display every capture is cropped to the left
+   ~80% of the window. That cost an hour: it looks exactly like the header's
+   right-hand buttons having vanished, and every coordinate read off such a
+   capture is then wrong, which in turn looks like pointer input not reaching the
+   Win2D canvas. **It does reach it** — drags, clicks and right-clicks on the
+   page all work.
+3. **Bound pixel searches to the page.** The document background is dark in this
+   theme, so a naive "find the dark pixels" glyph search matches the app's own
+   chrome, and a page-bounded search still catches the gap between two pages.
+   Locating text by running a find and looking for the highlight colour is far
+   more robust than looking for dark pixels.

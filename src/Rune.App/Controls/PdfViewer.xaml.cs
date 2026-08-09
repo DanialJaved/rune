@@ -1280,6 +1280,13 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
+        if (IsResizingStamp)
+        {
+            UpdateStampResize(doc);
+            e.Handled = true;
+            return;
+        }
+
         if (_draggingStamp)
         {
             UpdateStampDrag(doc);
@@ -1422,6 +1429,13 @@ public sealed partial class PdfViewer : UserControl
         if (_placingSignature)
         {
             CommitSignaturePlacement();
+            Canvas.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+            return;
+        }
+        if (IsResizingStamp)
+        {
+            CommitStampResize();
             Canvas.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
             return;

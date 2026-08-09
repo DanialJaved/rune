@@ -46,7 +46,7 @@ One slim toolbar. Everything else lives in a single menu, so the page gets the s
 • Sidebar with page thumbnails, chapters and your own bookmarks
 • Text selection, copy, and find-in-document with highlight-all
 • Form filling — click a field and type; text boxes, dropdowns and checkboxes all save back into the PDF (standard AcroForm documents; XFA forms are not supported)
-• Sign a document — draw your signature, type it in a handwriting style, or photograph one on paper and import it: Rune removes the paper automatically, on your device, so only the ink lands on the page. Place it, move it, and reuse it next time. Signatures are stored only on your device
+• Sign a document — draw your signature, type it in a handwriting style, or photograph one on paper and import it: Rune removes the paper automatically, on your device, so only the ink lands on the page. Place it, move it, resize it by its corners, and reuse it next time. Signatures are stored only on your device
 • Everything keeps working when you rotate the page — selecting text, highlighting, filling forms and signing all follow the rotation, so a sideways scan is as usable as any other document
 • Flatten — bake annotations and filled fields into the page so they can't be edited out
 • Signature details — read what a digitally signed document reports, including whether the signature covers the whole file

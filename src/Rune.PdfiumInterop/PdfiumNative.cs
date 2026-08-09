@@ -524,6 +524,103 @@ public static class PdfiumNative
 
     public static void DestroyPageObject(IntPtr pageObject) => NativeMethods.FPDFPageObj_Destroy(pageObject);
 
+    /// <summary>An annotation's appearance objects.</summary>
+    public static int GetAnnotObjectCount(IntPtr annot) => NativeMethods.FPDFAnnot_GetObjectCount(annot);
+
+    public static IntPtr GetAnnotObject(IntPtr annot, int index) => NativeMethods.FPDFAnnot_GetObject(annot, index);
+
+    public static bool IsImageObject(IntPtr pageObject)
+        => NativeMethods.FPDFPageObj_GetType(pageObject) == NativeMethods.FPDF_PAGEOBJ_IMAGE;
+
+    /// <summary>
+    /// Reads an image object's pixels back as straight BGRA at its native size.
+    ///
+    /// Tries the rendered bitmap first: a signature's transparency lives in an
+    /// /SMask, and the plain decoded bitmap can come back as opaque BGR with the
+    /// mask dropped, which would stamp a white block. Falls back to the decoded
+    /// bitmap when the rendered one is unavailable.
+    ///
+    /// Returns null when there is nothing readable, which callers must treat as
+    /// "cannot do this to that stamp" rather than as an error.
+    /// </summary>
+    public static (byte[] Bgra, int Width, int Height)? TryReadImagePixels(
+        IntPtr document, IntPtr page, IntPtr imageObject)
+    {
+        IntPtr bitmap = NativeMethods.FPDFImageObj_GetRenderedBitmap(document, page, imageObject);
+        if (bitmap == IntPtr.Zero)
+        {
+            bitmap = NativeMethods.FPDFImageObj_GetBitmap(imageObject);
+        }
+        if (bitmap == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            int width = NativeMethods.FPDFBitmap_GetWidth(bitmap);
+            int height = NativeMethods.FPDFBitmap_GetHeight(bitmap);
+            int stride = NativeMethods.FPDFBitmap_GetStride(bitmap);
+            int format = NativeMethods.FPDFBitmap_GetFormat(bitmap);
+            IntPtr buffer = NativeMethods.FPDFBitmap_GetBuffer(bitmap);
+
+            if (width <= 0 || height <= 0 || buffer == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            var bgra = new byte[width * height * 4];
+            // Copied straight through, NOT un-premultiplied. PDFium's rendered
+            // bitmap already holds straight alpha here: a half-alpha grey placed
+            // as 128/128 reads back as 128 with alpha 128, and dividing by alpha
+            // blew it out to white.
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int dst = (y * width + x) * 4;
+                    switch (format)
+                    {
+                        case 4: // BGRA
+                        {
+                            int src = y * stride + x * 4;
+                            bgra[dst] = Marshal.ReadByte(buffer, src);
+                            bgra[dst + 1] = Marshal.ReadByte(buffer, src + 1);
+                            bgra[dst + 2] = Marshal.ReadByte(buffer, src + 2);
+                            bgra[dst + 3] = Marshal.ReadByte(buffer, src + 3);
+                            break;
+                        }
+                        case 2: // BGR
+                        case 3: // BGRx
+                        {
+                            int pixel = format == 2 ? 3 : 4;
+                            int src = y * stride + x * pixel;
+                            bgra[dst] = Marshal.ReadByte(buffer, src);
+                            bgra[dst + 1] = Marshal.ReadByte(buffer, src + 1);
+                            bgra[dst + 2] = Marshal.ReadByte(buffer, src + 2);
+                            bgra[dst + 3] = 255;
+                            break;
+                        }
+                        case 1: // Gray
+                        {
+                            byte v = Marshal.ReadByte(buffer, y * stride + x);
+                            bgra[dst] = bgra[dst + 1] = bgra[dst + 2] = v;
+                            bgra[dst + 3] = 255;
+                            break;
+                        }
+                        default:
+                            return null;
+                    }
+                }
+            }
+            return (bgra, width, height);
+        }
+        finally
+        {
+            NativeMethods.FPDFBitmap_Destroy(bitmap);
+        }
+    }
+
     public static void TransformPageObject(IntPtr pageObject, double a, double b, double c, double d, double e, double f)
         => NativeMethods.FPDFPageObj_Transform(pageObject, a, b, c, d, e, f);
 

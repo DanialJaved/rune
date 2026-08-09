@@ -586,8 +586,50 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFPageObj_Destroy(IntPtr pageObject);
 
+    // ---- Reading an image back out (fpdf_edit.h) ----
+
+    /// <summary>FPDF_PAGEOBJ_IMAGE.</summary>
+    internal const int FPDF_PAGEOBJ_IMAGE = 3;
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPageObj_GetType(IntPtr pageObject);
+
+    /// <summary>
+    /// The image's own decoded bitmap, at its native pixel size and ignoring the
+    /// object's matrix. Caller destroys it with FPDFBitmap_Destroy.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFImageObj_GetBitmap(IntPtr imageObject);
+
+    /// <summary>
+    /// Like <see cref="FPDFImageObj_GetBitmap"/> but composited: transparency
+    /// from an /SMask is applied, which a plain GetBitmap can drop. Needs the
+    /// owning document and page.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFImageObj_GetRenderedBitmap(IntPtr document, IntPtr page, IntPtr imageObject);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFBitmap_GetWidth(IntPtr bitmap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFBitmap_GetHeight(IntPtr bitmap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFBitmap_GetStride(IntPtr bitmap);
+
+    /// <summary>1 Gray, 2 BGR, 3 BGRx, 4 BGRA.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFBitmap_GetFormat(IntPtr bitmap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFBitmap_GetBuffer(IntPtr bitmap);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr FPDFAnnot_GetObject(IntPtr annot, int index);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetObjectCount(IntPtr annot);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FPDFAnnot_AppendObject(IntPtr annot, IntPtr pageObject);

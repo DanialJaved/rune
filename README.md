@@ -60,7 +60,7 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 - Draw a signature with the mouse or a pen, type it in a handwriting face, or photograph one on paper and import it. **Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document
 - Typed signatures use the handwriting fonts Windows already has, so nothing extra is downloaded and the app stays small
 - The matting runs entirely on your machine. Nothing is uploaded and no online service is involved
-- A semi-transparent preview follows the cursor so you can see exactly where it will land. Scroll to size it, click to place it, drag it afterwards if it isn't quite right
+- A semi-transparent preview follows the cursor so you can see exactly where it will land. Scroll to size it, click to place it, then drag it or pull a corner handle if it isn't quite right. Resizing keeps the proportions, so your handwriting never comes out stretched
 - Saved signatures are reusable and stay on your machine
 - This is a *visible* signature, ink on the page like signing a printout, not a cryptographic one
 - **Signature details** reads back what a digitally signed PDF claims: the signer's stated reason, time and format, and whether the signature covers the whole file. Rune does **not** verify signatures. It ships no cryptography and never calls a signature valid
@@ -157,9 +157,9 @@ The debug build is an unpackaged self-contained exe, so you can just run it.
 
 ## Roadmap
 
-**Next:** resizing a signature after placing it, colour and size for form-filling text, more formats (ePub, CBZ), code signing for the portable build, smaller packages still.
+**Next:** colour and size for form-filling text, more formats (ePub, CBZ), code signing for the portable build, smaller packages still.
 
-**Known limits:** form JavaScript needs a V8-enabled PDFium build; a signature can be moved after placing but not resized; signature *validation* would need a cryptography stack Rune doesn't ship.
+**Known limits:** form JavaScript needs a V8-enabled PDFium build; signature *validation* would need a cryptography stack Rune doesn't ship.
 
 ## License
 
