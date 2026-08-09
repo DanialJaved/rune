@@ -1,0 +1,7 @@
+# Discussions is not enabled on this repo, so there is no contact link for it.
+# If it is ever turned on, add one here for questions and ideas.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/DanialJaved/rune/security/advisories/new
+    about: Report privately instead of opening an issue. Rune parses untrusted files, so exploitable bugs get a fix before the details are public.

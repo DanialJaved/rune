@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest something Rune should do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Rune aims to be a fast, quiet reader rather than a full PDF editor, so
+        not everything fits. Saying what you were trying to get done helps more
+        than describing the feature, because there is often a lighter way to
+        solve it.
+
+        The README's Roadmap lists what is already planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task, not the feature. What are you working with, and where does Rune get in the way?
+      placeholder: |
+        I read scanned lecture notes that are sideways, so I rotate them, and
+        then I want to highlight passages as I read.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What did you have in mind?
+      description: Optional. If you already have a shape in mind, describe it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How do you handle it today?
+      description: Another reader, a workaround, or just living with it. Useful for judging how much it stings.
+    validations:
+      required: false

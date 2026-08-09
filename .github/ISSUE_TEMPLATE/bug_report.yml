@@ -1,0 +1,89 @@
+name: Bug report
+description: Something in Rune does not work the way it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. Rune has no telemetry, so what you write
+        here is genuinely all there is to go on.
+
+        **Found something exploitable?** Please do not file it here. Use
+        [private vulnerability reporting](https://github.com/DanialJaved/rune/security/advisories/new)
+        instead, so a fix can ship before the details are public.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what Rune did instead.
+      placeholder: |
+        I rotated a scanned page with Ctrl+R and then tried to highlight a line.
+        I expected the highlight to land on the text. Nothing happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Number them if you can. "It happens sometimes" is still worth filing — say what you noticed.
+      placeholder: |
+        1. Open any PDF
+        2. Press Ctrl+R
+        3. Drag across a line of text
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Rune version
+      description: Settings shows it, and so does "Report a problem…" in the menu.
+      placeholder: "0.6.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install Rune?
+      options:
+        - Microsoft Store
+        - Portable zip from GitHub Releases
+        - Built it myself from source
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and architecture
+      description: "Settings > System > About, or run `winver`. x64 or ARM64."
+      placeholder: "Windows 11 26200, x64"
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Error log
+      description: |
+        If Rune crashed or showed an error, paste the tail of
+        `%LOCALAPPDATA%\Rune\errors.log`. "Report a problem…" in the menu opens
+        the folder for you. It is rendered as code, so no backticks needed.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: file
+    attributes:
+      label: The PDF, if you can share it
+      description: |
+        A file that reproduces the problem is worth more than everything else
+        combined. Drag it in to attach it. Please do not upload anything
+        confidential — if the file is private, say so and describe it instead
+        (how many pages, scanned or digital, forms, a signature).
+    validations:
+      required: false

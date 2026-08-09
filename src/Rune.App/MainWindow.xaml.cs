@@ -1094,6 +1094,75 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private void ReportProblemMenuItem_Click(object sender, RoutedEventArgs e) => _ = ShowReportProblemAsync();
+
+    /// <summary>
+    /// Rune has no telemetry and makes no network requests, by design. That
+    /// means a crash reaches nobody unless the user carries it out by hand, and
+    /// until now nothing in the app said where the log even was. This shows the
+    /// details a useful report needs and opens the two places to get them.
+    /// </summary>
+    private async Task ShowReportProblemAsync()
+    {
+        string logPath = ErrorLog.Default.Path_;
+        bool haveLog = File.Exists(logPath);
+
+        var panel = new StackPanel { Spacing = 12, MinWidth = 420 };
+        panel.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Text = "Rune collects nothing and sends nothing anywhere, so bug reports only "
+                 + "arrive if you send them. Open an issue on GitHub and paste in the details below.",
+        });
+
+        // Selectable, because the point is to paste this into an issue.
+        var details = new StackPanel { Spacing = 4 };
+        foreach (var (label, value) in new (string, string)[]
+        {
+            ("Rune", $"{CurrentVersion} ({(IsPackaged ? "Store" : "portable")})"),
+            ("Windows", Environment.OSVersion.Version.ToString()),
+            ("Architecture", System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString()),
+        })
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            row.Children.Add(new TextBlock { Text = label, Opacity = 0.6, MinWidth = 110 });
+            row.Children.Add(new TextBlock { Text = value, IsTextSelectionEnabled = true });
+            details.Children.Add(row);
+        }
+        panel.Children.Add(details);
+
+        panel.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.7,
+            Text = haveLog
+                ? $"Errors are logged to {logPath}. Attach it if the problem was a crash."
+                : $"Nothing has been logged yet. If Rune misbehaves, errors appear in {logPath}.",
+        });
+
+        var dialog = new ContentDialog
+        {
+            Title = "Report a problem",
+            Content = panel,
+            PrimaryButtonText = "Open issue tracker",
+            SecondaryButtonText = haveLog ? "Show the log" : null,
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        var result = await ShowDialogAsync(dialog);
+        if (result == ContentDialogResult.Primary)
+        {
+            await Launcher.LaunchUriAsync(new Uri("https://github.com/DanialJaved/rune/issues/new"));
+        }
+        else if (result == ContentDialogResult.Secondary && haveLog)
+        {
+            // Select the file in Explorer rather than opening it: the log is
+            // plain text, but what the user needs is to find and attach it.
+            await Launcher.LaunchFolderPathAsync(Path.GetDirectoryName(logPath));
+        }
+    }
+
     private async void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
         var themeBox = new ComboBox
@@ -1146,6 +1215,28 @@ public sealed partial class MainWindow : Window
     /// <summary>The running build's version, for the Settings footer.</summary>
     private static string CurrentVersion =>
         (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0)).ToString(3);
+
+    /// <summary>
+    /// True for the MSIX (Store) build, false for the portable zip. Worth
+    /// reporting in a bug: the two differ in how they are installed and
+    /// updated, and only one of them is signed.
+    /// <c>Package.Current</c> throws when there is no package identity, which
+    /// is the documented way to ask.
+    /// </summary>
+    private static bool IsPackaged
+    {
+        get
+        {
+            try
+            {
+                return Windows.ApplicationModel.Package.Current is not null;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
 
     // ---------------------------------------------------------------- shortcuts overlay
 

@@ -308,6 +308,14 @@
                                 <FontIcon Glyph="&#xE713;" />
                             </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <!-- Rune collects nothing and phones nowhere, so a bug
+                             only reaches the developer if the user sends it. -->
+                        <MenuFlyoutItem x:Name="ReportProblemMenuItem" Text="Report a problem…" Click="ReportProblemMenuItem_Click">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE939;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
                     </MenuFlyout>
                 </Button.Flyout>
             </Button>
