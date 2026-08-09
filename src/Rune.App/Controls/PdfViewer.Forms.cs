@@ -97,9 +97,7 @@ public sealed partial class PdfViewer
     /// </summary>
     private bool TryHandleFormPress(Point docPoint)
     {
-        // Rotation is not plumbed through the form hit-test yet; filling stays
-        // disabled while rotated rather than editing the wrong field.
-        if (_layout is null || _document is not { HasFillableForm: true } document || _rotation != 0)
+        if (_layout is null || _document is not { HasFillableForm: true } document)
         {
             return false;
         }
@@ -302,16 +300,18 @@ public sealed partial class PdfViewer
     /// hit-testing, which makes this pure managed drawing with no render-thread
     /// work and nothing to invalidate.
     ///
-    /// Skipped while rotated, for the same reason filling is: page-local
-    /// geometry is not mapped through the view rotation yet, so the rects would
-    /// land in the wrong place.
+    /// Field rects describe the file, so they go through the view rotation to
+    /// reach the drawn box — the same path selection and search highlights take.
+    /// PDFium's own widget fill already receives the rotation, so the two agree.
     /// </summary>
     private void DrawFormFieldBorders(CanvasDrawingSession session, int pageIndex, DipRect pageRect)
     {
-        if (_rotation != 0 || !_formFields.TryGetValue(pageIndex, out var fields))
+        if (!_formFields.TryGetValue(pageIndex, out var fields))
         {
             return;
         }
+
+        var rotation = RotationFor(pageIndex);
 
         var border = RuneColors.FormFieldBorder(_nightMode);
         var focusBorder = RuneColors.FormFieldFocusBorder(_nightMode);
@@ -326,11 +326,12 @@ public sealed partial class PdfViewer
                 continue;
             }
 
+            var drawn = rotation.ToDrawn(field.X, field.Y, field.Width, field.Height);
             var rect = new Rect(
-                pageRect.X + field.X * _zoom,
-                pageRect.Y + field.Y * _zoom,
-                Math.Max(1, field.Width * _zoom),
-                Math.Max(1, field.Height * _zoom));
+                pageRect.X + drawn.X * _zoom,
+                pageRect.Y + drawn.Y * _zoom,
+                Math.Max(1, drawn.Width * _zoom),
+                Math.Max(1, drawn.Height * _zoom));
 
             bool focused = IsFocusedField(field);
             var color = field.IsReadOnly ? readOnlyBorder : focused ? focusBorder : border;

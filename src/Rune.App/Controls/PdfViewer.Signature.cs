@@ -92,7 +92,7 @@ public sealed partial class PdfViewer
     /// </summary>
     private bool UpdateSignatureHover(Point? docPoint)
     {
-        if (!HasPendingSignature || _activeTool != AnnotationTool.Signature || _rotation != 0)
+        if (!HasPendingSignature || _activeTool != AnnotationTool.Signature)
         {
             bool had = _signatureHover is not null;
             _signatureHover = null;
@@ -130,7 +130,7 @@ public sealed partial class PdfViewer
 
     private void BeginSignaturePlacement(Point docPoint, Pointer pointer)
     {
-        if (_layout is null || _document is null || _rotation != 0 || !HasPendingSignature)
+        if (_layout is null || _document is null || !HasPendingSignature)
         {
             return;
         }
@@ -189,20 +189,26 @@ public sealed partial class PdfViewer
         int page = _signaturePage;
         _signaturePage = -1;
 
-        var pageRect = _layout.GetPageRect(page);
-        // Document space → page-local top-left points (undo centering + zoom).
-        double localX = (box.X - pageRect.X) / _zoom;
-        double localY = (box.Y - pageRect.Y) / _zoom;
-        double widthPt = box.Width / _zoom;
-        double heightPt = box.Height / _zoom;
+        // The box is where the signature was drawn; the file wants unrotated
+        // page-local. Both corners go through the transform and are normalized,
+        // so on a quarter turn the width and height swap along with the axes.
+        var (cornerAX, cornerAY) = ToPageLocal(page, new Point(box.X, box.Y));
+        var (cornerBX, cornerBY) = ToPageLocal(page, new Point(box.Right, box.Bottom));
+        double localX = Math.Min(cornerAX, cornerBX);
+        double localY = Math.Min(cornerAY, cornerBY);
+        double widthPt = Math.Abs(cornerBX - cornerAX);
+        double heightPt = Math.Abs(cornerBY - cornerAY);
 
-        int pw = _signaturePixelW, ph = _signaturePixelH;
+        // Turn the ink the other way so the view's rotation cancels out and the
+        // signature reads upright against the content the user was looking at.
+        var (stampBgra, pw, ph) = SignatureMatte.RotateQuarterTurns(
+            bgra, _signaturePixelW, _signaturePixelH, 4 - _rotation);
 
         AnnotationSpec? spec;
         try
         {
             spec = await _scheduler.RunAsync(PdfWorkPriority.Interactive,
-                () => document.AddStamp(page, localX, localY, widthPt, heightPt, bgra, pw, ph));
+                () => document.AddStamp(page, localX, localY, widthPt, heightPt, stampBgra, pw, ph));
         }
         catch
         {
@@ -214,8 +220,11 @@ public sealed partial class PdfViewer
             return;
         }
 
-        SignatureWidthPt = widthPt;
-        SignaturePlaced?.Invoke(this, widthPt);
+        // The remembered width is the on-screen one, so a later placement at a
+        // different rotation still comes back the size the user last chose.
+        double onScreenWidthPt = box.Width / _zoom;
+        SignatureWidthPt = onScreenWidthPt;
+        SignaturePlaced?.Invoke(this, onScreenWidthPt);
 
         InvalidatePage(page);
         DocumentEdited?.Invoke(this, EventArgs.Empty);

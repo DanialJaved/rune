@@ -460,4 +460,117 @@ public class SignatureMatteTests
         Assert.Equal((10, 20, 30), BgrAt(cropped, 4, 0, 0));
         Assert.Equal((10, 20, 30), BgrAt(cropped, 4, 3, 1));
     }
+
+    // ---- rotation, for placing into a rotated view ----
+
+    [Theory]
+    [InlineData(0, 8, 4)]
+    [InlineData(1, 4, 8)]
+    [InlineData(2, 8, 4)]
+    [InlineData(3, 4, 8)]
+    public void RotateQuarterTurns_SwapsTheAxesOnAQuarterTurn(int turns, int expectedW, int expectedH)
+    {
+        var bgra = Paper(8, 4, 200);
+
+        var (_, w, h) = SignatureMatte.RotateQuarterTurns(bgra, 8, 4, turns);
+
+        Assert.Equal(expectedW, w);
+        Assert.Equal(expectedH, h);
+    }
+
+    /// <summary>
+    /// A single marked pixel says which way the turn actually goes — a rotation
+    /// that went counter-clockwise instead would still pass a size check, and
+    /// would stamp the signature upside down on the page.
+    /// </summary>
+    [Fact]
+    public void RotateQuarterTurns_TurnsClockwise()
+    {
+        // One ink pixel at the top-left of an 8x4 image.
+        var bgra = Paper(8, 4, 200);
+        DrawBar(bgra, 8, 0, 0, 1, 1, 10, 20, 30);
+
+        // A quarter turn clockwise sends the top-left corner to the top-right.
+        var (once, w1, _) = SignatureMatte.RotateQuarterTurns(bgra, 8, 4, 1);
+        Assert.Equal((10, 20, 30), BgrAt(once, w1, w1 - 1, 0));
+
+        // Half a turn sends it to the far corner.
+        var (twice, w2, h2) = SignatureMatte.RotateQuarterTurns(bgra, 8, 4, 2);
+        Assert.Equal((10, 20, 30), BgrAt(twice, w2, w2 - 1, h2 - 1));
+
+        // Three quarters sends it to the bottom-left.
+        var (thrice, w3, h3) = SignatureMatte.RotateQuarterTurns(bgra, 8, 4, 3);
+        Assert.Equal((10, 20, 30), BgrAt(thrice, w3, 0, h3 - 1));
+    }
+
+    /// <summary>
+    /// Four turns is the identity, which is what makes "rotate by 4 - rotation
+    /// to cancel the view out" sound. Every pixel has to survive, not just the
+    /// dimensions.
+    /// </summary>
+    [Fact]
+    public void RotateQuarterTurns_FourTurnsIsTheIdentity()
+    {
+        var bgra = PaperWithBar();
+        Noise(bgra, amplitude: 12, seed: 7);
+
+        var current = (Bgra: bgra, Width: 200, Height: 120);
+        for (int i = 0; i < 4; i++)
+        {
+            current = SignatureMatte.RotateQuarterTurns(current.Bgra, current.Width, current.Height, 1);
+        }
+
+        Assert.Equal(200, current.Width);
+        Assert.Equal(120, current.Height);
+        Assert.Equal(bgra, current.Bgra);
+    }
+
+    [Fact]
+    public void RotateQuarterTurns_ZeroHandsBackTheSameBuffer()
+    {
+        var bgra = Paper(8, 4, 200);
+
+        var (same, w, h) = SignatureMatte.RotateQuarterTurns(bgra, 8, 4, 0);
+
+        Assert.Same(bgra, same);
+        Assert.Equal(8, w);
+        Assert.Equal(4, h);
+    }
+
+    /// <summary>
+    /// Rotate-left from an unrotated view asks for <c>4 - 0 == 4</c>, and
+    /// rotate-right from 3 asks for <c>4 - 3 == 1</c>: the call site does its
+    /// arithmetic before normalizing, so this has to absorb it.
+    /// </summary>
+    [Theory]
+    [InlineData(4, 0)]
+    [InlineData(5, 1)]
+    [InlineData(-1, 3)]
+    public void RotateQuarterTurns_NormalizesTheTurnCount(int raw, int equivalent)
+    {
+        var bgra = PaperWithBar();
+
+        var actual = SignatureMatte.RotateQuarterTurns(bgra, 200, 120, raw);
+        var expected = SignatureMatte.RotateQuarterTurns(bgra, 200, 120, equivalent);
+
+        Assert.Equal(expected.Width, actual.Width);
+        Assert.Equal(expected.Height, actual.Height);
+        Assert.Equal(expected.Bgra, actual.Bgra);
+    }
+
+    /// <summary>
+    /// The alpha channel is what makes a keyed signature transparent, so it has
+    /// to travel with its pixel rather than being rebuilt from scratch.
+    /// </summary>
+    [Fact]
+    public void RotateQuarterTurns_CarriesAlpha()
+    {
+        var bgra = Paper(8, 4, 200);
+        bgra[3] = 0; // top-left fully transparent
+
+        var (rotated, w, _) = SignatureMatte.RotateQuarterTurns(bgra, 8, 4, 1);
+
+        Assert.Equal(0, AlphaAt(rotated, w, w - 1, 0));
+        Assert.Equal(255, AlphaAt(rotated, w, 0, 0));
+    }
 }

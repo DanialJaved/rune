@@ -59,7 +59,7 @@ public sealed partial class PdfViewer
     /// </summary>
     private bool TryHandleStampPress(Point docPoint, Pointer pointer)
     {
-        if (_layout is null || _document is null || _rotation != 0)
+        if (_layout is null || _document is null)
         {
             return false;
         }
@@ -139,9 +139,12 @@ public sealed partial class PdfViewer
         }
 
         var local = ToPageLocal(selected.Page, docPoint);
-        var pageRect = _layout.GetPageRect(selected.Page);
-        double maxX = (pageRect.Width / _zoom) - selected.Local.Width;
-        double maxY = (pageRect.Height / _zoom) - selected.Local.Height;
+        // The stamp's rect is in the file's own axes, so the limits are the
+        // page's unrotated size — the layout rect has them swapped on a
+        // quarter turn, which would let a drag run off the short edge.
+        var size = _pageSizes[selected.Page];
+        double maxX = size.Width - selected.Local.Width;
+        double maxY = size.Height - selected.Local.Height;
 
         // Keep it on the page: a signature dragged past the edge would be
         // clipped by every reader that opens the file.
@@ -200,10 +203,11 @@ public sealed partial class PdfViewer
     {
         if (_selectedStamp is { } selected && _layout is not null)
         {
-            var pageRect = _layout.GetPageRect(selected.Page);
-            var centre = new Point(
-                pageRect.X + (selected.Local.X + selected.Local.Width / 2) * _zoom,
-                pageRect.Y + (selected.Local.Y + selected.Local.Height / 2) * _zoom);
+            // The eraser hit-tests from a document point, so the stamp's centre
+            // has to come back out through the view rotation to reach one.
+            var centre = ToDocumentPoint(selected.Page,
+                selected.Local.X + selected.Local.Width / 2,
+                selected.Local.Y + selected.Local.Height / 2);
             ClearSignatureSelection();
             _ = EraseAnnotationAt(centre);
         }
@@ -217,17 +221,14 @@ public sealed partial class PdfViewer
     /// </summary>
     private void DrawStampSelection(CanvasDrawingSession session)
     {
-        if (_selectedStamp is not { } selected || _layout is null || _rotation != 0)
+        if (_selectedStamp is not { } selected || _layout is null)
         {
             return;
         }
 
         var pageRect = _layout.GetPageRect(selected.Page);
-        var box = new Rect(
-            pageRect.X + selected.Local.X * _zoom,
-            pageRect.Y + selected.Local.Y * _zoom,
-            selected.Local.Width * _zoom,
-            selected.Local.Height * _zoom);
+        var box = HighlightRect(selected.Page, pageRect, new TextRect(
+            selected.Local.X, selected.Local.Y, selected.Local.Width, selected.Local.Height));
 
         session.FillRectangle(box, RuneColors.SelectedStampWash(_nightMode));
         session.DrawRectangle(box, RuneColors.SelectedStampBorder(_nightMode), 1.5f,
