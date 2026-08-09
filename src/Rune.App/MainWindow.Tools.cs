@@ -120,9 +120,11 @@ public sealed partial class MainWindow
                 TextWrapping = TextWrapping.Wrap,
             });
 
+            // "Draw new" since v0.5.0, but the dialog behind it now draws, types
+            // or imports, so the button should not name only one of the three.
             var draw = new Button
             {
-                Content = "Draw new…",
+                Content = "New signature…",
                 HorizontalAlignment = HorizontalAlignment.Stretch,
             };
             draw.Click += async (_, _) =>
