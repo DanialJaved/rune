@@ -307,6 +307,7 @@ public sealed partial class MainWindow : Window
             }
         };
         view.PageOpFailed += (_, message) => ShowError(message);
+        view.ExtractRequested += (_, _) => _ = ExtractPagesAsync(view);
         view.UndoStateChanged += (_, _) =>
         {
             if (view == CurrentView)
@@ -960,6 +961,70 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Palette route into extract. The palette entry is offered whenever a
+    /// document is open, so it has to say what to do when no pages are picked
+    /// rather than appearing to do nothing.
+    /// </summary>
+    private async Task ExtractSelectedPagesFromPaletteAsync()
+    {
+        if (CurrentView is not { IsDocumentLoaded: true } view)
+        {
+            return;
+        }
+        if (view.SelectedPageCount == 0)
+        {
+            ShowNotice(
+                "Select pages in the thumbnail sidebar first, then extract them.",
+                InfoBarSeverity.Informational);
+            return;
+        }
+        await ExtractPagesAsync(view);
+    }
+
+    /// <summary>
+    /// Writes the thumbnail selection out as a new PDF. The picker lives here
+    /// because it needs the window handle; the work itself is DocumentView's.
+    /// The current document is left alone — extract is a copy, not a cut.
+    /// </summary>
+    private async Task ExtractPagesAsync(DocumentView view)
+    {
+        if (view.SelectedPageCount == 0 || !view.IsDocumentLoaded)
+        {
+            return;
+        }
+
+        var picker = new FileSavePicker
+        {
+            SuggestedFileName = $"{Path.GetFileNameWithoutExtension(view.FilePath)} {view.SelectedPageRangeLabel()}",
+        };
+        picker.FileTypeChoices.Add("PDF document", [".pdf"]);
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+
+        var file = await picker.PickSaveFileAsync();
+        if (file is null)
+        {
+            return;
+        }
+
+        // Writing over the document being read from would pull the file out from
+        // under the open handle mid-export.
+        if (string.Equals(file.Path, view.FilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            ShowError("Pick a different file: extracting over the open document would overwrite it.");
+            return;
+        }
+
+        int count = view.SelectedPageCount;
+        if (await view.ExtractSelectedPagesAsync(file.Path))
+        {
+            // Not ShowError: this succeeded, so it gets success semantics.
+            ShowNotice(
+                $"Extracted {count} page{(count == 1 ? "" : "s")} to {file.Name}.",
+                InfoBarSeverity.Success);
+        }
+    }
+
     // ---------------------------------------------------------------- night / print / properties / settings
 
     private void NightButton_Click(object sender, RoutedEventArgs e) => ToggleNightMode();
@@ -1189,6 +1254,7 @@ public sealed partial class MainWindow : Window
                 new("Eraser tool", "", () => SetActiveTool(AnnotationTool.Eraser)),
                 new("Save", "Ctrl+S", () => _ = SaveActiveAsync()),
                 new("Save As…", "Ctrl+Shift+S", () => _ = SaveAsActiveAsync()),
+                new("Extract selected pages to a new file…", "", () => _ = ExtractSelectedPagesFromPaletteAsync()),
                 new("Print", "Ctrl+P", () => _ = PrintAsync()),
                 new("Document properties", "Ctrl+D", () => _ = ShowPropertiesAsync()),
                 new("Toggle night mode", "Ctrl+I", ToggleNightMode),

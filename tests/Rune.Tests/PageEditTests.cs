@@ -91,6 +91,43 @@ public class PageEditTests
         Assert.Contains("Page 1", target.ExtractText(1)); // original content shifted down
     }
 
+    /// <summary>
+    /// What "extract to a new file" relies on beyond the clipboard's use of
+    /// ExportPages: a scattered, non-adjacent pick has to come out in page order
+    /// with nothing in between, and the document being read from must be left
+    /// exactly as it was. Extract is a copy, not a cut.
+    /// </summary>
+    [Fact]
+    public void ExportPages_NonContiguousSelection_KeepsOrderAndLeavesTheSourceAlone()
+    {
+        using var source = PdfDocument.Open(CorpusPath("book-1000.pdf"));
+        int pagesBefore = source.PageCount;
+        string firstPageBefore = source.ExtractText(0);
+
+        var bytes = source.ExportPages([4, 0, 9]); // deliberately out of order
+
+        // Through a file, which is what extract actually does with the bytes.
+        string path = Path.Combine(Path.GetTempPath(), $"rune-extract-{Guid.NewGuid():N}.pdf");
+        try
+        {
+            File.WriteAllBytes(path, bytes);
+            using var extracted = PdfDocument.Open(path);
+
+            Assert.Equal(3, extracted.PageCount);
+            // Ascending page order, regardless of the order asked for.
+            Assert.Contains("Page 1", extracted.ExtractText(0));
+            Assert.Contains("Page 5", extracted.ExtractText(1));
+            Assert.Contains("Page 10", extracted.ExtractText(2));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+
+        Assert.Equal(pagesBefore, source.PageCount);
+        Assert.Equal(firstPageBefore, source.ExtractText(0));
+    }
+
     [Fact]
     public void InsertPagesFromFile_InsertsAllPagesAtIndex()
     {
