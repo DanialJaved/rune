@@ -148,7 +148,8 @@ invalidate this justification and the privacy declaration together.
 ## Screenshots
 
 Store requires at least one 1366×768 or larger desktop screenshot; up to 10.
-The current set in `docs/store-screenshots/`, shot against v0.5.0 at 1920×1080:
+The set in `docs/store-screenshots/` is now the full 10, all 1920×1080. Shots
+1 to 7 were taken against v0.5.0, shots 8 to 10 against v0.6.0:
 
 1. `01-reading-light` — light mode, thumbnails sidebar, the everyday view
 2. `02-night-mode` — night mode on the same page (thumbnails invert too)
@@ -158,10 +159,18 @@ The current set in `docs/store-screenshots/`, shot against v0.5.0 at 1920×1080:
 6. `06-presentation` — presentation mode (F5), fullscreen
 7. `07-signature` — a photographed signature imported with the paper keyed out,
    previewed over a checkerboard so the transparency is legible in a thumbnail
+8. `08-page-editing` — three pages multi-selected in the thumbnail sidebar,
+   showing the accent bars and the current-page ring
+9. `09-shortcuts` — the F1 overlay, both columns complete (the clipping bug that
+   held this shot back was fixed in `99617b8`)
+10. `10-signature-resize` — a typed signature placed on the page and selected,
+    with its four aspect-locked corner handles
 
-Still to shoot: the **page-editing sidebar** with pages selected, and the
-**shortcuts overlay** (the clipping bug that blocked it was fixed in `99617b8`,
-so it is now only a matter of taking the shot).
+Shot 8 is the selection state rather than the right-click menu on purpose: a
+`MenuFlyout` renders in its own HWND and does not appear in a `PrintWindow`
+capture, which was confirmed again when these were taken. `CopyFromScreen` is no
+way around it, because this display is exactly 1920×1080 and the taskbar
+overlays the bottom 60 px of any window placed at (0,0).
 
 Capture at 1920×1080 with `PrintWindow(PW_RENDERFULLCONTENT)` (PROJECT.md §7),
 windowed, using a licence-safe document. `PrintWindow` returns a solid black

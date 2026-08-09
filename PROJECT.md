@@ -2,8 +2,9 @@
 
 > A single-file brain-dump so a fresh session (human or AI) can understand
 > and continue this project without re-deriving context. Last updated for
-> **v0.6.0** (2026-08-09): interaction while rotated, page extract, typed
+> **v0.6.0** (2026-08-10): interaction while rotated, page extract, typed
 > signatures, signature resize, PDFium 153, and 19 MB off the package.
+> Both release artifacts are built and measured; §13 has what is left.
 >
 > **Start here:** §1 what it is · §4 how rendering works (the load-bearing part)
 > · §7 gotchas (read before debugging) · §10 known bugs · §13 current state.
@@ -873,22 +874,35 @@ white foreground onto white paper.
 
 ---
 
-## 13. Current state (2026-08-09)
+## 13. Current state (2026-08-10)
 
 - Working branch **`v0.6.0`**, branched from `origin/main` (which was ahead of
-  the local `main` — PR #10 had merged there). Eight commits; §9 has the
+  the local `main` — PR #10 had merged there). Ten commits; §9 has the
   release notes.
-- **Nothing has been published.** No tag, no GitHub release, no Store bundle.
-  Per §12 that all waits for the user.
+- **Nothing has been published.** No tag, no GitHub release, no Store
+  submission. Per §12 that all waits for the user.
 - **312 tests passing**; x64 and ARM64 Release both build clean.
 - **PDFium 153.0.7988** (was 152.0.7961).
 - **Package set changed** — `Microsoft.WindowsAppSDK` is no longer referenced;
-  see §7 before upgrading the SDK. Portable zip measured at **69.4 MB** (was
-  ~88 MB); the Store bundle has not been rebuilt, so its new size is unmeasured.
+  see §7 before upgrading the SDK.
 - **Version bumped to 0.6.0** in both `Rune.App.csproj` and
   `Package.appxmanifest`.
+- **Both release artifacts are built and measured**, sitting untracked in
+  `artifacts/`:
+
+  | Artifact | v0.6.0 | previous | change |
+  |---|---|---|---|
+  | Portable zip `rune-v0.6.0-win-x64.zip` | **72,726,965 B** (69.4 MB) | 88.6 MB (v0.4.0) | −19.2 MB |
+  | Store bundle `Rune.App_0.6.0.0_x64_arm64_bundle.msixupload` | **70,422,107 B** (67.2 MB) | 105.9 MB (v0.4.1) | −38.8 MB, −36.6% |
+
+  The bundle drops roughly twice what the zip does because it carries both
+  architectures and each one lost the ML/Widgets/OAuth payload.
+- **Store screenshots are complete at 10 of 10**, all 1920×1080;
+  `docs/store-listing.md` lists what each one shows.
 
 ### Still to do before submitting
+
+Both remaining items are the user's; neither can be done from the repo.
 
 1. **Check the live Store description in Partner Center.** `winget show --id
    9NH37840QDM6 --source msstore` reads back a description with no
@@ -896,17 +910,13 @@ white foreground onto white paper.
    App SDK disclosure. The 30 July certification report ("Pass with required
    fix", policy 10.2.4.1) requires that disclosure in the first two lines. The
    corrected copy is in `docs/store-listing.md`; it may never have been pasted
-   in. This is a Partner Center UI check and cannot be done from the repo.
-2. **Two Store screenshots** still unshot (page-editing sidebar, shortcuts
-   overlay) — see `docs/store-listing.md`. §8b's rules apply: empty Rune
-   profile, licence-safe document, 1920×1080. Worth adding a third now: a
-   selected signature with its resize handles showing.
-3. **GitHub Releases is still at v0.4.0** while the Store shipped 0.5.0. 0.4.1,
-   0.5.0 and 0.5.1 were never tagged; simplest honest option is to publish
-   v0.6.0 and say in the notes that the intervening versions went out through
-   the Store.
-4. **Rebuild the Store bundle and measure it.** The old figure was ~106 MB and
-   the package set changed underneath it, so that number is stale.
+   in. This is a Partner Center UI check.
+2. **Publish, once the user says so.** PR `v0.6.0` into `main` (CI builds both
+   legs), tag `v0.6.0`, then `gh release create` with the portable zip.
+   **GitHub Releases is still at v0.4.0** while the Store shipped 0.5.0: 0.4.1,
+   0.5.0 and 0.5.1 were never tagged, so the notes say plainly that the
+   intervening versions went out through the Store. Then the bundle and the 10
+   screenshots go to Partner Center.
 
 `docs/store-listing.md` is already updated for v0.6.0 (extract, typed
 signatures, resize, and that everything works while rotated) — it just has to be
@@ -929,18 +939,22 @@ Everything below was checked on screen, not just by test:
   on screen, with the ink filling the new box rather than the frame growing around
   an unchanged image.
 - **The trimmed package**, by launching it — including night mode, the sharpest
-  single check because it runs through Win2D's `InvertEffect`.
+  single check because it runs through Win2D's `InvertEffect`. Repeated against
+  the final `dotnet publish` output that became the v0.6.0 zip.
+- **Form filling while rotated**, the last path that had only test coverage.
+  `form.pdf` at r=1: clicking the text field focuses it, the typed glyphs land
+  inside it and read with the rotated content rather than the file's axes, and
+  the checkbox takes its tick. Rune's own field borders sit on PDFium's widgets
+  at the turn, so the two drawing paths agree.
+- **The three new Store screenshots**, which is what surfaced the harness trap
+  in item 4 below.
 
-Not driven on screen: form-field filling while rotated. The arithmetic is the
-same `PageRotationTransform` every other path uses, and
-`PageRotationParityTests` cross-checks it against PDFium's own
-`FPDF_DeviceToPage` at all four rotations, but nobody has clicked a rotated form
-field.
+Nothing with a runtime surface is now unverified on screen.
 
 ### Notes on the screenshot harness
 
 A DPI-aware `SendInput` + `PrintWindow` driver lives in the session scratchpad.
-Three traps cost real time here and will again if it is rebuilt:
+Four traps cost real time here and will again if it is rebuilt:
 
 1. **The `INPUT` struct must be exactly 40 bytes on x64.** Any trailing padding
    makes `SendInput` fail with `ERROR_INVALID_PARAMETER`, silently — the cursor
@@ -959,3 +973,13 @@ Three traps cost real time here and will again if it is rebuilt:
    chrome, and a page-bounded search still catches the gap between two pages.
    Locating text by running a find and looking for the highlight colour is far
    more robust than looking for dark pixels.
+4. **`PrintWindow` captures the WINDOW rect; clicks go to CLIENT coordinates,
+   and on a restored window the two differ by 9 px in x.** So a coordinate read
+   off a capture has to have that subtracted before it is clicked. Big targets
+   absorb the error and small ones do not, which is the worst possible failure
+   mode: the toolbar buttons, the flyout entries and the dialog fields all
+   worked, so it read as "clicking a placed signature does not select it" (an
+   app bug) rather than "the click is 9 px off" (a harness bug). Probe it with
+   `ClientToScreen(hwnd, {0,0})` against `GetWindowRect` instead of assuming
+   zero. Related: `Focus-Rune` maximizes, so calling it after sizing to
+   1920×1080 silently invalidates every coordinate measured at that size.
