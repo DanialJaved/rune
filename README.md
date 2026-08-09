@@ -115,6 +115,12 @@ Right-click a selection for underline and strikeout, or right-click anywhere to 
 
 **The Store is the way to install Rune.** One click, automatic updates, and it registers itself as a PDF handler. Microsoft signs the package, so there is no certificate step and nothing for SmartScreen or Smart App Control to warn about. It installs from the Store app or [from the web](https://apps.microsoft.com/detail/9NH37840QDM6).
 
+**winget**, if you prefer the terminal. Same Store package, same signature:
+
+```
+winget install --id 9NH37840QDM6 --source msstore --exact
+```
+
 **Portable:** if you want Rune without the Store, on a USB stick or on a machine where you can't install anything, grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract it anywhere and run `Rune.exe`. No installation, no registry.
 
 > The portable build is **not code-signed**. Machines with Smart App Control enabled will block it, and SmartScreen may warn on first run (choose "More info", then "Run anyway"). It also doesn't update itself, so check back here or use the Store build. And it isn't size-optimized: it carries the full self-contained .NET and Windows App SDK runtimes.

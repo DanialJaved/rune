@@ -501,6 +501,17 @@ get no SmartScreen/SAC warning.
 
 **Product ID `9NH37840QDM6`** — live at https://apps.microsoft.com/detail/9NH37840QDM6
 
+**winget works, and needed no work.** The listing is mapped into the `msstore`
+source, so `winget install --id 9NH37840QDM6 --source msstore --exact` installs
+the same Microsoft-signed package. Verified with `winget show --id 9NH37840QDM6
+--source msstore` (v0.6.0 prep). The community `winget-pkgs` route was never
+viable: it wants a downloadable installer URL, which Store-only distribution
+doesn't provide.
+
+`winget show` also reads back the **live** Store description, which makes it a
+free way to check that what Partner Center actually serves matches
+`docs/store-listing.md`.
+
 ```powershell
 # Store upload bundle (unsigned — the Store signs it), x64 + ARM64
 dotnet restore src/Rune.App/Rune.App.csproj
@@ -712,12 +723,6 @@ because each one's cause is worth remembering.
 - More formats (ePub, CBZ — would need MuPDF; note AGPL implications)
 - **Code signing** — *solved for Store installs* (the Store re-signs). Still open
   for the portable zip: Azure Trusted Signing ~$10/mo. Deferred.
-- **winget** — the community `winget-pkgs` route needs a downloadable installer
-  URL, which Store-only binary distribution doesn't provide. The route that fits
-  is the **`msstore` source**, where a published Store app installs by product
-  ID: `winget install --id 9NH37840QDM6 --source msstore --exact`. Not every
-  listing is mapped, so **check whether it already resolves** before planning any
-  work — if it does, winget support is done and needs only a README line.
 - Smaller / size-optimized packages (zip ~88 MB, Store bundle ~106 MB — both
   carry the self-contained .NET + WindowsAppSDK runtimes)
 
