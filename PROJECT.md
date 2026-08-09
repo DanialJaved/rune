@@ -2,8 +2,8 @@
 
 > A single-file brain-dump so a fresh session (human or AI) can understand
 > and continue this project without re-deriving context. Last updated for
-> **v0.5.0** (2026-07-31), including the pre-submission security pass and the
-> move to Store-first distribution.
+> **v0.6.0** (2026-08-09): interaction while rotated, page extract, typed
+> signatures, PDFium 153, and 19 MB off the package.
 >
 > **Start here:** §1 what it is · §4 how rendering works (the load-bearing part)
 > · §7 gotchas (read before debugging) · §10 known bugs · §13 current state.
@@ -34,8 +34,8 @@ Flow Launcher.
 | Layer | Choice | Notes |
 |---|---|---|
 | Language/runtime | **C# / .NET 10** | |
-| UI | **WinUI 3** (Windows App SDK **2.2.0**) | Fluent, Mica, dark mode |
-| PDF engine | **PDFium** via `bblanchon.PDFium.Win32` NuGet (152.x) | Chrome's renderer; BSD-3-Clause/Apache-2.0 |
+| UI | **WinUI 3** (Windows App SDK **2.2.0**, referenced as sub-packages — see §7) | Fluent, Mica, dark mode |
+| PDF engine | **PDFium** via `bblanchon.PDFium.Win32` NuGet (153.x) | Chrome's renderer; BSD-3-Clause/Apache-2.0 |
 | Canvas | **Win2D** (`Microsoft.Graphics.Win2D` 1.4.0) | virtualized `CanvasVirtualControl` |
 | MVVM helpers | `CommunityToolkit.Mvvm` 8.4.2 | used lightly |
 | Build model | Unpackaged self-contained `.exe` for dev; MSIX at release | |
@@ -105,7 +105,7 @@ src/
     Assets/                   rune.ico + MSIX visual assets (generated)
 
 tests/
-  Rune.Tests/           xUnit — 244 tests against a generated corpus (see §6)
+  Rune.Tests/           xUnit — 301 tests against a generated corpus (see §6)
 
 tools/
   gen-corpus.ps1        Hand-authors the test PDFs (no PDF lib needed)
@@ -176,7 +176,7 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 
 ---
 
-## 5. Feature set (as shipped in v0.5.1)
+## 5. Feature set (as shipped in v0.6.0)
 
 - Tabs **in the title bar** (Chrome/Terminal style), lazy-loaded per tab
 - Continuous virtualized scroll; zoom 10–640% at cursor; fit-width/page; rotate
@@ -193,6 +193,12 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 - **Page editing** in the thumbnail sidebar: multi-select, drag-to-reorder,
   Delete, **Ctrl+C/X/V page clipboard incl. across tabs**, drop an external
   `.pdf` into the sidebar to insert its pages. Serialized-bytes clipboard.
+  **Extract** the selection to a new file (context menu + palette), which leaves
+  the open document untouched.
+- **Everything interactive works while the view is rotated** (v0.6.0) —
+  selection, markup, links, form filling, signing. `PageRotationTransform` maps
+  between unrotated page space and the drawn box; find results and selection now
+  survive a Ctrl+R rather than being cleared.
 - **Undo / redo** (Ctrl+Z / Ctrl+Y): unified per-document stack over
   annotations (spec-based re-create) and page ops (snapshot / inverse-permute).
   Cleared on save-in-place + close. Dynamic menu labels.
@@ -210,9 +216,10 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
   environment drives every edit through `FORM_OnChar` — there is no programmatic
   setter — with Rune-drawn field borders over the top. Values round-trip through
   save.
-- **Signing**: draw a signature, or **import a photo or scan and have the paper
-  keyed out automatically** (`SignatureMatte`). Placed as a stamp annotation with
-  a live semi-transparent preview under the cursor, wheel-sizing before
+- **Signing**: draw a signature, **type it** in one of Windows' handwriting faces
+  (`SignatureFonts`, nothing bundled), or **import a photo or scan and have the
+  paper keyed out automatically** (`SignatureMatte`). Placed as a stamp annotation
+  with a live semi-transparent preview under the cursor, wheel-sizing before
   placement, and drag-to-move after. Saved signatures are reusable and stay on
   the device.
 - **Signature details**: reports what a signed document *claims*, including
@@ -257,7 +264,7 @@ dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
 # Run (accepts an optional PDF path; also --page N --zoom Z for scripted tests)
 src/Rune.App/bin/x64/Debug/net10.0-windows10.0.19041.0/win-x64/Rune.exe [file.pdf]
 
-# Test (244 tests)
+# Test (301 tests)
 dotnet test tests/Rune.Tests/Rune.Tests.csproj
 
 # Regenerate assets when needed
@@ -557,6 +564,67 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
 
 ## 9. Version history
 
+- **v0.6.0** (2026-08-09) — the release that stops the reader disabling itself.
+  **Fixed: rotating the page no longer turns half the app off.** Text selection,
+  annotation, links, form filling and the whole signature flow all early-returned
+  on `_rotation != 0` — fourteen guards across five files, with nothing on screen
+  to say why. The cause was two helpers: `ToPageLocal` undid the centring offset
+  and the zoom, which lands in the *drawn* box, while every consumer (`PageText`
+  char boxes, form field rects, annotation rects, the x/y `AddStamp` takes) is
+  measured in unrotated page points; `HighlightRect` had the inverse assumption.
+  On a quarter turn those two spaces have the page's axes swapped, so rather than
+  return a point on the wrong part of the page, each caller switched itself off.
+  New `PageRotationTransform` maps between them and the guards are gone. It is
+  managed arithmetic rather than `FPDF_DeviceToPage` on purpose — pointer moves
+  hit it per event, and v0.4.0 moved hit-testing off PDFium precisely to stop that
+  freezing the UI thread. Two paths needed more than the guard removed: form
+  field borders now go through the same rotation PDFium's own widget fill gets,
+  and a signature placed while rotated has its pixels turned the other way first
+  (`SignatureMatte.RotateQuarterTurns`) so it reads upright against the content
+  the user was looking at rather than against the file's axes.
+  `Rotate()` also stopped discarding the user's work: it cleared selection,
+  search hits, links and the page-text cache on every turn because none of it
+  could be placed once rotated. All four are in unrotated page coordinates and
+  therefore rotation-independent, so find a hit, rotate, and the hit is still
+  there. Tiles and previews are still dropped — those really are per-rotation,
+  and that invalidation is the v0.2 blank-page fix.
+  **Added: page extract.** `ExportPages` already returned a selection as PDF
+  bytes (it backs the page clipboard), so extract needed no engine work: a
+  thumbnail context-menu entry, a palette entry, and a save picker. Extracting
+  over the open document is refused rather than pulling the file out from under
+  the read handle.
+  **Added: typed signatures**, the third input mode beside draw and import. No
+  font is bundled — Segoe Script, Segoe Print and Ink Free ship with Windows, and
+  bundling one would undo part of the size work below. `SignatureFonts` resolves
+  each style against the installed set and feeds the same answer to the preview
+  and the render, so they cannot disagree; when nothing resolves the pad disables
+  the field and says why instead of quietly producing something that looks typed.
+  Cropping uses DirectWrite's `DrawBounds` rather than the layout box, because a
+  script face overhangs its box on both sides.
+  **Removed 19 MB from the zip (88 → 69 MB).** The `Microsoft.WindowsAppSDK`
+  meta-package hard-depends on `.Widgets`, `.AI` and `.ML`, and `.ML` pulls in
+  `Microsoft.Windows.AI.MachineLearning`: `onnxruntime.dll` (20.7 MB) plus
+  `DirectML.dll` (17.8 MB) inside a PDF reader that runs no inference. There is no
+  opt-out property, so `Rune.App.csproj` now references the six sub-packages Rune
+  actually needs. Size was the smaller half of the reason: an OAuth component and
+  an ML runtime sitting in a package whose Store listing and `runFullTrust`
+  justification both say "no network connections, collects no data" is a fair
+  question, and "the meta-package put it there" is not much of an answer. See §7
+  before touching it again.
+  **Security:** PDFium 152.0.7961 → **153.0.7988**, a full Chrome milestone of PDF
+  fixes. `SECURITY.md` added, pointing exploitable bugs at private vulnerability
+  reporting and drawing the line between a PDFium parser bug (Chromium's tracker)
+  and Rune's own code.
+  **Added: "Report a problem…"** in the menu — version, Store or portable,
+  Windows build, and where the log is. `ErrorLog` had been writing to
+  `%LOCALAPPDATA%\Rune` from eleven call sites since v0.4.1 with nothing in the
+  app saying so, and with no telemetry by design that is the only route a crash
+  reaches anyone. Issue templates ask for the same details up front.
+  **Also:** winget turned out to already work through the `msstore` source, so it
+  needed a README line and not a project; `MaxVersionTested` was two Windows
+  builds behind. 244 → 301 tests. **Signature resize was attempted and backed
+  out** — see §11 for the measurements, since the obvious approach works once and
+  then compounds.
 - **v0.5.1** (2026-08-08) — signature import that actually works on a photo.
   **Added:** `SignatureMatte`, an adaptive local matte that keys the paper out
   of a photographed or scanned signature automatically — tiled 90th-percentile
@@ -712,26 +780,43 @@ because each one's cause is worth remembering.
 
 ## 11. Roadmap (not yet built)
 
-- **Typed signatures** (a script font) — Draw and Import shipped; typing is the
-  least convincing of the three and is easy to add to `SignaturePad` later.
 - **Resize handles on a placed signature** — size is chosen before placement
   (click = last-used width, drag = custom, wheel = scale the preview) and a
-  placed signature can be dragged to a new spot, but not resized. PDFium
-  translates a stamp's appearance to the rect without scaling it, so resizing
-  has to go through delete-and-re-create — which needs the pixels, and those are
-  only retained for a stamp Rune placed in this session. See
-  `PdfDocument.Stamps.cs` for the measurement.
+  placed signature can be dragged to a new spot, but not resized.
+
+  **Attempted in v0.6.0 and backed out.** Worth reading before trying again,
+  because the obvious route works and then fails on the second call:
+
+  - Resizing by matrix *nearly* works and needs no pixels at all. Bind
+    `FPDFPageObj_SetMatrix` (absolute, unlike the already-bound
+    `FPDFPageObj_Transform`), reach the appearance via `FPDFAnnot_GetObject`,
+    write `[w 0 0 h l b]`, and then `FPDFAnnot_UpdateObject` — that last call is
+    mandatory, since the appearance stream is what gets drawn and it does not
+    follow the object.
+  - **The blocker:** each `UpdateObject` re-serializes the appearance while
+    keeping the old `/BBox`, and PDFium maps that BBox onto the annotation rect
+    when drawing. So the scale compounds. A single resize is exact; the second
+    one comes out at half what was asked for. Measured: place 200×80 → correct;
+    resize to 400×160 → correct; resize back to 200×80 → drawn at 100×40, with
+    `GetMatrix` reading back the correct `[200 0 0 80 …]`. Reordering rect and
+    appearance writes does not help.
+  - `FPDFAnnot_SetAP(annot, NORMAL, null)` to clear the stale BBox first
+    **destroys the objects with it** — `GetAnnotObjectCount` then returns 0 and
+    nothing draws.
+  - Delete-and-re-create avoids all of it but needs the pixels, and
+    `CaptureAnnotation` deliberately returns null for subtype 13 because PDFium
+    will not hand them back. It would need a session-side `StampImage` cache
+    keyed by page and annotation index, and would then only ever resize stamps
+    placed in the current session — never one that was already in the file.
+
+  So the two candidate designs are: a session pixel cache with the
+  session-only limitation, or finding the right incantation to reset the
+  appearance BBox without dropping the objects.
 - **Form JavaScript** — needs a V8-enabled PDFium build (`bblanchon.PDFium.V8.*`,
   a one-line csproj swap for a much larger binary). Without it, auto-calculating
   fields accept typed values but never recalculate.
-- **Form filling, annotation and signing while rotated** — every interactive
-  path still early-returns when `_rotation != 0`, including the whole signature
-  flow (place, select, move). `PdfiumNative.DeviceToPage` now takes a
-  rotation argument, but the viewer's `ToPageLocal`/`HighlightRect` still assume
-  the unrotated view, and so do `PageText` and `AnnotationInfo`.
 - **Signature validation** — out of reach without a crypto stack. Rune reports
   only what the file claims plus byte-range coverage, and must never say "valid".
-- Page **extract** to a new file (reorder/delete/insert already shipped in v0.4)
 - More formats (ePub, CBZ — would need MuPDF; note AGPL implications)
 - **Code signing** — *solved for Store installs* (the Store re-signs). Still open
   for the portable zip: Azure Trusted Signing ~$10/mo. Deferred.
@@ -765,41 +850,63 @@ because each one's cause is worth remembering.
 
 ---
 
-## 13. Current state (2026-08-08)
+## 13. Current state (2026-08-09)
 
-- Working branch `fix/v0.6.0` (a label — the release is versioned **0.5.1**)
-  holds the signature-import work plus the fixes listed in §9.
-- **`origin/main` is behind, and merging must happen BEFORE the Store
-  submission.** `main` still carries `UpdateService.cs` and a `PRIVACY.md` that
-  describes the portable build's GitHub API check, while `docs/store-listing.md`
-  tells Partner Center there is "no networking code in the application" — and
-  the privacy-policy URL submitted for certification points at `main`. The
-  pre-submission security pass (`eca53e4`) never landed there; PR #7 merged only
-  as far as `e712901`.
-- **Security pass (v0.5.0):** PDFium bumped 152.0.7934 → **152.0.7961**
-  (two builds of Chrome's PDF fixes); `UpdateService` deleted, so the app now has
-  no networking code at all; whole-page render size clamped against an `int`
-  overflow reachable from a hostile MediaBox via print; the Partner Center email
-  and local `C:\Users\…` paths removed from this file; `permissions: contents:
-  read` added to CI.
-- **244 tests passing**; x64 and ARM64 Release builds clean. CI now builds both
-  architectures — it was x64-only, so an ARM64 break could have reached the
-  Store unseen.
-- **GitHub releases: latest published is still v0.4.0**, two versions behind the
-  Store. Neither v0.4.1 nor v0.5.0 was ever tagged.
-- Microsoft Store: **live** at product `9NH37840QDM6`, currently **v0.5.0**.
-  The 0.5.1 bundle is **not yet built**; `artifacts/store/` still holds 0.4.1.
-- Store screenshots were re-shot against v0.5.0 (`3058f5e`), and `07-signature`
-  covers the import flow this release adds.
-- **README rebuilt** on the store-screenshot set: `01-reading-light` as a hero,
-  then a 2×2 grid of `02`, `03`, `04`, `07`. The Store CTA is now Microsoft's own
-  badge from `get.microsoft.com`, in a `<picture>` so it follows the reader's
-  GitHub theme, and `assets/rune.svg` finally appears on the page. The
-  release-version shields badge was dropped: it advertised v0.4.0 while the Store
-  shipped v0.5.0. Prose was rewritten to carry **no em dashes** and the 24-bullet
-  feature dump was regrouped under Reading / Markup / Signing / Forms / Pages.
-- `docs/screenshot-dark.png` / `screenshot-night.png` (the old README pair) were
-  **deleted**. They showed real document filenames in the tab strip and a v0.2-era
-  UI. The earlier decision to keep them stood only while nothing better was on the
-  page; the store set replaces them, so keeping stale unreferenced copies of a
-  filename leak had no upside.
+- Working branch **`v0.6.0`**, branched from `origin/main` (which was ahead of
+  the local `main` — PR #10 had merged there). Seven commits, listed in §9.
+- **Nothing has been published.** No tag, no GitHub release, no Store bundle.
+  Per §12 that all waits for the user.
+- **301 tests passing**; x64 and ARM64 Release both build clean.
+- **PDFium 153.0.7988** (was 152.0.7961).
+- **Package set changed** — `Microsoft.WindowsAppSDK` is no longer referenced;
+  see §7 before upgrading the SDK. Portable zip measured at **69.4 MB** (was
+  ~88 MB); the Store bundle has not been rebuilt, so its new size is unmeasured.
+- **Version bumped to 0.6.0** in both `Rune.App.csproj` and
+  `Package.appxmanifest`.
+
+### Still to do before submitting
+
+1. **Check the live Store description in Partner Center.** `winget show --id
+   9NH37840QDM6 --source msstore` reads back a description with no
+   forms/signing/flatten bullets that does **not** open with the .NET / Windows
+   App SDK disclosure. The 30 July certification report ("Pass with required
+   fix", policy 10.2.4.1) requires that disclosure in the first two lines. The
+   corrected copy is in `docs/store-listing.md`; it may never have been pasted
+   in. This is a Partner Center UI check and cannot be done from the repo.
+2. **Two Store screenshots** still unshot (page-editing sidebar, shortcuts
+   overlay) — see `docs/store-listing.md`. §8b's rules apply: empty Rune
+   profile, licence-safe document, 1920×1080.
+3. **Store listing copy** needs the v0.6.0 additions: extract, typed
+   signatures, and that everything now works while rotated.
+4. **GitHub Releases is still at v0.4.0** while the Store shipped 0.5.0. 0.4.1,
+   0.5.0 and 0.5.1 were never tagged; simplest honest option is to publish
+   v0.6.0 and say in the notes that the intervening versions went out through
+   the Store.
+
+### Verified by driving the app, and what was not
+
+Rotation was checked on screen at all four rotations: a find hit lands exactly
+on its word and moves to the correct corner as the view turns (top-left →
+top-right → bottom-right → bottom-left), and hits now survive the turn. Typed
+signatures were checked end to end: typed, saved to the reusable list, placed on
+the page with transparency intact. The trimmed package was checked by launching
+it, including night mode, which is the sharpest single test because it goes
+through Win2D's `InvertEffect`.
+
+**Not verified on screen: drag-to-select, click-to-fill-a-form and
+drag-to-place-a-signature while rotated.** Injected pointer input reaches XAML
+controls in this environment but not the Win2D `CanvasVirtualControl`, so those
+gestures cannot be scripted here — a right-click on the page produces no context
+menu even though the same injection works on sidebar items. They need a human
+with a mouse. `PageRotationParityTests` covers the same arithmetic by
+cross-checking `PageRotationTransform` against PDFium's own
+`FPDF_DeviceToPage` on a real page at all four rotations, which is why the code
+is trustworthy without them, but it is not the same as clicking.
+
+A reusable driver script (DPI-aware `SendInput` + `PrintWindow`) lives in the
+session scratchpad. Two traps worth remembering if it is rebuilt: the `INPUT`
+struct must be exactly 40 bytes on x64 or `SendInput` fails with
+`ERROR_INVALID_PARAMETER`, and the process must declare per-monitor DPI
+awareness or `GetWindowRect` returns logical coordinates while `PrintWindow`
+renders physical pixels, silently cropping every capture to the left ~80% of the
+window.

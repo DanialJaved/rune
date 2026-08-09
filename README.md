@@ -57,7 +57,8 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 
 ### Signing
 
-- Draw a signature with the mouse or a pen, or photograph one on paper and import it. **Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document
+- Draw a signature with the mouse or a pen, type it in a handwriting face, or photograph one on paper and import it. **Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document
+- Typed signatures use the handwriting fonts Windows already has, so nothing extra is downloaded and the app stays small
 - The matting runs entirely on your machine. Nothing is uploaded and no online service is involved
 - A semi-transparent preview follows the cursor so you can see exactly where it will land. Scroll to size it, click to place it, drag it afterwards if it isn't quite right
 - Saved signatures are reusable and stay on your machine
@@ -73,6 +74,7 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 ### Pages and keyboard
 
 - Page editing in the thumbnail sidebar: multi-select, drag to reorder, `Delete`, and copy, cut and paste pages across open tabs. Drop a PDF onto the sidebar to insert its pages
+- Extract the pages you have selected to a new file, leaving the document you are reading untouched
 - Command palette (`Ctrl+K`) with fuzzy filtering and go-to-page
 - Shortcuts overlay (`F1`) listing every binding in two columns
 - Bookmarks (`Ctrl+B`): name a page, jump back to it later, saved per document
@@ -155,9 +157,9 @@ The debug build is an unpackaged self-contained exe, so you can just run it.
 
 ## Roadmap
 
-**Next:** typed signatures in a handwriting font (draw and import already ship), resizing a signature after placing it, colour and size for form-filling text, page extraction to a new file, more formats (ePub, CBZ), code signing for the portable build, smaller packages.
+**Next:** resizing a signature after placing it, colour and size for form-filling text, more formats (ePub, CBZ), code signing for the portable build, smaller packages still.
 
-**Known limits:** form JavaScript needs a V8-enabled PDFium build; text selection, annotation, form filling **and the whole signature flow** are disabled while the view is rotated; a signature can be moved after placing but not resized; signature *validation* would need a cryptography stack Rune doesn't ship.
+**Known limits:** form JavaScript needs a V8-enabled PDFium build; a signature can be moved after placing but not resized; signature *validation* would need a cryptography stack Rune doesn't ship.
 
 ## License
 

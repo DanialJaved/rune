@@ -27,7 +27,7 @@ body:
     id: steps
     attributes:
       label: Steps to reproduce
-      description: Number them if you can. "It happens sometimes" is still worth filing — say what you noticed.
+      description: Number them if you can. "It happens sometimes" is still worth filing, so say what you noticed.
       placeholder: |
         1. Open any PDF
         2. Press Ctrl+R
@@ -83,7 +83,7 @@ body:
       description: |
         A file that reproduces the problem is worth more than everything else
         combined. Drag it in to attach it. Please do not upload anything
-        confidential — if the file is private, say so and describe it instead
-        (how many pages, scanned or digital, forms, a signature).
+        confidential. If the file is private, say so and describe it instead:
+        how many pages, scanned or digital, forms, a signature.
     validations:
       required: false

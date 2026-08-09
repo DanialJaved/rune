@@ -37,9 +37,9 @@ reporting:
   Those are best reported to the [Chromium tracker](https://issues.chromium.org/),
   where they reach the people who maintain the parser and get picked up by every
   downstream project. Tell us too, so Rune can pin a fixed build.
-- **Anything in Rune's own code** — the P/Invoke layer, file handling, saving,
-  annotation and signature writing, the state and signature stores under
-  `%LOCALAPPDATA%\Rune` — is ours. Report it here.
+- **Anything in Rune's own code** is ours: the P/Invoke layer, file handling,
+  saving, annotation and signature writing, and the state and signature stores
+  under `%LOCALAPPDATA%\Rune`. Report those here.
 
 Rune keeps its PDFium pin current for exactly this reason: PDFium releases carry
 Chrome's PDF security fixes, and a stale pin is the largest avoidable risk in the
