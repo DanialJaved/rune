@@ -52,9 +52,11 @@ Flow Launcher.
 ```
 src/
   Rune.PdfiumInterop/   Thin P/Invoke bindings over pdfium.dll
-    NativeMethods.cs      Raw [DllImport] signatures (fpdfview/doc/text/annot/save)
+    NativeMethods.cs      Raw [DllImport] signatures (fpdfview/doc/text/annot/edit/save)
     PdfiumNative.cs       Public facade so the engine never touches DllImports
     PdfiumLibrary.cs      Global FPDF_InitLibrary + the serialization lock
+    PdfiumFormEnvironment.cs  FPDF_FORMFILLINFO callbacks — the only way to set a
+                          field value, since FPDFAnnot_SetFormFieldValue does not exist
     FileAccessAdapter.cs  FPDF_FILEACCESS bridge → lazy FileStream reads (huge/Unicode paths)
     PdfiumException.cs     Maps FPDF_GetLastError to friendly messages
 
@@ -63,11 +65,26 @@ src/
     PdfDocument.Annotations.cs  AddMarkup/AddNote/AddInk/GetAnnotations/RemoveAnnotation/
                           Capture+RestoreAnnotation (undo)/SaveAs/IsDirty
     PdfDocument.Pages.cs  DeletePages/MovePages/ExportPages/InsertPages(FromFile)/RestoreMovedPages
+    PdfDocument.PageCache.cs  Stable FPDF_PAGE handles across operations (v0.5.0) —
+                          PDFium needs one page handle to survive keystrokes
+    PdfDocument.Forms.cs  AcroForm fill: FormClick/FormChar/field geometry, XFA detection
+    PdfDocument.Stamps.cs Image stamps: AddStamp/MoveAnnotation/ResizeStamp/
+                          TryReadStampImage (the signature mechanism)
+    PdfDocument.Flatten.cs   FPDFPage_Flatten — bakes annotations into page content
+    PdfDocument.Signatures.cs  Read-only report of what a signed file CLAIMS. Never verifies.
+    SignatureMatte.cs     Keys the paper out of a photographed signature; also the
+                          shared BGRA helpers (premultiply, crop, quarter-turn rotate)
+    SignatureCoverage.cs  /ByteRange arithmetic: does a signature cover the whole file
     RenderScheduler.cs    THE single render thread + priority op queue (see §4)
     PageText.cs           Per-page text + char boxes → managed selection hit-testing
     PageLayout.cs         Immutable vertical-stack layout (zoom/rotation, min viewport w/h)
+    PageRotationTransform.cs  Unrotated page space ↔ the drawn box (v0.6.0). The reason
+                          selection/forms/signing work while rotated — see §9
+    ViewRotationMath.cs   Quarter-turn normalization (C# % keeps the left operand's sign)
+    ZoomAnchor.cs         Keeps the point under the cursor still while zooming
     Tiles.cs              TileKey + TileMath (MaxSingleTilePx = 1024 — see §7 gotcha)
     PageBitmap.cs         Pooled BGRA pixel buffer (ArrayPool)
+    ThumbnailMetrics.cs   Aspect-correct thumbnail box sizing
     DipRect.cs            Simple rect struct in device-independent px
     OutlineItem.cs        TOC node model
     PdfLink.cs            Clickable-link model
@@ -75,6 +92,7 @@ src/
     DocumentSearch.cs     Full-document text search (routes through the op queue)
     UndoStack.cs          Bounded per-document undo/redo stack (generic)
     BookmarkRemap.cs      Pure page-index remap math (delete/insert/move)
+    ErrorLog.cs           Append-only crash log; every method swallows its own failures
     AppState.cs           RecentFile(+Bookmarks)/SessionState/AppSettings/AppState/AppStateStore
                           (namespace Rune.Services — physically here so it's unit-testable)
 
@@ -83,23 +101,34 @@ src/
                           merges Styles/Tokens.xaml + Styles/Controls.xaml
     MainWindow.xaml(.cs)  Shell: TabView-in-titlebar, SLIM header + hamburger menu,
                           floating zoom pill, find bar, presentation/shortcuts/bookmark/
-                          undo wiring, settings/palette, drag-drop, homepage grid
+                          undo wiring, settings/palette, drag-drop, homepage grid,
+                          page extract, "Report a problem"
+    MainWindow.Tools.cs   The annotation toolbar's tool flyouts (pen/highlighter/sign)
     ShortcutCatalog.cs    Single source of truth for the F1 shortcuts overlay
     Styles/Tokens.xaml, Styles/Controls.xaml   spacing scale + shared control styles
+    Styles/RuneColors.cs  Every colour Win2D draws (XAML uses {ThemeResource})
     Controls/
       PdfViewer.xaml(.cs)     The viewport: Win2D canvas, virtualized scroll, zoom,
                               tiles, text selection, search, links, ink, night mode,
                               page-mutation refresh, annotation undo events
+      PdfViewer.Forms.cs      Form-field hit-testing, keystroke routing, field borders
+      PdfViewer.Signature.cs  Arming, the hover ghost, placement
+      PdfViewer.SignatureSelection.cs  Selecting a placed stamp: move + resize handles
       DocumentView.xaml(.cs)  Per-tab: viewer + sidebar (thumbnails/chapters/bookmarks
-                              switcher), page editing (reorder/delete/clipboard/insert),
-                              undo stack owner, lazy open, save-in-place
+                              switcher), page editing (reorder/delete/clipboard/insert/
+                              extract), undo stack owner, lazy open, save-in-place
+      SignaturePad.xaml(.cs)  The Add-a-signature dialog: draw, type or import
+      SignatureFonts.cs       Which of Windows' handwriting faces this PC actually has
+      NoticeHost.xaml(.cs)    The app's ONLY message surface (floating card, v0.5.0)
       PresentationView.xaml(.cs) F5 fullscreen one-page-at-a-time overlay (tiled)
       CommandPalette.xaml(.cs) Ctrl+K fuzzy command palette
-      BookmarkItem.cs, AnnotationEdit.cs, ThumbnailItem.cs, OutlineNode.cs, RecentCard.cs
+      BookmarkItem.cs, AnnotationEdit.cs, AnnotationTool.cs, ThumbnailItem.cs,
+      OutlineNode.cs, RecentCard.cs
     Services/
       DialogHost.cs           Serializes every ContentDialog (WinUI allows ONE — see §7)
       PageClipboard.cs        App-wide page clipboard (serialized bytes, cross-tab)
       PrintService.cs         PrintManagerInterop + PrintDocument (live preview, page ranges)
+      SignatureStore.cs       Saved signatures as PNGs under %LOCALAPPDATA%\Rune
       ThumbnailCache.cs       Homepage first-page thumbnails (disk-cached PNGs)
     Package.appxmanifest      Store identity + .pdf file-type association (§8b)
     Assets/                   rune.ico + MSIX visual assets (generated)
@@ -114,14 +143,14 @@ tools/
 docs/
   store-listing.md      Store submission copy: description, search terms, age
                         rating answers, runFullTrust justification, screenshot plan
-  store-screenshots/    6 × 1920×1080 PNGs for the Store listing
+  store-screenshots/    7 × 1920×1080 PNGs for the Store listing (2 more still to shoot)
+.github/
+  workflows/ci.yml      Build x64 + ARM64, run tests, permissions: contents: read
+  ISSUE_TEMPLATE/       Bug and feature forms + a link to private vuln reporting
 PRIVACY.md              Required by the Store (live URL is checked at cert time)
+SECURITY.md             Where to report a parser bug, and the PDFium/Rune boundary
+THIRD-PARTY-NOTICES.md  Ships inside every binary (PDFium's licence requires it)
 ```
-
-Engine files added in v0.4.x worth knowing about: `ErrorLog.cs` (crash log,
-never throws), `ViewRotationMath.cs` (negative quarter-turn normalization),
-`ThumbnailMetrics.cs` (aspect-correct box sizing), `BookmarkRemap.cs`,
-`UndoStack.cs`, `PageText.cs`.
 
 ---
 
@@ -228,6 +257,9 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 - **Flatten** (`PdfDocument.Flatten`): bakes annotations and form values into
   page content for a fixed, non-editable copy.
 - Session restore; printing with preview + page ranges; document properties
+- **Report a problem** (menu): version, Store vs portable, Windows build, and the
+  path to `errors.log`, with buttons to the issue tracker and the log folder.
+  With no telemetry by design this is the only route a crash reaches anyone.
 
 ### Keyboard shortcuts (see `ShortcutCatalog.cs` for the authoritative list)
 | Action | Keys |
@@ -768,9 +800,12 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
 
 ## 10. Known bugs
 
-None open. The three v0.4.1 bugs below, and the two zoom/blur bugs found while
-using v0.5.0 (see §9), were all fixed in v0.5.0; kept here with their fixes
-because each one's cause is worth remembering.
+**None open.** Everything below is fixed, kept because each cause is worth
+remembering. The three v0.4.1 bugs are listed in full; the rest have their
+post-mortems in §9 — the two zoom/blur bugs and the invisible hover ghost
+(v0.5.x), and in v0.6.0 the fourteen rotation guards, `Rotate()` discarding the
+user's find results, and a typed-signature preview that inherited the dialog's
+white foreground onto white paper.
 
 1. ~~Navigation keys go dead after clicking a tab or the page-number box.~~
    **Fixed.** `PdfViewer` is now `IsTabStop = true` and takes focus on pointer
@@ -793,6 +828,10 @@ because each one's cause is worth remembering.
 
 ## 11. Roadmap (not yet built)
 
+- **Colour and size for form-filling text** — typed values currently take the
+  field's own default appearance. Changing it means rewriting the widget's `/DA`
+  string, which PDFium exposes only through the generic annotation string
+  setters; expect to write the `/DA` grammar by hand.
 - **Form JavaScript** — needs a V8-enabled PDFium build (`bblanchon.PDFium.V8.*`,
   a one-line csproj swap for a much larger binary). Without it, auto-calculating
   fields accept typed values but never recalculate.
@@ -818,8 +857,11 @@ because each one's cause is worth remembering.
   allowed, so a PR isn't strictly required — but recent work has gone through
   PRs (#2–#5) and that reads well on a public repo.
 - Verify features by **driving the real app** (screenshots), not just tests, for
-  anything with a runtime surface — then commit. This session, on-screen checks
-  caught three bugs that compiled and passed 118 tests.
+  anything with a runtime surface — then commit. On-screen checks caught three
+  bugs in v0.4.1 that compiled and passed 118 tests, and two more in v0.6.0 (a
+  preview drawn white-on-white, and `Rotate()` throwing away the user's find
+  results). **Read §13's harness notes before writing a driver** — two of those
+  traps cost an hour each and both look like app bugs rather than harness bugs.
 - **The Store is the promoted install path.** GitHub carries the portable zip
   only, shipped unsigned with the SAC/SmartScreen limitation documented honestly.
   Store builds are signed by Microsoft.
@@ -834,7 +876,8 @@ because each one's cause is worth remembering.
 ## 13. Current state (2026-08-09)
 
 - Working branch **`v0.6.0`**, branched from `origin/main` (which was ahead of
-  the local `main` — PR #10 had merged there). Seven commits, listed in §9.
+  the local `main` — PR #10 had merged there). Eight commits; §9 has the
+  release notes.
 - **Nothing has been published.** No tag, no GitHub release, no Store bundle.
   Per §12 that all waits for the user.
 - **312 tests passing**; x64 and ARM64 Release both build clean.
@@ -856,13 +899,18 @@ because each one's cause is worth remembering.
    in. This is a Partner Center UI check and cannot be done from the repo.
 2. **Two Store screenshots** still unshot (page-editing sidebar, shortcuts
    overlay) — see `docs/store-listing.md`. §8b's rules apply: empty Rune
-   profile, licence-safe document, 1920×1080.
-3. **Store listing copy** needs the v0.6.0 additions: extract, typed
-   signatures, and that everything now works while rotated.
-4. **GitHub Releases is still at v0.4.0** while the Store shipped 0.5.0. 0.4.1,
+   profile, licence-safe document, 1920×1080. Worth adding a third now: a
+   selected signature with its resize handles showing.
+3. **GitHub Releases is still at v0.4.0** while the Store shipped 0.5.0. 0.4.1,
    0.5.0 and 0.5.1 were never tagged; simplest honest option is to publish
    v0.6.0 and say in the notes that the intervening versions went out through
    the Store.
+4. **Rebuild the Store bundle and measure it.** The old figure was ~106 MB and
+   the package set changed underneath it, so that number is stale.
+
+`docs/store-listing.md` is already updated for v0.6.0 (extract, typed
+signatures, resize, and that everything works while rotated) — it just has to be
+pasted into Partner Center along with the fix in item 1.
 
 
 ### Verified by driving the app
