@@ -9,7 +9,6 @@ using Microsoft.UI.Xaml.Shapes;
 using Rune.Engine;
 using Rune.Services;
 using Windows.Foundation;
-using Windows.Storage.Pickers;
 using Windows.UI;
 
 namespace Rune.Controls;
@@ -328,60 +327,82 @@ public sealed partial class SignaturePad : UserControl
     private async void ImportButton_Click(object sender, RoutedEventArgs e) => await StartImportAsync();
 
     /// <summary>
-    /// Runs the picker and loads the chosen image. Public so the Sign flyout's
-    /// "Import image…" can open this dialog straight into the picker.
+    /// A picked image, or the reason there isn't one. All three states matter:
+    /// an image to show, a failure to report, or a cancel that says nothing.
     /// </summary>
-    public async Task StartImportAsync()
+    public readonly record struct ImportOutcome(SavedSignature? Image, string? Failure);
+
+    /// <summary>
+    /// Picks a file and decodes it, touching no XAML, so it can run *before* the
+    /// dialog that will show it exists.
+    ///
+    /// That ordering is the point. This used to run from the dialog's Opened
+    /// event, which fired an out-of-process picker from inside a ContentDialog's
+    /// open transition — see PROJECT.md §10 for the E_FAIL that came out of it.
+    /// Picking first and building the pad around the answer has no such window,
+    /// and it stops an empty pad flashing behind the picker or being left
+    /// stranded when the picker is cancelled.
+    /// </summary>
+    public static async Task<ImportOutcome> PickImportAsync(nint owner)
     {
-        LastFailure = null;
+        var picked = await FilePickerHost.PickOpenAsync(owner, ".png", ".jpg", ".jpeg");
+        if (picked.Failed)
+        {
+            // The picker never opened, so this is emphatically not a bad image.
+            // Saying "that image couldn't be read" here sent the last person who
+            // hit it looking at their photo instead of at Windows.
+            return new ImportOutcome(null, FilePickerHost.FailureMessage);
+        }
+        if (picked.File is not { } file)
+        {
+            return default; // cancelled
+        }
+
         try
         {
-            await ImportAsync();
+            // Capped at decode time so WIC does the scaling. Past MaxSingleTilePx
+            // a bitmap silently fails to draw inside a CanvasVirtualControl
+            // session, which is where the on-page hover ghost lives — a 4000px
+            // phone photo would arm a signature that simply never appears.
+            //
+            // OpenReadAsync rather than the path: a picked file can be a OneDrive
+            // placeholder or a Phone Link item whose Path is empty.
+            using var stream = await file.OpenReadAsync();
+            var loaded = await SignatureStore.TryLoadAsync(stream, file.Path, TileMath.MaxSingleTilePx);
+            return loaded is null
+                ? new ImportOutcome(null, UnreadableCaption)
+                : new ImportOutcome(loaded, null);
         }
         catch (Exception ex)
         {
-            // Never allowed to escape. Both callers are async void — the button
-            // handler and the dialog's Opened event — where an unhandled
-            // exception takes the whole process down rather than failing the
-            // import. PickSingleFileAsync alone can throw for a second picker
-            // already open or a dead owner window.
-            Rune.Services.ErrorLog.Default.Write(nameof(SignaturePad), ex);
-            Fail(UnreadableCaption);
+            // Never allowed to escape: every caller is reached from async void,
+            // where this takes the process down rather than failing the import.
+            ErrorLog.Default.Write(nameof(SignaturePad), ex);
+            return new ImportOutcome(null, UnreadableCaption);
         }
     }
 
-    private async Task ImportAsync()
+    /// <summary>Runs the picker from inside the open pad, for its own Import button.</summary>
+    public async Task StartImportAsync()
     {
-        var picker = new FileOpenPicker();
-        picker.FileTypeFilter.Add(".png");
-        picker.FileTypeFilter.Add(".jpg");
-        picker.FileTypeFilter.Add(".jpeg");
-        // Mandatory in WinUI 3: a picker with no owner window never opens.
-        WinRT.Interop.InitializeWithWindow.Initialize(
-            picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!));
+        LastFailure = null;
+        ApplyImport(await PickImportAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!)));
+    }
 
-        var file = await picker.PickSingleFileAsync();
-        if (file is null)
+    /// <summary>
+    /// Shows a picked image, or reports why there is not one. A cancel does
+    /// neither, which is what makes it safe to call unconditionally.
+    /// </summary>
+    public void ApplyImport(ImportOutcome outcome)
+    {
+        if (outcome.Failure is { } failure)
         {
+            Fail(failure);
             return;
         }
-
-        // Capped at decode time so WIC does the scaling. Past MaxSingleTilePx a
-        // bitmap silently fails to draw inside a CanvasVirtualControl session,
-        // which is where the on-page hover ghost lives — a 4000px phone photo
-        // would arm a signature that simply never appears.
-        //
-        // OpenReadAsync rather than the path: a picked file can be a OneDrive
-        // placeholder or a Phone Link item whose Path is empty.
-        SavedSignature? loaded;
-        using (var stream = await file.OpenReadAsync())
+        if (outcome.Image is not { } loaded)
         {
-            loaded = await SignatureStore.TryLoadAsync(stream, file.Path, TileMath.MaxSingleTilePx);
-        }
-
-        if (loaded is null)
-        {
-            Fail(UnreadableCaption);
             return;
         }
 

@@ -7,7 +7,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Windows.ApplicationModel.DataTransfer;
-using Windows.Storage.Pickers;
 using Windows.System;
 using Windows.UI;
 
@@ -714,14 +713,13 @@ public sealed partial class MainWindow : Window
 
     private async void OpenButton_Click(object sender, RoutedEventArgs e)
     {
-        var picker = new FileOpenPicker();
-        picker.FileTypeFilter.Add(".pdf");
-
-        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-        var file = await picker.PickSingleFileAsync();
-        if (file is not null)
+        var picked = await FilePickerHost.PickOpenAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(this), ".pdf");
+        if (picked.Failed)
+        {
+            ShowError(FilePickerHost.FailureMessage);
+        }
+        else if (picked.File is { } file)
         {
             OpenOrActivate(file.Path);
         }
@@ -927,15 +925,17 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var picker = new FileSavePicker
+        var picked = await FilePickerHost.PickSaveAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(this),
+            Path.GetFileNameWithoutExtension(view.FilePath),
+            "PDF document",
+            ".pdf");
+        if (picked.Failed)
         {
-            SuggestedFileName = Path.GetFileNameWithoutExtension(view.FilePath),
-        };
-        picker.FileTypeChoices.Add("PDF document", [".pdf"]);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-
-        var file = await picker.PickSaveFileAsync();
-        if (file is null)
+            ShowError(FilePickerHost.FailureMessage);
+            return;
+        }
+        if (picked.File is not { } file)
         {
             return;
         }
@@ -994,15 +994,17 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var picker = new FileSavePicker
+        var picked = await FilePickerHost.PickSaveAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(this),
+            $"{Path.GetFileNameWithoutExtension(view.FilePath)} {view.SelectedPageRangeLabel()}",
+            "PDF document",
+            ".pdf");
+        if (picked.Failed)
         {
-            SuggestedFileName = $"{Path.GetFileNameWithoutExtension(view.FilePath)} {view.SelectedPageRangeLabel()}",
-        };
-        picker.FileTypeChoices.Add("PDF document", [".pdf"]);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-
-        var file = await picker.PickSaveFileAsync();
-        if (file is null)
+            ShowError(FilePickerHost.FailureMessage);
+            return;
+        }
+        if (picked.File is not { } file)
         {
             return;
         }

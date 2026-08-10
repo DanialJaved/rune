@@ -1073,12 +1073,13 @@ public sealed partial class DocumentView : UserControl
 
     private async Task PickAndInsertPdfAsync(int atIndex)
     {
-        var picker = new Windows.Storage.Pickers.FileOpenPicker();
-        picker.FileTypeFilter.Add(".pdf");
-        WinRT.Interop.InitializeWithWindow.Initialize(picker,
-            WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!));
-        var file = await picker.PickSingleFileAsync();
-        if (file is not null)
+        var picked = await Rune.Services.FilePickerHost.PickOpenAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!), ".pdf");
+        if (picked.Failed)
+        {
+            PageOpFailed?.Invoke(this, Rune.Services.FilePickerHost.FailureMessage);
+        }
+        else if (picked.File is { } file)
         {
             await InsertPdfFileAsync(file.Path, atIndex);
         }

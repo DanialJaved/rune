@@ -362,7 +362,32 @@ public sealed partial class MainWindow
     /// <param name="startWithImport">Run the file picker as soon as the dialog is up.</param>
     private async Task ShowSignatureDialogAsync(bool startWithImport = false)
     {
+        // Pick before the dialog exists, not from its Opened event. Firing an
+        // out-of-process picker from inside a ContentDialog's open transition is
+        // where the E_FAIL in PROJECT.md §10 came from, and it also flashed an
+        // empty pad behind the picker and left one stranded on cancel.
+        // PickImportAsync touches no XAML precisely so it can run this early.
+        var imported = default(SignaturePad.ImportOutcome);
+        if (startWithImport)
+        {
+            imported = await SignaturePad.PickImportAsync(
+                WinRT.Interop.WindowNative.GetWindowHandle(this));
+
+            // Cancelled the picker: they asked to import, not to draw, so an
+            // empty pad here is only a second dialog to dismiss. A *failure*
+            // still opens it, so the message has somewhere to land and the pad's
+            // own Import button is one click away.
+            if (imported is { Image: null, Failure: null })
+            {
+                return;
+            }
+        }
+
         var pad = new SignaturePad { RemoveBackground = _state.Settings.SignatureRemoveBackground };
+        // After the constructor: an image that already carries alpha unticks the
+        // box itself, and that has to win over the remembered setting.
+        pad.ApplyImport(imported);
+
         var dialog = new ContentDialog
         {
             Title = "Add a signature",
@@ -371,15 +396,6 @@ public sealed partial class MainWindow
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary,
         };
-
-        if (startWithImport)
-        {
-            // From Opened, not before ShowAsync — the picker needs the dialog
-            // already on screen behind it or it opens against a bare window.
-            // StartImportAsync swallows its own exceptions, which matters here:
-            // this is async void, so anything escaping would kill the process.
-            dialog.Opened += async (_, _) => await pad.StartImportAsync();
-        }
 
         var result = await ShowDialogAsync(dialog);
 
