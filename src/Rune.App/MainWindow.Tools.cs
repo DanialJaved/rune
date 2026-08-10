@@ -60,9 +60,10 @@ public sealed partial class MainWindow
     /// <summary>Opens a tool's options directly beneath its own button.</summary>
     private void ShowToolOptions(AnnotationTool tool)
     {
-        // The note and eraser have nothing to configure; opening an empty panel
-        // for them would just be a flash of chrome.
-        if (tool is AnnotationTool.Note or AnnotationTool.Eraser)
+        // The note, picture and eraser have nothing to configure; opening an
+        // empty panel for them would just be a flash of chrome. The picture tool
+        // shows a file picker instead, from its own button.
+        if (tool is AnnotationTool.Note or AnnotationTool.Image or AnnotationTool.Eraser)
         {
             return;
         }
@@ -513,8 +514,69 @@ public sealed partial class MainWindow
         SetActiveTool(AnnotationTool.Signature);
         foreach (var view in AllDocumentViews())
         {
-            view.Viewer.SetPendingSignature(bgra, width, height);
-            view.Viewer.SignatureWidthPt = _state.Settings.SignatureWidthPt;
+            view.Viewer.SetPendingStamp(bgra, width, height, "signature");
+            view.Viewer.PendingWidthPt = _state.Settings.SignatureWidthPt;
+        }
+    }
+
+    /// <summary>
+    /// The Image tool: pick a picture, then place it the way a signature is
+    /// placed. There is no options panel, so the button runs the picker.
+    /// </summary>
+    private async Task PickAndArmImageAsync()
+    {
+        var picked = await FilePickerHost.PickOpenAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(this),
+            ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff");
+
+        if (picked.Failed)
+        {
+            // The picker never opened, so this is emphatically not a bad image.
+            ShowError(FilePickerHost.FailureMessage);
+            return;
+        }
+        if (picked.File is not { } file)
+        {
+            return; // cancelled: arm nothing, say nothing
+        }
+
+        SavedSignature? loaded;
+        try
+        {
+            // Capped at decode time, like the signature import, because past
+            // MaxSingleTilePx a bitmap silently fails to draw inside the
+            // CanvasVirtualControl session the hover ghost lives in. OpenReadAsync
+            // rather than the path: a picked file can be a OneDrive placeholder.
+            using var stream = await file.OpenReadAsync();
+            loaded = await SignatureStore.TryLoadAsync(stream, file.Path, TileMath.MaxSingleTilePx);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Default.Write(nameof(MainWindow), ex);
+            loaded = null;
+        }
+
+        if (loaded is not { } image)
+        {
+            ShowError("That image could not be read.");
+            return;
+        }
+
+        ArmImage(image.Bgra, image.Width, image.Height);
+    }
+
+    /// <summary>Arms a picture on every open tab, at a width that suits it.</summary>
+    private void ArmImage(byte[] bgra, int width, int height)
+    {
+        SetActiveTool(AnnotationTool.Image);
+        foreach (var view in AllDocumentViews())
+        {
+            view.Viewer.SetPendingStamp(bgra, width, height, "image");
+            // Nothing chosen yet means size it from the picture rather than from
+            // a number a signature happened to leave behind.
+            view.Viewer.PendingWidthPt = _state.Settings.ImageWidthPt > 0
+                ? _state.Settings.ImageWidthPt
+                : view.Viewer.NaturalWidthPt(width);
         }
     }
 

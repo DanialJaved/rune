@@ -7,20 +7,27 @@ using Windows.Foundation;
 
 namespace Rune.Controls;
 
-// Selecting a signature that has already been placed, so it can be moved or
-// resized instead of erased and re-placed.
+// Selecting something already placed on the page, so it can be moved or resized
+// instead of erased and put back.
 //
-// Only stamps are selectable. Markup is anchored to the words it covers and
-// dragging it off them would be wrong, and ink is a path rather than a rect.
+// Only stamps are selectable, and Rune writes two kinds of them: a picture (a
+// signature, or an image the user placed) and a text box. Markup is anchored to
+// the words it covers and dragging it off them would be wrong, and ink is a path
+// rather than a rect.
 //
-// Resizing goes through PdfDocument.ResizeStamp, which re-creates the stamp
-// rather than editing its geometry — see that method for why editing the
-// appearance in place compounds. Corner handles are aspect-locked: a signature
-// stretched on one axis stops looking like the person's handwriting.
+// The two kinds select, move and delete identically. They differ in one place
+// only, and it is the interesting one: a picture is resized by scaling its
+// pixels, while text is resized by RE-RENDERING it at a new point size. That is
+// the whole reason for keeping text as text rather than as a picture of text.
+// Both keep the aspect ratio, since Rune does no line wrapping: the words break
+// where the user broke them, so width and height have to move together.
 public sealed partial class PdfViewer
 {
-    /// <summary>The selected stamp: which page, which annotation, and where it sits (page points).</summary>
-    private (int Page, int Index, Rect Local)? _selectedStamp;
+    /// <summary>
+    /// What is selected: which page, which annotation, where it sits (page
+    /// points), and which kind it is.
+    /// </summary>
+    private (int Page, int Index, Rect Local, StampKind Kind)? _selected;
 
     private bool _draggingStamp;
     private Point _stampDragStart;
@@ -40,25 +47,25 @@ public sealed partial class PdfViewer
     /// <summary>Handle size in DIPs. Big enough to grab, small enough not to swamp a short signature.</summary>
     private const double HandleSizeDip = 10;
 
-    /// <summary>No dimension below this, in page points — a stamp dragged to nothing cannot be grabbed again.</summary>
+    /// <summary>No dimension below this, in page points — an object dragged to nothing cannot be grabbed again.</summary>
     private const double MinStampPt = 12;
 
     private bool IsResizingStamp => _resizeCorner >= 0;
 
-    /// <summary>True while a placed signature is selected, so Esc and Delete can be claimed.</summary>
-    public bool HasSelectedSignature => _selectedStamp is not null;
+    /// <summary>True while something placed is selected, so Esc and Delete can be claimed.</summary>
+    public bool HasSelectedObject => _selected is not null;
 
     /// <summary>FPDF_ANNOT_SUBTYPE_STAMP.</summary>
     private const int StampSubtype = 13;
 
     /// <summary>Drops the selection. Returns true when there was one, so Esc can be consumed.</summary>
-    public bool ClearSignatureSelection()
+    public bool ClearObjectSelection()
     {
-        if (_selectedStamp is null)
+        if (_selected is null)
         {
             return false;
         }
-        _selectedStamp = null;
+        _selected = null;
         _draggingStamp = false;
         _resizeCorner = -1;
         Canvas.Invalidate();
@@ -68,12 +75,12 @@ public sealed partial class PdfViewer
     // ---- selection ----
 
     /// <summary>
-    /// Handles a press with no tool armed: selects a placed signature under the
+    /// Handles a press with no tool armed: selects a placed object under the
     /// pointer, or starts dragging one that is already selected. Returns true
     /// when the press was consumed.
     ///
     /// Runs before links and text selection but is deliberately narrow — only
-    /// a press actually inside a stamp's rect is taken, so ordinary text
+    /// a press actually inside an object's rect is taken, so ordinary text
     /// selection everywhere else on the page is untouched.
     /// </summary>
     private bool TryHandleStampPress(Point docPoint, Pointer pointer)
@@ -85,7 +92,7 @@ public sealed partial class PdfViewer
 
         // Dragging the current selection takes priority: no round-trip, and it
         // keeps the grab responsive on the very first move.
-        if (_selectedStamp is { } selected)
+        if (_selected is { } selected)
         {
             int page = _layout.PageAt(docPoint.Y);
             var local = ToPageLocal(page, docPoint);
@@ -139,11 +146,19 @@ public sealed partial class PdfViewer
         int page = _layout.PageAt(docPoint.Y);
         var local = ToPageLocal(page, docPoint);
 
-        IReadOnlyList<AnnotationInfo> annotations;
+        // The kind comes back on the same hop as the hit test. Asking for it
+        // separately would be a second round-trip on every click on a page.
+        (AnnotationInfo? Hit, StampKind Kind) found;
         try
         {
-            annotations = await _scheduler.RunAsync(
-                PdfWorkPriority.Interactive, () => document.GetAnnotations(page));
+            found = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+            {
+                var hit = document.GetAnnotations(page).LastOrDefault(a =>
+                    a.Subtype == StampSubtype &&
+                    local.X >= a.X && local.X <= a.X + a.Width &&
+                    local.Y >= a.Y && local.Y <= a.Y + a.Height);
+                return (hit, hit is null ? StampKind.None : document.GetStampKind(page, hit.Index));
+            });
         }
         catch
         {
@@ -154,18 +169,15 @@ public sealed partial class PdfViewer
             return;
         }
 
-        var hit = annotations.LastOrDefault(a =>
-            a.Subtype == StampSubtype &&
-            local.X >= a.X && local.X <= a.X + a.Width &&
-            local.Y >= a.Y && local.Y <= a.Y + a.Height);
+        // A stamp Rune cannot edit is not worth selecting: the handles would
+        // draw and then refuse every drag.
+        var next = found.Hit is { } hit && found.Kind != StampKind.None
+            ? (page, hit.Index, new Rect(hit.X, hit.Y, hit.Width, hit.Height), found.Kind)
+            : ((int Page, int Index, Rect Local, StampKind Kind)?)null;
 
-        var next = hit is null
-            ? (( int Page, int Index, Rect Local)?)null
-            : (page, hit.Index, new Rect(hit.X, hit.Y, hit.Width, hit.Height));
-
-        if (next?.Index != _selectedStamp?.Index || next?.Page != _selectedStamp?.Page)
+        if (next?.Index != _selected?.Index || next?.Page != _selected?.Page)
         {
-            _selectedStamp = next;
+            _selected = next;
             Canvas.Invalidate();
         }
     }
@@ -205,12 +217,12 @@ public sealed partial class PdfViewer
 
     /// <summary>
     /// Live preview of a corner drag. Aspect-locked: the pointer's distance from
-    /// the anchor sets the width and the height follows, so a signature keeps its
+    /// the anchor sets the width and the height follows, so the object keeps its
     /// proportions however the corner is dragged. Committing happens on release.
     /// </summary>
     private void UpdateStampResize(Point docPoint)
     {
-        if (!IsResizingStamp || _selectedStamp is not { } selected || _layout is null)
+        if (!IsResizingStamp || _selected is not { } selected || _layout is null)
         {
             return;
         }
@@ -222,7 +234,7 @@ public sealed partial class PdfViewer
         double width = Math.Abs(local.X - _resizeAnchor.X);
         double height = width / Math.Max(1e-6, _resizeAspect);
 
-        // Keep the whole stamp on the page. The anchor is fixed, so the room
+        // Keep the whole object on the page. The anchor is fixed, so the room
         // available is the distance from it to whichever edge the drag is
         // heading for.
         double roomX = local.X >= _resizeAnchor.X ? size.Width - _resizeAnchor.X : _resizeAnchor.X;
@@ -238,7 +250,7 @@ public sealed partial class PdfViewer
         double x = local.X >= _resizeAnchor.X ? _resizeAnchor.X : _resizeAnchor.X - width;
         double y = local.Y >= _resizeAnchor.Y ? _resizeAnchor.Y : _resizeAnchor.Y - height;
 
-        _selectedStamp = (selected.Page, selected.Index, new Rect(x, y, width, height));
+        _selected = (selected.Page, selected.Index, new Rect(x, y, width, height), selected.Kind);
         Canvas.Invalidate();
     }
 
@@ -246,7 +258,7 @@ public sealed partial class PdfViewer
     {
         _resizeCorner = -1;
 
-        if (_selectedStamp is not { } selected || _document is not { } document)
+        if (_selected is not { } selected || _document is not { } document)
         {
             return;
         }
@@ -254,13 +266,17 @@ public sealed partial class PdfViewer
         int page = selected.Page;
         int index = selected.Index;
         var box = selected.Local;
+        var kind = selected.Kind;
 
+        // A picture is re-created from its pixels; text is re-created from its
+        // words at a size in the ratio the box grew. Both come back as the same
+        // pair — where it now lives, and how to put the original back.
         (int NewIndex, AnnotationSpec Before)? result;
         try
         {
-            result = await _scheduler.RunAsync(
-                PdfWorkPriority.Interactive,
-                () => document.ResizeStamp(page, index, box.X, box.Y, box.Width, box.Height));
+            result = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () => kind == StampKind.Text
+                ? document.ResizeTextBox(page, index, box.X, box.Y, box.Width)
+                : document.ResizeStamp(page, index, box.X, box.Y, box.Width, box.Height));
         }
         catch
         {
@@ -269,26 +285,33 @@ public sealed partial class PdfViewer
         if (_document != document || result is not { } resized)
         {
             // Nothing changed in the file, so put the on-screen box back rather
-            // than leaving a selection that lies about the stamp's size.
-            RefreshSelectedStampFromDocument(page, index);
+            // than leaving a selection that lies about the object's size.
+            RefreshSelectedFromDocument(page, index, kind);
             return;
         }
 
-        // Re-creating appends, so the selection now points at a different index.
-        _selectedStamp = (page, resized.NewIndex, box);
+        _selected = (page, resized.NewIndex, box, kind);
+
+        if (kind == StampKind.Text)
+        {
+            // Text lands wherever PDFium measures it, which is close to the
+            // dragged box but not equal to it. Re-read rather than leave the
+            // selection frame sitting off the words it belongs to.
+            RefreshSelectedFromDocument(page, resized.NewIndex, kind);
+        }
 
         InvalidatePage(page);
         DocumentEdited?.Invoke(this, EventArgs.Empty);
 
         // A resize is a remove-and-re-create, so undo is the same shape: drop
-        // what is there now and rebuild the original from its spec. The stamp's
-        // pixels ride along in the spec, which is why SnapshotBytes is charged
-        // for them here, unlike a move.
+        // what is there now and rebuild the original from its spec. A picture's
+        // pixels ride along in that spec, which is why SnapshotBytes is charged
+        // for them here, unlike a move; text carries only its words.
         var before = resized.Before;
         int newIndex = resized.NewIndex;
         AnnotationEdited?.Invoke(this, new AnnotationEditEventArgs
         {
-            Label = "resize signature",
+            Label = kind == StampKind.Text ? "resize text" : "resize image",
             PageIndex = page,
             SnapshotBytes = before.Stamp?.Bgra.Length ?? 0,
             UndoAction = d =>
@@ -296,15 +319,28 @@ public sealed partial class PdfViewer
                 d.RemoveAnnotation(page, newIndex);
                 d.AddAnnotationFromSpec(before);
             },
-            RedoAction = d => d.ResizeStamp(page, d.GetAnnotations(page).Count - 1, box.X, box.Y, box.Width, box.Height),
+            RedoAction = d =>
+            {
+                // Undo appended the original, so the thing to resize again is
+                // the last annotation rather than the index it used to have.
+                int last = d.GetAnnotations(page).Count - 1;
+                if (kind == StampKind.Text)
+                {
+                    d.ResizeTextBox(page, last, box.X, box.Y, box.Width);
+                }
+                else
+                {
+                    d.ResizeStamp(page, last, box.X, box.Y, box.Width, box.Height);
+                }
+            },
         });
     }
 
     /// <summary>
-    /// Re-reads the selected stamp's rect from the document, for when an edit did
-    /// not go through and the preview has to be walked back.
+    /// Re-reads the selected object's rect from the document, for when an edit
+    /// changed it or did not go through and the preview has to be walked back.
     /// </summary>
-    private async void RefreshSelectedStampFromDocument(int page, int index)
+    private async void RefreshSelectedFromDocument(int page, int index, StampKind kind)
     {
         if (_document is not { } document)
         {
@@ -322,10 +358,10 @@ public sealed partial class PdfViewer
         }
         if (_document != document || annotations.ElementAtOrDefault(index) is not { } current)
         {
-            ClearSignatureSelection();
+            ClearObjectSelection();
             return;
         }
-        _selectedStamp = (page, index, new Rect(current.X, current.Y, current.Width, current.Height));
+        _selected = (page, index, new Rect(current.X, current.Y, current.Width, current.Height), kind);
         Canvas.Invalidate();
     }
 
@@ -333,25 +369,26 @@ public sealed partial class PdfViewer
 
     private void UpdateStampDrag(Point docPoint)
     {
-        if (!_draggingStamp || _selectedStamp is not { } selected || _layout is null)
+        if (!_draggingStamp || _selected is not { } selected || _layout is null)
         {
             return;
         }
 
         var local = ToPageLocal(selected.Page, docPoint);
-        // The stamp's rect is in the file's own axes, so the limits are the
+        // The object's rect is in the file's own axes, so the limits are the
         // page's unrotated size — the layout rect has them swapped on a
         // quarter turn, which would let a drag run off the short edge.
         var size = _pageSizes[selected.Page];
         double maxX = size.Width - selected.Local.Width;
         double maxY = size.Height - selected.Local.Height;
 
-        // Keep it on the page: a signature dragged past the edge would be
-        // clipped by every reader that opens the file.
+        // Keep it on the page: anything dragged past the edge would be clipped
+        // by every reader that opens the file.
         double x = Math.Clamp(local.X - _stampDragOffset.X, 0, Math.Max(0, maxX));
         double y = Math.Clamp(local.Y - _stampDragOffset.Y, 0, Math.Max(0, maxY));
 
-        _selectedStamp = (selected.Page, selected.Index, new Rect(x, y, selected.Local.Width, selected.Local.Height));
+        _selected = (selected.Page, selected.Index,
+            new Rect(x, y, selected.Local.Width, selected.Local.Height), selected.Kind);
         Canvas.Invalidate();
     }
 
@@ -359,7 +396,7 @@ public sealed partial class PdfViewer
     {
         _draggingStamp = false;
 
-        if (_selectedStamp is not { } selected || _document is not { } document)
+        if (_selected is not { } selected || _document is not { } document)
         {
             return;
         }
@@ -388,27 +425,27 @@ public sealed partial class PdfViewer
 
         // Undo restores the rect the move captured; redo simply replays the
         // move. Neither retains a bitmap — unlike an erase, which has to keep
-        // the pixels to rebuild the stamp — so SnapshotBytes stays 0.
+        // the pixels to rebuild a picture — so SnapshotBytes stays 0.
         AnnotationEdited?.Invoke(this, new AnnotationEditEventArgs
         {
-            Label = "move signature",
+            Label = "move",
             PageIndex = page,
             UndoAction = d => d.RestoreAnnotationRect(page, index, before),
             RedoAction = d => d.MoveAnnotation(page, index, x, y),
         });
     }
 
-    /// <summary>Removes the selected signature, reusing the eraser's capture-then-remove path.</summary>
-    public void DeleteSelectedSignature()
+    /// <summary>Removes the selected object, reusing the eraser's capture-then-remove path.</summary>
+    public void DeleteSelectedObject()
     {
-        if (_selectedStamp is { } selected && _layout is not null)
+        if (_selected is { } selected && _layout is not null)
         {
-            // The eraser hit-tests from a document point, so the stamp's centre
+            // The eraser hit-tests from a document point, so the object's centre
             // has to come back out through the view rotation to reach one.
             var centre = ToDocumentPoint(selected.Page,
                 selected.Local.X + selected.Local.Width / 2,
                 selected.Local.Y + selected.Local.Height / 2);
-            ClearSignatureSelection();
+            ClearObjectSelection();
             _ = EraseAnnotationAt(centre);
         }
     }
@@ -416,12 +453,12 @@ public sealed partial class PdfViewer
     // ---- painting ----
 
     /// <summary>
-    /// Frames the selected signature. Drawn after the page so it is never
-    /// inverted by night mode along with the tiles.
+    /// Frames the selected object. Drawn after the page so it is never inverted
+    /// by night mode along with the tiles.
     /// </summary>
     private void DrawStampSelection(CanvasDrawingSession session)
     {
-        if (_selectedStamp is not { } selected || _layout is null)
+        if (_selected is not { } selected || _layout is null)
         {
             return;
         }

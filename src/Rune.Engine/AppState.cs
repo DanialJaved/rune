@@ -78,6 +78,13 @@ public sealed class AppSettings
     public double SignatureWidthPt { get; set; } = 180;
 
     /// <summary>
+    /// The same for a placed picture, kept apart from the signature's because
+    /// the two are wanted at very different sizes. Zero means "not chosen yet",
+    /// which is what makes the first placement size itself from the image.
+    /// </summary>
+    public double ImageWidthPt { get; set; }
+
+    /// <summary>
     /// Key the paper out of an imported signature photo, so only the ink lands
     /// on the page. On by default: a photo of a signature is the common import,
     /// and without it the paper stamps as an opaque rectangle.

@@ -209,6 +209,14 @@
                     <FontIcon Glyph="&#xE8D2;" FontSize="{StaticResource IconGlyphSize}" />
                 </ToggleButton>
                 <ToggleButton
+                    x:Name="ImageToolButton"
+                    Style="{StaticResource IconToggleButtonStyle}"
+                    Click="ImageToolButton_Click"
+                    IsEnabled="False"
+                    ToolTipService.ToolTip="Picture — place an image on the page">
+                    <FontIcon Glyph="&#xEB9F;" FontSize="{StaticResource IconGlyphSize}" />
+                </ToggleButton>
+                <ToggleButton
                     x:Name="SignToolButton"
                     Style="{StaticResource IconToggleButtonStyle}"
                     Click="SignToolButton_Click"

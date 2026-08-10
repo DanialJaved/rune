@@ -2,6 +2,24 @@ using Rune.PdfiumInterop;
 
 namespace Rune.Engine;
 
+/// <summary>
+/// What a stamp annotation is actually carrying. Rune writes two kinds into the
+/// same subtype: a picture (a signature or a placed image) and a text box. They
+/// are selected and moved identically and resized differently, which is the only
+/// reason the caller has to ask.
+/// </summary>
+public enum StampKind
+{
+    /// <summary>Not a stamp, or a stamp with nothing Rune knows how to edit.</summary>
+    None,
+
+    /// <summary>Pixels: a signature, or an image the user placed.</summary>
+    Image,
+
+    /// <summary>Real text, resizable by re-rendering it.</summary>
+    Text,
+}
+
 // Image stamps — the mechanism behind visible signatures.
 //
 // A stamp is a subtype-13 annotation carrying an image object, rather than a
@@ -259,6 +277,71 @@ public sealed partial class PdfDocument
             try
             {
                 return ToPageRectLocked(page, pageIndex, x, y, widthPt, heightPt);
+            }
+            finally
+            {
+                ReleasePageLocked(pageIndex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// What kind of stamp sits at that index, by looking at the objects hanging
+    /// off it rather than at anything Rune wrote down. A picture and a text box
+    /// are the same subtype, so this is how a caller tells them apart.
+    /// </summary>
+    public StampKind GetStampKind(int pageIndex, int annotIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = AcquirePageLocked(pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return StampKind.None;
+            }
+            try
+            {
+                IntPtr annot = PdfiumNative.GetAnnot(page, annotIndex);
+                if (annot == IntPtr.Zero)
+                {
+                    return StampKind.None;
+                }
+                try
+                {
+                    if (PdfiumNative.GetAnnotSubtype(annot) != PdfiumNative.AnnotStamp)
+                    {
+                        return StampKind.None;
+                    }
+
+                    // The first object that is one of the two decides it. Rune
+                    // never writes both onto one annotation.
+                    int count = PdfiumNative.GetAnnotObjectCount(annot);
+                    for (int i = 0; i < count; i++)
+                    {
+                        IntPtr obj = PdfiumNative.GetAnnotObject(annot, i);
+                        if (obj == IntPtr.Zero)
+                        {
+                            continue;
+                        }
+                        if (PdfiumNative.IsImageObject(obj))
+                        {
+                            return StampKind.Image;
+                        }
+                        if (PdfiumNative.IsTextObject(obj))
+                        {
+                            return StampKind.Text;
+                        }
+                    }
+                    return StampKind.None;
+                }
+                finally
+                {
+                    PdfiumNative.CloseAnnot(annot);
+                }
             }
             finally
             {

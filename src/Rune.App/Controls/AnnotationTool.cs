@@ -32,6 +32,12 @@ public enum AnnotationTool
     /// </summary>
     Text,
 
+    /// <summary>
+    /// A picture from a file. Picking one arms it; click or drag places it,
+    /// exactly as a signature is placed, and with no paper keyed out of it.
+    /// </summary>
+    Image,
+
     /// <summary>Signature stamp. Drag defines the box to place it in.</summary>
     Signature,
 

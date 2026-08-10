@@ -226,9 +226,10 @@ public sealed partial class PdfViewer : UserControl
     private static Microsoft.UI.Input.InputSystemCursorShape CursorFor(AnnotationTool tool) => tool switch
     {
         AnnotationTool.Pen or AnnotationTool.Highlighter => Microsoft.UI.Input.InputSystemCursorShape.Cross,
-        // A note is placed at a point, and the eraser and signature both act on
-        // whatever is under the pointer — a hand reads as "click a thing".
-        AnnotationTool.Note or AnnotationTool.Signature => Microsoft.UI.Input.InputSystemCursorShape.Cross,
+        // A note, a picture and a signature are all placed at a point, so the
+        // crosshair says where the point is.
+        AnnotationTool.Note or AnnotationTool.Signature or AnnotationTool.Image
+            => Microsoft.UI.Input.InputSystemCursorShape.Cross,
         AnnotationTool.Eraser => Microsoft.UI.Input.InputSystemCursorShape.Hand,
         _ => Microsoft.UI.Input.InputSystemCursorShape.Arrow,
     };
@@ -929,7 +930,7 @@ public sealed partial class PdfViewer : UserControl
 
         // Plain wheel resizes the signature waiting to be placed. Only while one
         // is actually pending, so the wheel keeps scrolling the rest of the time.
-        if (!ctrl && TryResizePendingSignature(point.Properties.MouseWheelDelta))
+        if (!ctrl && TryResizePendingStamp(point.Properties.MouseWheelDelta))
         {
             e.Handled = true;
             return;
@@ -1287,9 +1288,9 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        if (_placingSignature)
+        if (_placingStamp)
         {
-            UpdateSignaturePlacement(doc);
+            UpdateStampPlacement(doc);
             e.Handled = true;
             return;
         }
@@ -1315,8 +1316,8 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        // Preview the pending signature under the cursor before it is placed.
-        if (UpdateSignatureHover(doc))
+        // Preview the pending picture under the cursor before it is placed.
+        if (UpdateStampHover(doc))
         {
             Canvas.Invalidate();
         }
@@ -1331,7 +1332,7 @@ public sealed partial class PdfViewer : UserControl
     private void Canvas_PointerExited(object sender, PointerRoutedEventArgs e)
     {
         // Leave no ghost stranded at the edge when the pointer goes elsewhere.
-        if (UpdateSignatureHover(null))
+        if (UpdateStampHover(null))
         {
             Canvas.Invalidate();
         }
@@ -1385,8 +1386,8 @@ public sealed partial class PdfViewer : UserControl
                 e.Handled = true;
                 return;
 
-            case AnnotationTool.Signature when HasPendingSignature:
-                BeginSignaturePlacement(docPoint, e.Pointer);
+            case AnnotationTool.Signature or AnnotationTool.Image when HasPendingStamp:
+                BeginStampPlacement(docPoint, e.Pointer);
                 e.Handled = true;
                 return;
         }
@@ -1451,9 +1452,9 @@ public sealed partial class PdfViewer : UserControl
             e.Handled = true;
             return;
         }
-        if (_placingSignature)
+        if (_placingStamp)
         {
-            CommitSignaturePlacement();
+            CommitStampPlacement();
             Canvas.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
             return;
@@ -2051,7 +2052,7 @@ public sealed partial class PdfViewer : UserControl
 
         DrawLiveInk(session);
         DrawStampSelection(session);
-        DrawSignatureGhost(session);
+        DrawStampGhost(session);
     }
 
     /// <summary>Draws the in-progress ink stroke as a polyline (committed once released).</summary>

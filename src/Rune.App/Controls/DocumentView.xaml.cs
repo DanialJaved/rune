@@ -854,8 +854,8 @@ public sealed partial class DocumentView : UserControl
             {
                 // Undo can move or remove the very annotation that is selected,
                 // and the selection frame is drawn from a cached rect — leaving
-                // it would strand an empty box where the signature used to be.
-                Viewer.ClearSignatureSelection();
+                // it would strand an empty box where the object used to be.
+                Viewer.ClearObjectSelection();
                 Viewer.InvalidatePage(edit.PageIndex);
             }
             PagesEdited?.Invoke(this, EventArgs.Empty);

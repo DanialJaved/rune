@@ -532,6 +532,49 @@ public static class PdfiumNative
     public static bool IsImageObject(IntPtr pageObject)
         => NativeMethods.FPDFPageObj_GetType(pageObject) == NativeMethods.FPDF_PAGEOBJ_IMAGE;
 
+    public static bool IsTextObject(IntPtr pageObject)
+        => NativeMethods.FPDFPageObj_GetType(pageObject) == NativeMethods.FPDF_PAGEOBJ_TEXT;
+
+    /// <summary>The size a text run was created at, or null when it cannot be read.</summary>
+    public static float? GetTextObjectFontSize(IntPtr textObject)
+        => NativeMethods.FPDFTextObj_GetFontSize(textObject, out float size) != 0 ? size : null;
+
+    /// <summary>
+    /// A text run's /BaseFont name, e.g. "Helvetica-BoldOblique", or null.
+    ///
+    /// The returned font handle is the document's, not a loaned one, so it is
+    /// deliberately never closed here — closing it would free a font the page
+    /// still draws with.
+    /// </summary>
+    public static string? GetTextObjectFontName(IntPtr textObject)
+    {
+        IntPtr font = NativeMethods.FPDFTextObj_GetFont(textObject);
+        if (font == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        uint length = NativeMethods.FPDFFont_GetBaseFontName(font, null, 0);
+        if (length <= 1)
+        {
+            return null; // 0 is failure, 1 is the terminator alone
+        }
+
+        var buffer = new byte[length];
+        if (NativeMethods.FPDFFont_GetBaseFontName(font, buffer, length) != length)
+        {
+            return null;
+        }
+        // ASCII, and the length PDFium reports includes the NUL.
+        return System.Text.Encoding.ASCII.GetString(buffer, 0, (int)length - 1);
+    }
+
+    /// <summary>An object's fill colour, or null when it paints with none.</summary>
+    public static (byte R, byte G, byte B, byte A)? GetObjectFillColor(IntPtr pageObject)
+        => NativeMethods.FPDFPageObj_GetFillColor(pageObject, out uint r, out uint g, out uint b, out uint a) != 0
+            ? ((byte)r, (byte)g, (byte)b, (byte)a)
+            : null;
+
     /// <summary>
     /// Reads an image object's pixels back as straight BGRA at its native size.
     ///

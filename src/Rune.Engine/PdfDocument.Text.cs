@@ -39,31 +39,77 @@ public sealed record TextBoxContent(
     public string[] Lines =>
         Text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
 
+    /// <summary>The PostScript name PDFium wants for this face.</summary>
+    public string PostScriptName => PostScriptNameFor(Font, Bold, Italic);
+
     /// <summary>
-    /// The PostScript name PDFium wants. Times is the awkward one: its regular
-    /// weight is "Times-Roman", not "Times", and its slanted face is "Italic"
-    /// where the other two families call it "Oblique".
+    /// Times is the awkward one: its regular weight is "Times-Roman", not
+    /// "Times", and its slanted face is "Italic" where the other two families
+    /// call it "Oblique".
     /// </summary>
-    public string PostScriptName => Font switch
+    public static string PostScriptNameFor(PdfStandardFont font, bool bold, bool italic) => font switch
     {
-        PdfStandardFont.Times => (Bold, Italic) switch
+        PdfStandardFont.Times => (bold, italic) switch
         {
             (true, true) => "Times-BoldItalic",
             (true, false) => "Times-Bold",
             (false, true) => "Times-Italic",
             _ => "Times-Roman",
         },
-        PdfStandardFont.Courier => Suffix("Courier"),
-        _ => Suffix("Helvetica"),
+        PdfStandardFont.Courier => Suffix("Courier", bold, italic),
+        _ => Suffix("Helvetica", bold, italic),
     };
 
-    private string Suffix(string family) => (Bold, Italic) switch
+    private static string Suffix(string family, bool bold, bool italic) => (bold, italic) switch
     {
         (true, true) => $"{family}-BoldOblique",
         (true, false) => $"{family}-Bold",
         (false, true) => $"{family}-Oblique",
         _ => family,
     };
+
+    /// <summary>
+    /// Reads a /BaseFont name back into the three things that produced it, or
+    /// null for a name Rune did not write.
+    ///
+    /// Deliberately implemented by generating every name and comparing, rather
+    /// than by a second switch that picks the string apart: the two directions
+    /// then cannot drift, and there are only twelve of them.
+    /// </summary>
+    public static (PdfStandardFont Font, bool Bold, bool Italic)? TryParsePostScriptName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        string wanted = StripSubsetPrefix(name.Trim());
+        foreach (var font in Enum.GetValues<PdfStandardFont>())
+        {
+            foreach (bool bold in new[] { false, true })
+            {
+                foreach (bool italic in new[] { false, true })
+                {
+                    if (PostScriptNameFor(font, bold, italic) == wanted)
+                    {
+                        return (font, bold, italic);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Drops an embedded-subset tag: six capitals and a plus, as in
+    /// "ABCDEF+Helvetica". The standard 14 are never subset, since they are
+    /// never embedded, but a file that has been through another tool on the way
+    /// back is not Rune's to assume about.
+    /// </summary>
+    private static string StripSubsetPrefix(string name) =>
+        name.Length > 7 && name[6] == '+' && name.Take(6).All(c => c is >= 'A' and <= 'Z')
+            ? name[7..]
+            : name;
 }
 
 // Real text on a page, as opposed to a picture of one.
@@ -256,6 +302,155 @@ public sealed partial class PdfDocument
             PdfiumNative.CloseFont(font);
         }
     }
+
+    /// <summary>
+    /// Reads a text box back out of the file: its words, its size, its face and
+    /// its colour. Null when that annotation carries no text, which the caller
+    /// should treat as "not a text box" rather than as a failure.
+    ///
+    /// The counterpart to <see cref="TryReadStampImage"/>, and written for the
+    /// same reason. A style cached in the session would refuse to resize a text
+    /// box that was already in the document when it opened, and annotation
+    /// indexes shift underneath such a cache anyway.
+    /// </summary>
+    public TextBoxContent? TryReadTextBox(int pageIndex, int annotIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = AcquirePageLocked(pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return null;
+            }
+            try
+            {
+                IntPtr annot = PdfiumNative.GetAnnot(page, annotIndex);
+                if (annot == IntPtr.Zero)
+                {
+                    return null;
+                }
+                try
+                {
+                    // The words come from /Contents, which AddTextBox writes.
+                    // Reassembling them from the objects would lose the line
+                    // breaks, since each line is a separate object.
+                    string text = PdfiumNative.GetAnnotString(annot, "Contents");
+                    if (string.IsNullOrEmpty(text))
+                    {
+                        return null;
+                    }
+
+                    // The first text object is the first non-empty line, and
+                    // every line of a box shares its style.
+                    int count = PdfiumNative.GetAnnotObjectCount(annot);
+                    for (int i = 0; i < count; i++)
+                    {
+                        IntPtr obj = PdfiumNative.GetAnnotObject(annot, i);
+                        if (obj == IntPtr.Zero || !PdfiumNative.IsTextObject(obj))
+                        {
+                            continue;
+                        }
+                        if (PdfiumNative.GetTextObjectFontSize(obj) is not { } size || size <= 0)
+                        {
+                            continue;
+                        }
+                        if (TextBoxContent.TryParsePostScriptName(
+                                PdfiumNative.GetTextObjectFontName(obj)) is not { } face)
+                        {
+                            continue;
+                        }
+
+                        // Black when the object names no fill, which is what PDF
+                        // itself defaults to.
+                        var (r, g, b, _) = PdfiumNative.GetObjectFillColor(obj)
+                            ?? ((byte)0, (byte)0, (byte)0, (byte)255);
+                        return new TextBoxContent(
+                            text, face.Font, size, r, g, b, face.Bold, face.Italic);
+                    }
+                    return null;
+                }
+                finally
+                {
+                    PdfiumNative.CloseAnnot(annot);
+                }
+            }
+            finally
+            {
+                ReleasePageLocked(pageIndex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resizes a text box by re-rendering its words at a new point size, with
+    /// its top-left at (<paramref name="x"/>, <paramref name="y"/>).
+    ///
+    /// **The size scales, the glyphs are not stretched**, which is the whole
+    /// reason for storing text as text. The new size is the old one in the ratio
+    /// the box grew, so a corner drag reads as a zoom on the words.
+    ///
+    /// Remove-and-re-create for the same reason <see cref="ResizeStamp"/> is:
+    /// editing an appearance in place compounds. Returns the index the
+    /// re-created box now sits at plus a spec that rebuilds the original, which
+    /// is the pair an undo entry needs, or null when there is no text there.
+    /// </summary>
+    public (int NewIndex, AnnotationSpec Before)? ResizeTextBox(
+        int pageIndex, int annotIndex, double x, double y, double widthPt)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(annotIndex);
+
+        if (widthPt <= 0 || TryReadTextBox(pageIndex, annotIndex) is not { } content)
+        {
+            return null;
+        }
+        if (GetAnnotations(pageIndex).ElementAtOrDefault(annotIndex) is not { } original
+            || original.Subtype != PdfiumNative.AnnotStamp || original.Width <= 0)
+        {
+            return null;
+        }
+
+        // Everything needed to put the original back, captured before anything
+        // is destroyed. The words ride along rather than a raster, so undo
+        // re-renders rather than replaying pixels.
+        var before = new AnnotationSpec(
+            pageIndex,
+            PdfiumNative.AnnotStamp,
+            Quads: [],
+            InkStrokes: [],
+            Rect: ToPageRect(pageIndex, original.X, original.Y, original.Width, original.Height),
+            Color: (content.R, content.G, content.B, 255),
+            BorderWidth: 0,
+            Contents: content.Text,
+            Text: content);
+
+        double scaled = Math.Clamp(content.FontSize * (widthPt / original.Width), MinFontPt, MaxFontPt);
+        if (!RemoveAnnotation(pageIndex, annotIndex))
+        {
+            return null;
+        }
+
+        if (AddTextBox(pageIndex, x, y, content with { FontSize = scaled }) is null)
+        {
+            // Put the original back rather than leaving the page a box short.
+            AddAnnotationFromSpec(before);
+            return null;
+        }
+
+        // Re-creating appends, so the box is now last.
+        return (GetAnnotations(pageIndex).Count - 1, before);
+    }
+
+    /// <summary>Small enough to be a footnote, and still readable at 100%.</summary>
+    private const double MinFontPt = 4;
+
+    /// <summary>A line of this at 288pt is already taller than a third of a page.</summary>
+    private const double MaxFontPt = 288;
 
     /// <summary>
     /// Writes the same text straight into the page's own content stream.

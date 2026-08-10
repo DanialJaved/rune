@@ -626,13 +626,42 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFPageObj_Destroy(IntPtr pageObject);
 
-    // ---- Reading an image back out (fpdf_edit.h) ----
+    // ---- Reading an object back out (fpdf_edit.h) ----
+
+    /// <summary>FPDF_PAGEOBJ_TEXT.</summary>
+    internal const int FPDF_PAGEOBJ_TEXT = 1;
 
     /// <summary>FPDF_PAGEOBJ_IMAGE.</summary>
     internal const int FPDF_PAGEOBJ_IMAGE = 3;
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FPDFPageObj_GetType(IntPtr pageObject);
+
+    /// <summary>
+    /// The size the run was created at, before the object's matrix. Exact for
+    /// Rune's own text, which is only ever translated and never scaled.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFTextObj_GetFontSize(IntPtr textObject, out float size);
+
+    /// <summary>
+    /// The run's font. Borrowed, not owned: it belongs to the document, so it
+    /// must NOT be passed to <see cref="FPDFFont_Close"/>, which is only for a
+    /// font <see cref="FPDFText_LoadStandardFont"/> handed out.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFTextObj_GetFont(IntPtr textObject);
+
+    /// <summary>
+    /// The font's /BaseFont name as ASCII, including the NUL. Called with a null
+    /// buffer to ask for the length first, the way every sized PDFium getter works.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFFont_GetBaseFontName(IntPtr font, byte[]? buffer, uint length);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPageObj_GetFillColor(
+        IntPtr pageObject, out uint r, out uint g, out uint b, out uint a);
 
     /// <summary>
     /// The image's own decoded bitmap, at its native pixel size and ignoring the

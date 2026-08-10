@@ -289,9 +289,18 @@ public sealed partial class MainWindow : Window
         SeedToolStyles(view.Viewer);
         view.Viewer.DocumentEdited += (_, _) => UpdateDirtyIndicator(view);
         view.Viewer.ActiveToolChanged += (_, tool) => SyncToolButtons(tool);
-        view.Viewer.SignaturePlaced += (_, widthPt) =>
+        view.Viewer.StampPlaced += (_, widthPt) =>
         {
-            _state.Settings.SignatureWidthPt = widthPt;
+            // Which setting this lands in depends on what was armed, and the
+            // shell is what armed it, so the viewer does not need to know.
+            if (view.Viewer.ActiveTool == AnnotationTool.Image)
+            {
+                _state.Settings.ImageWidthPt = widthPt;
+            }
+            else
+            {
+                _state.Settings.SignatureWidthPt = widthPt;
+            }
             _store.Save(_state);
         };
         view.SignaturesRead += (_, _) => UpdateToolbarForActive();
@@ -609,7 +618,7 @@ public sealed partial class MainWindow : Window
                      // The annotation cluster. A tool button left out of this
                      // list stays permanently greyed out — nothing else enables it.
                      PenToolButton, HighlighterToolButton, NoteToolButton,
-                     TextToolButton, SignToolButton, EraserToolButton,
+                     TextToolButton, ImageToolButton, SignToolButton, EraserToolButton,
                  })
         {
             control.IsEnabled = ready;
@@ -681,6 +690,7 @@ public sealed partial class MainWindow : Window
         HighlighterToolButton.IsChecked = tool == AnnotationTool.Highlighter;
         NoteToolButton.IsChecked = tool == AnnotationTool.Note;
         TextToolButton.IsChecked = tool == AnnotationTool.Text;
+        ImageToolButton.IsChecked = tool == AnnotationTool.Image;
         SignToolButton.IsChecked = tool == AnnotationTool.Signature;
         EraserToolButton.IsChecked = tool == AnnotationTool.Eraser;
     }
@@ -701,6 +711,28 @@ public sealed partial class MainWindow : Window
     private void HighlighterToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Highlighter);
     private void NoteToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Note);
     private void SignToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Signature);
+
+    /// <summary>
+    /// The picture button runs the picker rather than arming an empty tool:
+    /// there is nothing to place until a file has been chosen, and a tool that
+    /// looks armed but does nothing on click is worse than no tool at all.
+    /// Clicking it while it is armed puts it away, like the text tool.
+    /// </summary>
+    private void ImageToolButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeViewer?.ActiveTool == AnnotationTool.Image)
+        {
+            _activeViewer.ClearPendingStamp();
+            SetActiveTool(AnnotationTool.None);
+            return;
+        }
+
+        // The ToggleButton has already checked itself. Put it back until there
+        // is actually a picture armed, or a cancelled picker leaves a tool that
+        // looks on and is not.
+        SyncToolButtons(_activeViewer?.ActiveTool ?? AnnotationTool.None);
+        _ = PickAndArmImageAsync();
+    }
     private void EraserToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Eraser);
 
     // The per-tool options panels live in MainWindow.Tools.cs.
@@ -1701,28 +1733,28 @@ public sealed partial class MainWindow : Window
             {
                 HideFindBar();
             }
-            else if (_activeViewer?.CancelSignaturePlacement() == true)
+            else if (_activeViewer?.CancelStampPlacement() == true)
             {
                 // Abandon a half-drawn placement before disarming the tool.
             }
-            else if (_activeViewer?.ClearSignatureSelection() == true)
+            else if (_activeViewer?.ClearObjectSelection() == true)
             {
-                // Deselect a placed signature before disarming anything.
+                // Deselect a placed object before disarming anything.
             }
             else if (_activeViewer?.ActiveTool is not (null or AnnotationTool.None))
             {
-                _activeViewer?.ClearPendingSignature();
+                _activeViewer?.ClearPendingStamp();
                 SetActiveTool(AnnotationTool.None); // finally, put the tool away
             }
         }, requiresDocument: false);
 
-        // Delete removes the selected signature. Guarded on there being one, so
-        // Delete keeps deleting pages when the thumbnail sidebar has focus.
+        // Delete removes the selected picture or text box. Guarded on there
+        // being one, so Delete keeps deleting pages when the sidebar has focus.
         AddAccelerator(VirtualKey.Delete, VirtualKeyModifiers.None, () =>
         {
-            if (_activeViewer?.HasSelectedSignature == true)
+            if (_activeViewer?.HasSelectedObject == true)
             {
-                _activeViewer.DeleteSelectedSignature();
+                _activeViewer.DeleteSelectedObject();
             }
         }, skipWhenTextInputFocused: true);
 
