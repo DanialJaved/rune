@@ -68,7 +68,9 @@ src/
     PdfDocument.Pages.cs  DeletePages/MovePages/ExportPages/InsertPages(FromFile)/RestoreMovedPages
     PdfDocument.PageCache.cs  Stable FPDF_PAGE handles across operations (v0.5.0) —
                           PDFium needs one page handle to survive keystrokes
-    PdfDocument.Forms.cs  AcroForm fill: FormClick/FormChar/field geometry, XFA detection
+    PdfDocument.Forms.cs  AcroForm fill: FormClick/FormChar/field geometry, XFA detection,
+                          Get/SetFieldAppearance (the /DA rewrite + forced repaint)
+    FieldAppearance.cs    The /DA grammar: read and rewrite size + colour, conservatively
     PdfDocument.Stamps.cs Image stamps: AddStamp/MoveAnnotation/ResizeStamp/
                           TryReadStampImage (the signature mechanism)
     PdfDocument.Flatten.cs   FPDFPage_Flatten — bakes annotations into page content
@@ -127,6 +129,7 @@ src/
       OutlineNode.cs, RecentCard.cs
     Services/
       DialogHost.cs           Serializes every ContentDialog (WinUI allows ONE — see §7)
+      FilePickerHost.cs       Every file picker in the app: owner window, one retry, honest failure
       PageClipboard.cs        App-wide page clipboard (serialized bytes, cross-tab)
       PrintService.cs         PrintManagerInterop + PrintDocument (live preview, page ranges)
       SignatureStore.cs       Saved signatures as PNGs under %LOCALAPPDATA%\Rune
@@ -245,7 +248,9 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 - **Form filling** (AcroForm text/checkbox/radio/combo/list): PDFium's form-fill
   environment drives every edit through `FORM_OnChar` — there is no programmatic
   setter — with Rune-drawn field borders over the top. Values round-trip through
-  save.
+  save. **Text colour and size** are settable per field (right-click → "Text
+  appearance…"), by rewriting the widget's `/DA` — see §7 for why the repaint is
+  the hard half.
 - **Signing**: draw a signature, **type it** in one of Windows' handwriting faces
   (`SignatureFonts`, nothing bundled), or **import a photo or scan and have the
   paper keyed out automatically** (`SignatureMatte`). Placed as a stamp annotation
@@ -373,6 +378,23 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
     value. `SaveAs` and `FlattenPage` both do this themselves.
   - `FPDFImageObj_SetBitmap` takes a page **array**, not a page.
   - `FPDFSignatureObj_GetSubFilter`/`GetTime` are ASCII; `GetReason` is UTF-16.
+- **File pickers are brokered out of process, and that broker can just fail.**
+  Every `PickSingleFileAsync` spawns a fresh `PickerHost.exe`; when its
+  activation fails you get `COMException 0x80004005` (E_FAIL) and no dialog ever
+  appears. A real v0.6.0 build hit this three times in a row (§10) and it has
+  never reproduced since. Consequences for anything touching a picker: go through
+  `Services/FilePickerHost`, which owns `InitializeWithWindow`, retries once and
+  logs both attempts; never call a picker from `ContentDialog.Opened`, since that
+  fires it from inside the dialog's open transition; and never report a picker
+  failure as a problem with the file, because at that point no file was chosen.
+- **A `/DA` rewrite does not repaint the widget.** PDFium builds a form widget's
+  appearance stream during page setup and caches it, so
+  `FPDFAnnot_SetStringValue(annot, "DA", …)` reads back perfectly while the page
+  goes on drawing the old appearance. `SetFieldAppearance` therefore evicts the
+  page handle afterwards (`EvictPageLocked`), which makes the next acquire re-run
+  `FORM_OnAfterLoadPage` and rebuild it. Assert on **pixels**, not on the string:
+  this is the same shape as the v0.6.0 stamp resize, where `GetMatrix` agreed
+  with what was asked for and the render did not.
 - **Theme brushes in code-behind**: never resolve one via
   `Application.Current.Resources["...Brush"]` — it returns the **dark** value
   whatever the active theme is. Define a `Style` in `Styles/Controls.xaml` and
@@ -668,9 +690,38 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
   `%LOCALAPPDATA%\Rune` from eleven call sites since v0.4.1 with nothing in the
   app saying so, and with no telemetry by design that is the only route a crash
   reaches anyone. Issue templates ask for the same details up front.
+  **Fixed: the file picker, and everything that reaches one.** A real v0.6.0
+  build logged three `COMException 0x80004005` in a row out of
+  `SignaturePad.ImportAsync`, all from `PickSingleFileAsync` itself. The import
+  code turned out to be byte-identical to v0.5.1, where the same path
+  demonstrably worked, so the fault was never in it — Windows 11 brokers these
+  pickers into a fresh `PickerHost.exe` per call and a failed activation looks
+  exactly like this. It never reproduced (§10 lists everything that was tried),
+  so the answer is resilience rather than a logic change. `FilePickerHost` now
+  owns every picker in the app: the owner window, one retry, both attempts
+  logged, and a result that tells picked from cancelled from failed. Four of the
+  five call sites — Open, Save As, Extract, Insert pages — previously ran a
+  picker inside `async void` reach with no `try` at all, which is the shape that
+  killed the process in v0.4.1. The signature import also stopped firing its
+  picker from `ContentDialog.Opened`: it picks first and builds the pad around
+  the answer, which removes the race, stops an empty pad flashing behind the
+  picker, and means cancelling leaves nothing to dismiss. And a picker that never
+  opened no longer reports "that image couldn't be read", which had sent the
+  person who hit it looking at their photo instead of at Windows.
+  **Added: colour and size for form-filling text**, the last roadmap item that
+  was not blocked by something external. The setting lives in the widget's `/DA`
+  string; `DefaultAppearance` reads and rewrites it while keeping the font
+  resource name the file already uses, because that name is a key into the
+  AcroForm `/DR` and inventing one renders the field in no font at all. Writing
+  the string was the easy half: PDFium caches a widget's appearance stream, so
+  the `/DA` read back perfectly while the page went on drawing the old one.
+  Evicting the page handle afterwards makes the next acquire re-run
+  `FORM_OnAfterLoadPage` and rebuild it. The tests count pixels rather than
+  reading the string back — including after a save and reopen — because that is
+  the only assertion that can tell those two apart.
   **Also:** winget turned out to already work through the `msstore` source, so it
   needed a README line and not a project; `MaxVersionTested` was two Windows
-  builds behind. 244 → 312 tests.
+  builds behind. 244 → 326 tests.
 - **v0.5.1** (2026-08-08) — signature import that actually works on a photo.
   **Added:** `SignatureMatte`, an adaptive local matte that keys the paper out
   of a photographed or scanned signature automatically — tiled 90th-percentile
@@ -801,12 +852,28 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
 
 ## 10. Known bugs
 
-**None open.** Everything below is fixed, kept because each cause is worth
-remembering. The three v0.4.1 bugs are listed in full; the rest have their
-post-mortems in §9 — the two zoom/blur bugs and the invisible hover ghost
-(v0.5.x), and in v0.6.0 the fourteen rotation guards, `Rotate()` discarding the
-user's find results, and a typed-signature preview that inherited the dialog's
-white foreground onto white paper.
+**One open, and it is not Rune's to fix.** Everything else below is fixed, kept
+because each cause is worth remembering. The three v0.4.1 bugs are listed in
+full; the rest have their post-mortems in §9 — the two zoom/blur bugs and the
+invisible hover ghost (v0.5.x), and in v0.6.0 the fourteen rotation guards,
+`Rotate()` discarding the user's find results, and a typed-signature preview
+that inherited the dialog's white foreground onto white paper.
+
+0. **The file picker can fail to open, transiently.** `PickSingleFileAsync`
+   threw `COMException 0x80004005` three times in a row on a v0.6.0 build
+   (errors.log, 2026-08-09 21:18 local). The import code was byte-identical to
+   v0.5.1, where the same path demonstrably worked, so the fault was never in
+   it: Windows 11 brokers these pickers into a fresh `PickerHost.exe` per call,
+   and a failed activation surfaces exactly this way.
+   **Not reproducible.** Tried afterwards: Ctrl+O, Save As, the flyout import,
+   the pad's own Import button, five repeats in a row, and a deliberate race
+   against losing the foreground. All fine, every time.
+   **What was done about it:** `FilePickerHost` retries once and logs both
+   attempts, so a recurrence leaves evidence of whether the retry covered it;
+   the signature import no longer fires its picker from `ContentDialog.Opened`,
+   which was the one genuinely fragile thing on that path; and a picker failure
+   now says the picker failed rather than blaming the image. If it comes back,
+   the log will say which picker and whether the retry helped.
 
 1. ~~Navigation keys go dead after clicking a tab or the page-number box.~~
    **Fixed.** `PdfViewer` is now `IsTabStop = true` and takes focus on pointer
@@ -829,10 +896,6 @@ white foreground onto white paper.
 
 ## 11. Roadmap (not yet built)
 
-- **Colour and size for form-filling text** — typed values currently take the
-  field's own default appearance. Changing it means rewriting the widget's `/DA`
-  string, which PDFium exposes only through the generic annotation string
-  setters; expect to write the `/DA` grammar by hand.
 - **Form JavaScript** — needs a V8-enabled PDFium build (`bblanchon.PDFium.V8.*`,
   a one-line csproj swap for a much larger binary). Without it, auto-calculating
   fields accept typed values but never recalculate.
@@ -877,11 +940,11 @@ white foreground onto white paper.
 ## 13. Current state (2026-08-10)
 
 - Working branch **`v0.6.0`**, branched from `origin/main` (which was ahead of
-  the local `main` — PR #10 had merged there). Ten commits; §9 has the
+  the local `main` — PR #10 had merged there). Twelve commits; §9 has the
   release notes.
 - **Nothing has been published.** No tag, no GitHub release, no Store
   submission. Per §12 that all waits for the user.
-- **312 tests passing**; x64 and ARM64 Release both build clean.
+- **326 tests passing**; x64 and ARM64 Release both build clean.
 - **PDFium 153.0.7988** (was 152.0.7961).
 - **Package set changed** — `Microsoft.WindowsAppSDK` is no longer referenced;
   see §7 before upgrading the SDK.
@@ -892,8 +955,8 @@ white foreground onto white paper.
 
   | Artifact | v0.6.0 | previous | change |
   |---|---|---|---|
-  | Portable zip `rune-v0.6.0-win-x64.zip` | **72,726,965 B** (69.4 MB) | 88.6 MB (v0.4.0) | −19.2 MB |
-  | Store bundle `Rune.App_0.6.0.0_x64_arm64_bundle.msixupload` | **70,422,107 B** (67.2 MB) | 105.9 MB (v0.4.1) | −38.8 MB, −36.6% |
+  | Portable zip `rune-v0.6.0-win-x64.zip` | **72,737,769 B** (69.4 MB) | 88.6 MB (v0.4.0) | −19.2 MB |
+  | Store bundle `Rune.App_0.6.0.0_x64_arm64_bundle.msixupload` | **70,366,342 B** (67.1 MB) | 105.9 MB (v0.4.1) | −38.8 MB, −36.6% |
 
   The bundle drops roughly twice what the zip does because it carries both
   architectures and each one lost the ML/Widgets/OAuth payload.
@@ -948,6 +1011,13 @@ Everything below was checked on screen, not just by test:
   at the turn, so the two drawing paths agree.
 - **The three new Store screenshots**, which is what surfaced the harness trap
   in item 4 below.
+- **All four picker paths**, before and after the rework: Ctrl+O, Save As, the
+  flyout import and the pad's own Import button all open and cancel cleanly, a
+  photographed signature imports with the paper keyed out, and `errors.log` stays
+  empty throughout.
+- **Form text appearance**, end to end: typed a value, set red at 20pt through
+  the right-click entry, watched the glyphs change on the page, then Ctrl+Z back
+  to black 12pt and Ctrl+Y forward again.
 
 Nothing with a runtime surface is now unverified on screen.
 

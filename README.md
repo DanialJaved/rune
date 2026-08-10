@@ -68,6 +68,7 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 ### Forms
 
 - Click a field and type. Text boxes, dropdowns, checkboxes and radio buttons all save back into the PDF
+- Right-click a field for **Text appearance** to set the size and colour it fills in with, so your answers can stand apart from the printed form
 - Standard AcroForm documents only. XFA forms, which some tax and government PDFs use, say so plainly instead of silently swallowing your typing
 - Form JavaScript doesn't run, so auto-calculating fields keep what you type but won't recalculate
 
@@ -157,7 +158,7 @@ The debug build is an unpackaged self-contained exe, so you can just run it.
 
 ## Roadmap
 
-**Next:** colour and size for form-filling text, more formats (ePub, CBZ), code signing for the portable build, smaller packages still.
+**Next:** more formats (ePub, CBZ), code signing for the portable build, smaller packages still.
 
 **Known limits:** form JavaScript needs a V8-enabled PDFium build; signature *validation* would need a cryptography stack Rune doesn't ship.
 
