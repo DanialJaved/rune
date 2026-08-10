@@ -632,6 +632,28 @@ public static class PdfiumNative
     public static bool AppendAnnotObject(IntPtr annot, IntPtr pageObject)
         => NativeMethods.FPDFAnnot_AppendObject(annot, pageObject) != 0;
 
+    // ---- Text objects ----
+
+    /// <summary>
+    /// Loads one of the standard 14 fonts by PostScript name. Returns
+    /// <see cref="IntPtr.Zero"/> if PDFium does not know the name, which is the
+    /// only failure mode worth checking: these fonts are built in, so there is
+    /// no file to be missing.
+    /// </summary>
+    public static IntPtr LoadStandardFont(IntPtr document, string postScriptName)
+        => NativeMethods.FPDFText_LoadStandardFont(document, postScriptName);
+
+    public static void CloseFont(IntPtr font) => NativeMethods.FPDFFont_Close(font);
+
+    public static IntPtr NewTextObject(IntPtr document, IntPtr font, float fontSize)
+        => NativeMethods.FPDFPageObj_CreateTextObj(document, font, fontSize);
+
+    public static bool SetTextObjectText(IntPtr textObject, string text)
+        => NativeMethods.FPDFText_SetText(textObject, text) != 0;
+
+    public static bool SetObjectFillColor(IntPtr pageObject, byte r, byte g, byte b, byte a)
+        => NativeMethods.FPDFPageObj_SetFillColor(pageObject, r, g, b, a) != 0;
+
     /// <summary>
     /// Points an image object at BGRA pixels.
     ///
