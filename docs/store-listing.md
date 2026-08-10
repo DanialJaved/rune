@@ -51,6 +51,9 @@ One slim toolbar. Everything else lives in a single menu, so the page gets the s
 • Flatten — bake annotations and filled fields into the page so they can't be edited out
 • Signature details — read what a digitally signed document reports, including whether the signature covers the whole file
 • Annotations — highlight, underline, strikeout, sticky notes and freehand pen — saved as standard PDF annotations that any reader can see
+• Type anywhere on a page (Ctrl+T), whether or not there is anything there already: click, and a bar offers font, size, bold, italic and colour, with every change landing on the words as you make it. What you type is real PDF text rather than a picture of text, so it stays sharp at any zoom and can be searched and copied once the document is flattened
+• Place a picture on a page from a PNG, JPEG, BMP, GIF or TIFF. Transparency is kept, and nothing is removed from it: a picture you chose is placed exactly as it is
+• Anything you place can be picked up again. Click to select it, drag to move it, pull a corner to resize it, or press Delete. Resizing text re-renders it at the new size instead of stretching the letters
 • Page editing — reorder by dragging, delete, copy and paste pages between open documents, drop a PDF into the sidebar to merge it in, or extract a selection to a new file
 • Undo and redo for everything
 • Presentation mode (F5) for showing slides fullscreen

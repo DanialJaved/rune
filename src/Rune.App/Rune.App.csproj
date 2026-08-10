@@ -8,7 +8,7 @@
     <AssemblyName>Rune</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\rune.ico</ApplicationIcon>
-    <Version>0.6.0</Version>
+    <Version>0.7.0</Version>
     <Platforms>x64;ARM64</Platforms>
     <!-- The RID must follow Platform, or a multi-arch Store bundle builds the
          ARM64 leg with win-x64 and fails (NETSDK1032). -->
