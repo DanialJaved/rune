@@ -8,6 +8,9 @@ using Windows.System;
 
 namespace Rune.Controls;
 
+/// <summary>A request to restyle one form field's typed text, with what it declares today.</summary>
+public sealed record FormAppearanceRequest(int PageIndex, string FieldName, FieldAppearance Current);
+
 // Interactive form filling.
 //
 // Field geometry is prefetched onto the UI thread (the same trick PageText
@@ -148,6 +151,108 @@ public sealed partial class PdfViewer
     /// <summary>Whether a field is the one that currently has focus.</summary>
     private bool IsFocusedField(FormFieldInfo field) =>
         _formFocusField is { } focused && focused.IsSamePlaceAs(field);
+
+    // ---- text appearance ----
+
+    /// <summary>Raised when the user asks to restyle a field's typed text.</summary>
+    public event EventHandler<FormAppearanceRequest>? FormAppearanceRequested;
+
+    /// <summary>
+    /// The text-accepting field at a page-local point, from the geometry already
+    /// cached for drawing borders. Pure lookup, no PDFium call: this runs while
+    /// a context menu is being built.
+    /// </summary>
+    private FormFieldInfo? TextFieldAt(int page, double localX, double localY)
+    {
+        if (_document is not { HasFillableForm: true } || !_formFields.TryGetValue(page, out var fields))
+        {
+            return null;
+        }
+        return fields.FirstOrDefault(f =>
+            f.AcceptsText &&
+            localX >= f.X && localX <= f.X + f.Width &&
+            localY >= f.Y && localY <= f.Y + f.Height);
+    }
+
+    /// <summary>
+    /// Asks the shell to restyle a field, handing it whatever the field declares
+    /// today so the dialog opens on the current values rather than on a guess.
+    /// </summary>
+    private async void RequestFieldAppearance(int page, string name)
+    {
+        if (_document is not { } document)
+        {
+            return;
+        }
+
+        FieldAppearance? current;
+        try
+        {
+            current = await _scheduler.RunAsync(
+                PdfWorkPriority.Interactive, () => document.GetFieldAppearance(page, name));
+        }
+        catch
+        {
+            return;
+        }
+        if (_document != document)
+        {
+            return;
+        }
+
+        FormAppearanceRequested?.Invoke(this,
+            new FormAppearanceRequest(page, name, current ?? FieldAppearance.Default));
+    }
+
+    /// <summary>
+    /// Applies a new text appearance and makes it undoable. Returns false when
+    /// the field has no <c>/DA</c> of its own to rewrite, which the shell reports
+    /// rather than leaving the user wondering why nothing changed.
+    /// </summary>
+    public async Task<bool> ApplyFieldAppearanceAsync(int page, string name, FieldAppearance wanted)
+    {
+        if (_document is not { } document)
+        {
+            return false;
+        }
+
+        (FieldAppearance? Previous, bool Applied) result;
+        try
+        {
+            result = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+            {
+                // Read before writing: undo restores the string that was there,
+                // not a reconstruction of it.
+                var before = document.GetFieldAppearance(page, name);
+                return (before, document.SetFieldAppearance(page, name, wanted));
+            });
+        }
+        catch
+        {
+            return false;
+        }
+        if (!result.Applied || _document != document)
+        {
+            return false;
+        }
+
+        // The widget's appearance was rebuilt, so every cached tile of this page
+        // is stale.
+        InvalidatePage(page);
+        DocumentEdited?.Invoke(this, EventArgs.Empty);
+
+        if (result.Previous is { } previous)
+        {
+            AnnotationEdited?.Invoke(this, new AnnotationEditEventArgs
+            {
+                Label = "text appearance",
+                PageIndex = page,
+                UndoAction = d => d.SetFieldAppearance(page, name, previous),
+                RedoAction = d => d.SetFieldAppearance(page, name, wanted),
+            });
+        }
+        return true;
+    }
 
     private async void DispatchFormClick(PdfDocument document, int page, double localX, double localY)
     {

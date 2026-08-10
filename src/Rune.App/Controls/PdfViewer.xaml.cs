@@ -1179,6 +1179,15 @@ public sealed partial class PdfViewer : UserControl
         AddMenuItem(menu, "Add note here", Symbol.Comment,
             () => NoteRequested?.Invoke(this, (page, localX, localY)));
 
+        // Right-click is already how markup and notes are reached, so it is
+        // where a field's own options belong too. Pure lookup against cached
+        // geometry, so it adds nothing to the time before the menu appears.
+        if (TextFieldAt(page, localX, localY) is { } field)
+        {
+            AddMenuItem(menu, "Text appearance…", Symbol.Font,
+                () => RequestFieldAppearance(page, field.Name));
+        }
+
         // Offer deletion when the click lands on an annotation. The query
         // runs on the render thread so a slow tile render can't freeze the
         // UI while the menu is being built.

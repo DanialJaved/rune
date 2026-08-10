@@ -349,6 +349,117 @@ public sealed partial class PdfDocument
     public string? GetFormFieldValue(int pageIndex, string name)
         => GetFormFields(pageIndex).FirstOrDefault(f => f.Name == name)?.Value;
 
+    // ---- Text appearance (/DA) ----
+
+    /// <summary>
+    /// The size and colour a named field types in, or null when it has no
+    /// <c>/DA</c> of its own to read.
+    /// </summary>
+    public FieldAppearance? GetFieldAppearance(int pageIndex, string name)
+        => WithFieldAnnot(pageIndex, name, annot =>
+            DefaultAppearance.TryRead(PdfiumNative.GetAnnotString(annot, DefaultAppearanceKey)));
+
+    /// <summary>
+    /// Rewrites a field's <c>/DA</c> so its typed text takes a new size and
+    /// colour, and makes PDFium repaint the widget with it.
+    ///
+    /// Writing the string is the easy half. PDFium builds a widget's appearance
+    /// stream when the page is set up for forms and caches it, so an edit made
+    /// straight into the dictionary is invisible until that happens again — the
+    /// value reads back perfectly while the page keeps drawing the old one. The
+    /// second half of this method is therefore the point of it: drop the page
+    /// handle so the next acquire re-runs <c>FORM_OnAfterLoadPage</c> and the
+    /// appearance is rebuilt from the <c>/DA</c> just written.
+    ///
+    /// Returns false when the field has no <c>/DA</c> carrying a <c>Tf</c>. That
+    /// is not a failure to report loudly: it means the field inherits its
+    /// appearance from the AcroForm default, and the font resource name needed to
+    /// write a valid replacement is not available here. Guessing one produces a
+    /// field that renders in nothing at all.
+    /// </summary>
+    public bool SetFieldAppearance(int pageIndex, string name, FieldAppearance appearance)
+    {
+        // The in-progress edit lives in the focused widget, and rebuilding the
+        // page underneath it would strand that. Commit first, as saving does.
+        FormKillFocus();
+
+        bool written = WithFieldAnnot(pageIndex, name, annot =>
+        {
+            string? updated = DefaultAppearance.TryWrite(
+                PdfiumNative.GetAnnotString(annot, DefaultAppearanceKey), appearance);
+            return updated is not null
+                && PdfiumNative.SetAnnotString(annot, DefaultAppearanceKey, updated);
+        });
+
+        if (!written)
+        {
+            return false;
+        }
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            EvictPageLocked(pageIndex);
+        }
+        IsDirty = true;
+        return true;
+    }
+
+    /// <summary>PDF's key for the default appearance string.</summary>
+    private const string DefaultAppearanceKey = "DA";
+
+    /// <summary>
+    /// Runs <paramref name="read"/> against the widget annotation of a named
+    /// field. Returns <c>default</c> when the page or the field is not there.
+    /// </summary>
+    private T? WithFieldAnnot<T>(int pageIndex, string name, Func<IntPtr, T?> read)
+    {
+        if (!HasFillableForm)
+        {
+            return default;
+        }
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = AcquirePageLocked(pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return default;
+            }
+            try
+            {
+                IntPtr form = _formEnv!.Handle;
+                int count = PdfiumNative.GetAnnotCount(page);
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr annot = PdfiumNative.GetAnnot(page, i);
+                    if (annot == IntPtr.Zero)
+                    {
+                        continue;
+                    }
+                    try
+                    {
+                        if (PdfiumNative.GetAnnotSubtype(annot) == PdfiumNative.AnnotWidget
+                            && PdfiumNative.GetFormFieldName(form, annot) == name)
+                        {
+                            return read(annot);
+                        }
+                    }
+                    finally
+                    {
+                        PdfiumNative.CloseAnnot(annot);
+                    }
+                }
+                return default;
+            }
+            finally
+            {
+                ReleasePageLocked(pageIndex);
+            }
+        }
+    }
+
     private FormFieldInfo? DescribeFieldLocked(IntPtr form, IntPtr page, int pageIndex, IntPtr annot)
     {
         if (!PdfiumNative.GetAnnotRect(annot, out float l, out float t, out float r, out float b))

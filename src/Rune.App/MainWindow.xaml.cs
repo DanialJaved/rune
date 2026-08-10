@@ -296,6 +296,7 @@ public sealed partial class MainWindow : Window
         };
         view.SignaturesRead += (_, _) => UpdateToolbarForActive();
         view.Viewer.NoteRequested += Viewer_NoteRequested;
+        view.Viewer.FormAppearanceRequested += Viewer_FormAppearanceRequested;
         view.BookmarksChanged += (_, _) => PersistBookmarks(view);
         view.PagesEdited += (_, _) =>
         {
@@ -471,6 +472,7 @@ public sealed partial class MainWindow : Window
             CaptureState(view);
             view.Viewer.LinkActivated -= Viewer_LinkActivated;
             view.Viewer.NoteRequested -= Viewer_NoteRequested;
+            view.Viewer.FormAppearanceRequested -= Viewer_FormAppearanceRequested;
             view.Close();
             _pendingRestore.Remove(view);
         }
@@ -898,6 +900,107 @@ public sealed partial class MainWindow : Window
         if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(box.Text))
         {
             view.Viewer.AddNote(at.PageIndex, at.X, at.Y, box.Text.Trim());
+        }
+    }
+
+    /// <summary>Sizes offered for form text. "Auto" is PDF's own 0, meaning fit the box.</summary>
+    private static readonly (string Label, double Value)[] FormTextSizes =
+    [
+        ("Auto", 0), ("8", 8), ("9", 9), ("10", 10), ("11", 11),
+        ("12", 12), ("14", 14), ("16", 16), ("18", 18), ("20", 20), ("24", 24),
+    ];
+
+    /// <summary>
+    /// The colours a filled field can take. Deliberately few: this sets how a
+    /// form is filled in, not how it is decorated, and the realistic answers are
+    /// black, a pen blue, and red for something that has to stand out.
+    /// </summary>
+    private static readonly (string Label, byte R, byte G, byte B)[] FormTextColors =
+    [
+        ("Black", 0, 0, 0),
+        ("Blue", 20, 60, 160),
+        ("Red", 190, 30, 30),
+        ("Green", 20, 110, 60),
+    ];
+
+    private async void Viewer_FormAppearanceRequested(object? sender, FormAppearanceRequest request)
+    {
+        if (CurrentView is not { } view || !ReferenceEquals(sender, view.Viewer))
+        {
+            return;
+        }
+
+        var sizes = new ComboBox { MinWidth = 120 };
+        foreach (var (label, _) in FormTextSizes)
+        {
+            sizes.Items.Add(label);
+        }
+        // Land on the size the field already declares; an unusual one (13.5pt,
+        // say) is not in the list, so fall back to Auto rather than silently
+        // showing 12 and changing the field the moment OK is pressed.
+        int index = Array.FindIndex(FormTextSizes, s => Math.Abs(s.Value - request.Current.FontSize) < 0.01);
+        sizes.SelectedIndex = index >= 0 ? index : 0;
+
+        var swatches = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        int chosenColor = Array.FindIndex(FormTextColors,
+            c => c.R == request.Current.R && c.G == request.Current.G && c.B == request.Current.B);
+        if (chosenColor < 0)
+        {
+            chosenColor = 0;
+        }
+        for (int i = 0; i < FormTextColors.Length; i++)
+        {
+            var (label, r, g, b) = FormTextColors[i];
+            int slot = i;
+            var button = new Microsoft.UI.Xaml.Controls.Primitives.ToggleButton
+            {
+                Content = label,
+                IsChecked = i == chosenColor,
+                Tag = slot,
+            };
+            button.Click += (s, _) =>
+            {
+                chosenColor = slot;
+                foreach (var other in swatches.Children.OfType<Microsoft.UI.Xaml.Controls.Primitives.ToggleButton>())
+                {
+                    other.IsChecked = ReferenceEquals(other, s);
+                }
+            };
+            swatches.Children.Add(button);
+        }
+
+        var caption = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+        var body = new StackPanel { Spacing = 8, MinWidth = 320 };
+        body.Children.Add(new TextBlock { Text = "Size", Style = caption });
+        body.Children.Add(sizes);
+        body.Children.Add(new TextBlock { Text = "Colour", Style = caption });
+        body.Children.Add(swatches);
+
+        var dialog = new ContentDialog
+        {
+            Title = "Text appearance",
+            Content = body,
+            PrimaryButtonText = "Apply",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+
+        if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        var (_, red, green, blue) = FormTextColors[chosenColor];
+        double size = FormTextSizes[Math.Max(0, sizes.SelectedIndex)].Value;
+
+        if (!await view.Viewer.ApplyFieldAppearanceAsync(
+                request.PageIndex, request.FieldName, new FieldAppearance(size, red, green, blue)))
+        {
+            // The field inherits its appearance from the form's default, which
+            // carries no font resource name this code can safely reuse. Saying so
+            // beats leaving the user to wonder why Apply did nothing.
+            ShowError("This field takes its text style from the document, so it cannot be changed here.");
         }
     }
 
