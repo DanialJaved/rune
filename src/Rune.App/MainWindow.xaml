@@ -201,6 +201,14 @@
                     <FontIcon Glyph="&#xE70B;" FontSize="{StaticResource IconGlyphSize}" />
                 </ToggleButton>
                 <ToggleButton
+                    x:Name="TextToolButton"
+                    Style="{StaticResource IconToggleButtonStyle}"
+                    Click="TextToolButton_Click"
+                    IsEnabled="False"
+                    ToolTipService.ToolTip="Text — click anywhere on the page and type (Ctrl+T)">
+                    <FontIcon Glyph="&#xE8D2;" FontSize="{StaticResource IconGlyphSize}" />
+                </ToggleButton>
+                <ToggleButton
                     x:Name="SignToolButton"
                     Style="{StaticResource IconToggleButtonStyle}"
                     Click="SignToolButton_Click"
@@ -423,6 +431,28 @@
                  Declared before the zoom pill and find bar so active UI always
                  paints over a passive notice, never the other way round. -->
             <controls:NoticeHost x:Name="WindowNotice" />
+
+            <!-- The format bar for the text box being typed into. It floats at
+                 the top of the page area, out of the way of a caret that is
+                 usually further down, and only exists while a box is open.
+                 Its controls are built in code so the font and size lists come
+                 from one place (TextBoxFonts) rather than being duplicated in
+                 markup that could drift from it. -->
+            <Border
+                x:Name="TextFormatBar"
+                Style="{StaticResource OverlayPillStyle}"
+                Visibility="Collapsed"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,16,0,0"
+                Height="44"
+                Padding="8,0">
+                <StackPanel
+                    x:Name="TextFormatControls"
+                    Orientation="Horizontal"
+                    Spacing="6"
+                    VerticalAlignment="Center" />
+            </Border>
 
             <!-- Floating zoom pill (Papers-style, bottom-right over the page) -->
             <Border

@@ -297,6 +297,7 @@ public sealed partial class MainWindow : Window
         view.SignaturesRead += (_, _) => UpdateToolbarForActive();
         view.Viewer.NoteRequested += Viewer_NoteRequested;
         view.Viewer.FormAppearanceRequested += Viewer_FormAppearanceRequested;
+        AttachTextTool(view.Viewer);
         view.BookmarksChanged += (_, _) => PersistBookmarks(view);
         view.PagesEdited += (_, _) =>
         {
@@ -473,6 +474,7 @@ public sealed partial class MainWindow : Window
             view.Viewer.LinkActivated -= Viewer_LinkActivated;
             view.Viewer.NoteRequested -= Viewer_NoteRequested;
             view.Viewer.FormAppearanceRequested -= Viewer_FormAppearanceRequested;
+            DetachTextTool(view.Viewer);
             view.Close();
             _pendingRestore.Remove(view);
         }
@@ -607,7 +609,7 @@ public sealed partial class MainWindow : Window
                      // The annotation cluster. A tool button left out of this
                      // list stays permanently greyed out — nothing else enables it.
                      PenToolButton, HighlighterToolButton, NoteToolButton,
-                     SignToolButton, EraserToolButton,
+                     TextToolButton, SignToolButton, EraserToolButton,
                  })
         {
             control.IsEnabled = ready;
@@ -678,6 +680,7 @@ public sealed partial class MainWindow : Window
         PenToolButton.IsChecked = tool == AnnotationTool.Pen;
         HighlighterToolButton.IsChecked = tool == AnnotationTool.Highlighter;
         NoteToolButton.IsChecked = tool == AnnotationTool.Note;
+        TextToolButton.IsChecked = tool == AnnotationTool.Text;
         SignToolButton.IsChecked = tool == AnnotationTool.Signature;
         EraserToolButton.IsChecked = tool == AnnotationTool.Eraser;
     }

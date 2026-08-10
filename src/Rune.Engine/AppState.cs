@@ -92,6 +92,9 @@ public sealed class AppSettings
     /// </remarks>
     public bool SignatureRemoveBackground { get; set; } = true;
 
+    /// <summary>How the last text box on a page was styled, so the next one matches.</summary>
+    public TextBoxSettings? TextBox { get; set; }
+
     /// <summary>
     /// Fills in the per-tool styles the first time a pre-v0.6 state file is
     /// loaded, seeding the pen from the old flat InkColor/InkWidth so a user's
@@ -110,6 +113,24 @@ public sealed class AppSettings
 /// a missing key in an older file deserializes to null (see
 /// <see cref="AppSettings.MigrateToolStyles"/>) rather than throwing.
 /// </summary>
+/// <summary>
+/// The look of a text box typed onto a page. Stored as plain fields rather than
+/// the engine's <c>TextBoxStyle</c> so the settings file stays a settings file:
+/// a rename in the model must not silently invalidate what people have saved.
+/// </summary>
+public sealed class TextBoxSettings
+{
+    /// <summary>Name of a <c>PdfStandardFont</c>; anything unrecognised falls back to Helvetica.</summary>
+    public string Font { get; set; } = "Helvetica";
+
+    public double Size { get; set; } = 14;
+    public byte R { get; set; }
+    public byte G { get; set; }
+    public byte B { get; set; }
+    public bool Bold { get; set; }
+    public bool Italic { get; set; }
+}
+
 public sealed class ToolStyle
 {
     /// <summary>#RRGGBB.</summary>

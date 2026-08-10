@@ -26,6 +26,12 @@ public enum AnnotationTool
     /// <summary>Sticky note. Click places one.</summary>
     Note,
 
+    /// <summary>
+    /// Free text. Click puts a caret anywhere on the page, blank or not, and
+    /// what is typed is previewed in place until the box is committed.
+    /// </summary>
+    Text,
+
     /// <summary>Signature stamp. Drag defines the box to place it in.</summary>
     Signature,
 

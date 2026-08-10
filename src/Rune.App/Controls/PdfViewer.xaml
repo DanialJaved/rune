@@ -9,20 +9,60 @@
          MinZoom/MaxZoom: if the ScrollViewer clamps a pinch at a limit the real
          zoom hasn't reached, RebaseZoom folds in a factor the zoom can't absorb
          and the anchor drifts at the extremes. -->
-    <ScrollViewer
-        x:Name="Scroller"
-        ZoomMode="Enabled"
-        MinZoomFactor="0.1"
-        MaxZoomFactor="6.4"
-        HorizontalScrollBarVisibility="Auto"
-        VerticalScrollBarVisibility="Auto"
-        HorizontalScrollMode="Enabled"
-        VerticalScrollMode="Enabled"
-        ViewChanged="Scroller_ViewChanged"
-        SizeChanged="Scroller_SizeChanged">
-        <win2d:CanvasVirtualControl
-            x:Name="Canvas"
-            RegionsInvalidated="Canvas_RegionsInvalidated"
-            CreateResources="Canvas_CreateResources" />
-    </ScrollViewer>
+    <Grid>
+        <ScrollViewer
+            x:Name="Scroller"
+            ZoomMode="Enabled"
+            MinZoomFactor="0.1"
+            MaxZoomFactor="6.4"
+            HorizontalScrollBarVisibility="Auto"
+            VerticalScrollBarVisibility="Auto"
+            HorizontalScrollMode="Enabled"
+            VerticalScrollMode="Enabled"
+            ViewChanged="Scroller_ViewChanged"
+            SizeChanged="Scroller_SizeChanged">
+            <win2d:CanvasVirtualControl
+                x:Name="Canvas"
+                RegionsInvalidated="Canvas_RegionsInvalidated"
+                CreateResources="Canvas_CreateResources" />
+        </ScrollViewer>
+
+        <!-- The text box being typed into, above the page rather than on it.
+             A real TextBox brings IME, selection, clipboard and accessibility
+             with it; drawing a caret on the Win2D canvas would mean writing all
+             of that by hand. It is positioned by margin from the viewer's
+             top-left and re-placed on every ViewChanged, so it tracks scroll and
+             zoom. NoWrap is deliberate: a PDF text object does not wrap, so a
+             box that wrapped on screen would be lying about the result. -->
+        <!-- The dashed edge around the box being typed into, the way Paint marks
+             one. Drawn as a sibling rather than as the TextBox's own border: the
+             control's template swaps its border brush per visual state, and
+             XAML borders cannot dash anyway. Never hit-testable, so it can never
+             swallow a click meant for the page. -->
+        <Rectangle
+            x:Name="TextEditorOutline"
+            Visibility="Collapsed"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top"
+            IsHitTestVisible="False"
+            StrokeThickness="1"
+            StrokeDashArray="3,3"
+            Stroke="{ThemeResource AccentFillColorDefaultBrush}" />
+
+        <TextBox
+            x:Name="TextEditor"
+            Visibility="Collapsed"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top"
+            AcceptsReturn="True"
+            TextWrapping="NoWrap"
+            MinWidth="12"
+            Padding="0"
+            BorderThickness="1"
+            Background="Transparent"
+            Style="{StaticResource PageTextEditorStyle}"
+            LostFocus="TextEditor_LostFocus"
+            KeyDown="TextEditor_KeyDown"
+            SizeChanged="TextEditor_SizeChanged" />
+    </Grid>
 </UserControl>

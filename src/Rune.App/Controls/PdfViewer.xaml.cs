@@ -799,6 +799,11 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
+        // An open text box is anchored to the page, not to the window, so it has
+        // to be re-placed on every view change including the intermediate ones.
+        // Skipping those would leave it sliding against the content mid-scroll.
+        PositionTextEditor();
+
         if (e.IsIntermediate)
         {
             // Mid-scroll: coalesce the (allocating) want-list recompute; the
@@ -1339,6 +1344,12 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
+        // A press on the page ends any trip to the format bar, so an open box
+        // goes back to committing on focus loss as normal. Without this a bar
+        // interaction that never restyled anything would leave the box unable to
+        // close itself.
+        SuspendTextCommit = false;
+
         var docPoint = DocumentPointFromPointer(e);
 
         if (IsInkMode)
@@ -1361,6 +1372,11 @@ public sealed partial class PdfViewer : UserControl
 
             case AnnotationTool.Note:
                 RequestNoteAt(docPoint);
+                e.Handled = true;
+                return;
+
+            case AnnotationTool.Text:
+                BeginTextAt(docPoint);
                 e.Handled = true;
                 return;
 
