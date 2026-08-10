@@ -601,6 +601,16 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFFont_Close(IntPtr font);
 
+    /// <summary>
+    /// The object's own bounding box, in page space. For a text object this is
+    /// the extent PDFium will actually draw, which is why Rune measures with it
+    /// rather than carrying the standard-14 width tables: a table can disagree
+    /// with the renderer, this cannot.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPageObj_GetBounds(
+        IntPtr pageObject, out float left, out float bottom, out float right, out float top);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFPage_InsertObject(IntPtr page, IntPtr pageObject);
 

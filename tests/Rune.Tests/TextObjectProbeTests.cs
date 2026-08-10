@@ -67,7 +67,7 @@ public class TextObjectProbeTests
         using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
 
         int before = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
-        Assert.NotNull(doc.AddTextAnnotation(0, 60, 300, Sample()));
+        Assert.NotNull(doc.AddTextBox(0, 60, 300, Sample()));
         int after = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
 
         Assert.True(after > before,
@@ -83,7 +83,7 @@ public class TextObjectProbeTests
             int expected;
             using (var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf")))
             {
-                doc.AddTextAnnotation(0, 60, 300, Sample());
+                doc.AddTextBox(0, 60, 300, Sample());
                 expected = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
                 doc.SaveAs(saved);
             }
@@ -108,7 +108,7 @@ public class TextObjectProbeTests
         {
             using (var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf")))
             {
-                doc.AddTextAnnotation(0, 60, 300, Sample("Zarquon"));
+                doc.AddTextBox(0, 60, 300, Sample("Zarquon"));
                 doc.SaveAs(saved);
             }
 

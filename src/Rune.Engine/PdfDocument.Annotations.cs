@@ -44,7 +44,8 @@ public sealed record AnnotationSpec(
     (byte R, byte G, byte B, byte A) Color,
     float BorderWidth,
     string Contents,
-    StampImage? Stamp = null);
+    StampImage? Stamp = null,
+    TextBoxContent? Text = null);
 
 public sealed partial class PdfDocument
 {
@@ -514,6 +515,15 @@ public sealed partial class PdfDocument
                     if (spec.Stamp is { } stamp)
                     {
                         AttachStampImageLocked(page, annot, stamp, rl, rb, rr, rt);
+                    }
+
+                    // Text carries its own content rather than pixels, so it is
+                    // rebuilt from the words and re-measured into the captured
+                    // rect's top-left. Re-rendering rather than replaying a
+                    // raster is the whole reason it is stored as text.
+                    if (spec.Text is { } text)
+                    {
+                        AttachTextLocked(annot, text, rl, rt);
                     }
 
                     PdfiumNative.SetAnnotColor(annot, spec.Color.R, spec.Color.G, spec.Color.B, spec.Color.A);

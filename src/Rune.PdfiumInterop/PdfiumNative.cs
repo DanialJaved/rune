@@ -655,6 +655,16 @@ public static class PdfiumNative
         => NativeMethods.FPDFPageObj_SetFillColor(pageObject, r, g, b, a) != 0;
 
     /// <summary>
+    /// The extent PDFium will draw this object at, in page space. Returns null
+    /// when it cannot say, which for a text object means there is nothing to
+    /// measure.
+    /// </summary>
+    public static (float L, float B, float R, float T)? GetObjectBounds(IntPtr pageObject)
+        => NativeMethods.FPDFPageObj_GetBounds(pageObject, out float l, out float b, out float r, out float t) != 0
+            ? (l, b, r, t)
+            : null;
+
+    /// <summary>
     /// Points an image object at BGRA pixels.
     ///
     /// The buffer must stay pinned for the duration of the call — PDFium copies
