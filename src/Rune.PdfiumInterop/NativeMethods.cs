@@ -571,6 +571,36 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFPageObj_Transform(IntPtr pageObject, double a, double b, double c, double d, double e, double f);
 
+    // ---- Text objects (fpdf_edit.h) ----
+    //
+    // Real text on a page, as opposed to a picture of text. The 14 standard
+    // fonts need no embedding, which is why they are the ones Rune writes: the
+    // file gains a few hundred bytes rather than a font program.
+
+    /// <summary>
+    /// One of the standard 14 by PostScript name — "Helvetica", "Helvetica-Bold",
+    /// "Times-Roman", "Courier-Oblique" and so on. ASCII (FPDF_BYTESTRING), not
+    /// UTF-16. Must be closed with <see cref="FPDFFont_Close"/>.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFText_LoadStandardFont(
+        IntPtr document, [MarshalAs(UnmanagedType.LPStr)] string font);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFPageObj_CreateTextObj(IntPtr document, IntPtr font, float fontSize);
+
+    /// <summary>Sets the run's string. UTF-16LE (FPDF_WIDESTRING).</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_SetText(
+        IntPtr textObject, [MarshalAs(UnmanagedType.LPWStr)] string text);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPageObj_SetFillColor(
+        IntPtr pageObject, uint r, uint g, uint b, uint a);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFFont_Close(IntPtr font);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFPage_InsertObject(IntPtr page, IntPtr pageObject);
 
