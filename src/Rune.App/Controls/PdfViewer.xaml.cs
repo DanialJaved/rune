@@ -44,7 +44,7 @@ public sealed partial class PdfViewer : UserControl
     private const float PreviewTargetWidthPx = 216f;
 
     private readonly DispatcherQueue _dispatcher;
-    private readonly RenderScheduler _scheduler;
+    private RenderScheduler _scheduler;
 
     private PdfDocument? _document;
     private (float Width, float Height)[] _pageSizes = [];
@@ -353,8 +353,36 @@ public sealed partial class PdfViewer : UserControl
             ApplyViewerBackground();
             Canvas.Invalidate();
         };
-        Unloaded += (_, _) => _scheduler.Dispose();
+        // The scheduler owns a render thread, so it is stopped when the control
+        // leaves the tree. But a TabView unloads the content of a tab you switch
+        // AWAY from, and that is not going away at all — so it has to be able to
+        // come back, or that tab can never render anything again.
+        //
+        // It looks fine for a while, which is what made this hard to see: the
+        // tiles and thumbnails already rendered are still cached and still drawn.
+        // The page only goes white when something invalidates them, and then it
+        // stays white for good. Two tabs, switch across and back, press Ctrl+R:
+        // page and thumbnails both blank, permanently.
+        Unloaded += (_, _) =>
+        {
+            _schedulerStopped = true;
+            _scheduler.Dispose();
+        };
+        Loaded += (_, _) =>
+        {
+            if (!_schedulerStopped)
+            {
+                return;
+            }
+            _schedulerStopped = false;
+            _scheduler = new RenderScheduler(OnTileRendered);
+            // Nothing has changed about the view, so nothing else will ask.
+            RequestDesiredUpdate();
+        };
     }
+
+    /// <summary>True while the render thread is stopped because the tab is not on screen.</summary>
+    private bool _schedulerStopped;
 
     private double DisplayScale => XamlRoot?.RasterizationScale ?? 1.0;
     private float RenderScale => (float)(_zoom * DisplayScale);
@@ -2177,6 +2205,21 @@ public sealed partial class PdfViewer : UserControl
             _scheduler.SetDesired([]);
             return;
         }
+
+        // A viewport with no area yields an empty want-list, and asking for
+        // nothing is indistinguishable from being told to render nothing: the
+        // page stays blank and nothing ever asks again, because the view has
+        // not changed. That is reachable in one gesture — switch to another tab
+        // and back, then rotate. The returning tab's ScrollViewer has not been
+        // measured yet, so it is still 0x0 when Rotate() rebuilds the list, and
+        // the page (and its thumbnails) stay white until the window is resized.
+        // Retry on the coalescing timer instead, by which point layout has run.
+        if (Scroller.ViewportWidth <= 0 || Scroller.ViewportHeight <= 0)
+        {
+            RequestDesiredUpdate();
+            return;
+        }
+
         float zoomFactor = Scroller.ZoomFactor;
         if (Math.Abs(zoomFactor - 1f) > 0.001f)
         {
