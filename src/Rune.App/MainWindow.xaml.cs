@@ -1482,6 +1482,8 @@ public sealed partial class MainWindow : Window
                 new("Highlight selection", "Ctrl+H", () => viewer.MarkupSelection(MarkupKind.Highlight)),
                 new("Draw (toggle pen)", "Ctrl+E", TogglePenTool),
                 new("Highlighter tool", "", () => SetActiveTool(AnnotationTool.Highlighter)),
+                new("Type on the page", "Ctrl+T", () => SetActiveTool(AnnotationTool.Text)),
+                new("Place a picture…", "", () => _ = PickAndArmImageAsync()),
                 new("Eraser tool", "", () => SetActiveTool(AnnotationTool.Eraser)),
                 new("Save", "Ctrl+S", () => _ = SaveActiveAsync()),
                 new("Save As…", "Ctrl+Shift+S", () => _ = SaveAsActiveAsync()),
@@ -1694,6 +1696,8 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.D, VirtualKeyModifiers.Control, () => _ = ShowPropertiesAsync());
         AddAccelerator(VirtualKey.H, VirtualKeyModifiers.Control, () => _activeViewer?.MarkupSelection(MarkupKind.Highlight));
         AddAccelerator(VirtualKey.E, VirtualKeyModifiers.Control, TogglePenTool);
+        AddAccelerator(VirtualKey.T, VirtualKeyModifiers.Control,
+            () => TextToolButton_Click(this, null!), skipWhenTextInputFocused: true);
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control, () => _ = SaveActiveAsync());
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => _ = SaveAsActiveAsync());
 
