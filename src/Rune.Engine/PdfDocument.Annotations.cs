@@ -366,10 +366,21 @@ public sealed partial class PdfDocument
 
     /// <summary>
     /// Reads everything needed to re-create one of OUR annotation subtypes
-    /// (markup/ink/note) so a deletion can be undone. Returns null for
-    /// subtypes we can't faithfully rebuild (callers fall back to a page
-    /// snapshot). All geometry is in page space (bottom-left origin).
+    /// (markup/ink/note/stamp) so a deletion can be undone. Returns null for
+    /// subtypes we can't faithfully rebuild. All geometry is in page space
+    /// (bottom-left origin).
     /// </summary>
+    /// <remarks>
+    /// A stamp is captured by reading its contents back out of the file, which
+    /// costs a second pass over the annotation and is why it is separated out
+    /// below. Until v0.7.0 this returned null for stamps, so erasing a signature
+    /// put nothing on the undo stack at all and Ctrl+Z did nothing.
+    ///
+    /// Nesting <see cref="TryReadStampImage"/> and <see cref="TryReadTextBox"/>
+    /// inside the lock this already holds is safe: it is a monitor, so it
+    /// re-enters on the same thread, and page leases are counted rather than
+    /// boolean.
+    /// </remarks>
     public AnnotationSpec? CaptureAnnotation(int pageIndex, int annotIndex)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
@@ -395,7 +406,8 @@ public sealed partial class PdfDocument
                     int subtype = PdfiumNative.GetAnnotSubtype(annot);
                     bool isMarkup = subtype is PdfiumNative.AnnotHighlight
                         or PdfiumNative.AnnotUnderline or PdfiumNative.AnnotStrikeout;
-                    if (!isMarkup && subtype != PdfiumNative.AnnotInk && subtype != PdfiumNative.AnnotText)
+                    if (!isMarkup && subtype != PdfiumNative.AnnotInk
+                        && subtype != PdfiumNative.AnnotText && subtype != PdfiumNative.AnnotStamp)
                     {
                         return null;
                     }
@@ -430,12 +442,32 @@ public sealed partial class PdfDocument
                         }
                     }
 
+                    // A stamp holds neither quads nor strokes: what rebuilds it
+                    // is its pixels or its words, and which of the two it is
+                    // has to be read back out of the annotation itself.
+                    StampImage? stamp = null;
+                    TextBoxContent? text = null;
+                    if (subtype == PdfiumNative.AnnotStamp)
+                    {
+                        text = TryReadTextBox(pageIndex, annotIndex);
+                        if (text is null)
+                        {
+                            stamp = TryReadStampImage(pageIndex, annotIndex);
+                            if (stamp is null)
+                            {
+                                return null; // a stamp Rune cannot faithfully rebuild
+                            }
+                        }
+                    }
+
                     return new AnnotationSpec(
                         pageIndex, subtype, quads, strokes,
                         (Math.Min(l, r), Math.Min(t, b), Math.Max(l, r), Math.Max(t, b)),
                         (cr, cg, cb, ca == 0 ? (byte)255 : ca),
                         PdfiumNative.GetAnnotBorderWidth(annot),
-                        PdfiumNative.GetAnnotString(annot, "Contents"));
+                        PdfiumNative.GetAnnotString(annot, "Contents"),
+                        stamp,
+                        text);
                 }
                 finally
                 {

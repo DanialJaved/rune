@@ -1243,6 +1243,7 @@ public sealed partial class PdfViewer : UserControl
                             {
                                 Label = spec.Subtype == Rune.PdfiumInterop.PdfiumNative.AnnotText ? "delete note" : "delete annotation",
                                 PageIndex = page,
+                                SnapshotBytes = spec.Stamp?.ByteCount ?? 0,
                                 UndoAction = d => d.AddAnnotationFromSpec(spec),
                                 RedoAction = d => d.RemoveLastAnnotation(page),
                             });
@@ -1565,8 +1566,15 @@ public sealed partial class PdfViewer : UserControl
             {
                 Label = "erase",
                 PageIndex = page,
+                // A stamp's spec carries its pixels; markup and ink carry only
+                // geometry, so they cost the undo stack's memory cap nothing.
+                SnapshotBytes = spec.Stamp?.ByteCount ?? 0,
                 UndoAction = d => d.AddAnnotationFromSpec(spec),
-                RedoAction = d => d.RemoveAnnotation(page, hit.Index),
+                // Undo re-adds by appending, so what redo has to remove is the
+                // LAST annotation, not the index the erase originally hit. Redo
+                // only ever runs after an undo, so this is always the right one,
+                // and it is what the right-click delete has always done.
+                RedoAction = d => d.RemoveLastAnnotation(page),
             });
         }
     }
