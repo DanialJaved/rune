@@ -155,6 +155,19 @@ public sealed partial class PdfDocument
     // ---- Input ----
 
     /// <summary>
+    /// The modifier flags PDFium's form layer takes (<c>FWL_EVENTFLAG_*</c>).
+    /// They are its own values, not Windows', and they are what makes shift-arrow
+    /// select rather than merely move.
+    /// </summary>
+    public static class FormModifiers
+    {
+        public const int None = 0;
+        public const int Shift = 1 << 0;
+        public const int Control = 1 << 1;
+        public const int Alt = 1 << 2;
+    }
+
+    /// <summary>
     /// Presses and releases the left button at a page-local point. Returns true
     /// when PDFium consumed the click, i.e. it landed on a widget.
     /// </summary>
@@ -188,13 +201,58 @@ public sealed partial class PdfDocument
         }
     }
 
-    /// <summary>Sends one character to the focused field. Returns true when consumed.</summary>
-    public bool FormChar(int pageIndex, int charCode)
-        => WithFormPage(pageIndex, (form, page) => PdfiumNative.FormOnChar(form, page, charCode));
+    /// <summary>
+    /// Sends one character to the focused field. Returns true when consumed.
+    ///
+    /// This is also the route for **backspace** (character 8), which
+    /// <see cref="FormKeyDown"/> refuses: PDFium's edit control handles Delete
+    /// and the arrows in its key handler but backspace in its character handler,
+    /// so sending it as a virtual key returns false and changes nothing.
+    /// </summary>
+    /// <param name="modifier">
+    /// <see cref="FormModifiers"/> flags. Control-key combinations arrive here as
+    /// their control character (Ctrl+A is 1) rather than as a letter plus a flag.
+    /// </param>
+    public bool FormChar(int pageIndex, int charCode, int modifier = 0)
+        => WithFormPage(pageIndex, (form, page) => PdfiumNative.FormOnChar(form, page, charCode, modifier));
 
-    /// <summary>Sends a virtual key (backspace, arrows, delete) to the focused field.</summary>
-    public bool FormKeyDown(int pageIndex, int keyCode)
-        => WithFormPage(pageIndex, (form, page) => PdfiumNative.FormOnKeyDown(form, page, keyCode));
+    /// <summary>
+    /// Sends a virtual key (delete, arrows, home, end) to the focused field.
+    /// </summary>
+    /// <param name="modifier">
+    /// <see cref="FormModifiers"/> flags. Shift is what turns a caret move into a
+    /// selection, so passing 0 here makes the field unselectable from the
+    /// keyboard however correct the key code is.
+    /// </param>
+    public bool FormKeyDown(int pageIndex, int keyCode, int modifier = 0)
+        => WithFormPage(pageIndex, (form, page) => PdfiumNative.FormOnKeyDown(form, page, keyCode, modifier));
+
+    /// <summary>Presses the left button at a page-local point, without releasing it.</summary>
+    public bool FormPointerDown(int pageIndex, double localX, double localY, int modifier = 0)
+        => WithFormPointer(pageIndex, localX, localY,
+            (form, page, x, y) => PdfiumNative.FormOnLButtonDown(form, page, x, y, modifier));
+
+    /// <summary>
+    /// Moves the pointer over the page. With the button held this is what extends
+    /// a selection inside a text field; PDFium's edit control tracks the drag
+    /// here, so a press and release alone can never select anything.
+    /// </summary>
+    public bool FormPointerMove(int pageIndex, double localX, double localY, int modifier = 0)
+        => WithFormPointer(pageIndex, localX, localY,
+            (form, page, x, y) => PdfiumNative.FormOnMouseMove(form, page, x, y, modifier));
+
+    /// <summary>Releases the left button at a page-local point.</summary>
+    public bool FormPointerUp(int pageIndex, double localX, double localY, int modifier = 0)
+        => WithFormPointer(pageIndex, localX, localY,
+            (form, page, x, y) => PdfiumNative.FormOnLButtonUp(form, page, x, y, modifier));
+
+    private bool WithFormPointer(
+        int pageIndex, double localX, double localY, Func<IntPtr, IntPtr, double, double, bool> action)
+        => WithFormPage(pageIndex, (form, page) =>
+        {
+            var (px, py) = ToPageSpaceLocked(page, pageIndex, localX, localY);
+            return action(form, page, px, py);
+        });
 
     /// <summary>Selects an option by index in the focused combo/list box.</summary>
     public bool FormSetIndexSelected(int pageIndex, int index, bool selected)

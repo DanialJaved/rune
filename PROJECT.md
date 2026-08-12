@@ -153,7 +153,7 @@ src/
     Assets/                   rune.ico + MSIX visual assets (generated)
 
 tests/
-  Rune.Tests/           xUnit — 355 tests against a generated corpus (see §6)
+  Rune.Tests/           xUnit — 366 tests against a generated corpus (see §6)
 
 tools/
   gen-corpus.ps1        Hand-authors the test PDFs (no PDF lib needed)
@@ -333,7 +333,7 @@ dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
 # Run (accepts an optional PDF path; also --page N --zoom Z for scripted tests)
 src/Rune.App/bin/x64/Debug/net10.0-windows10.0.19041.0/win-x64/Rune.exe [file.pdf]
 
-# Test (355 tests)
+# Test (366 tests)
 dotnet test tests/Rune.Tests/Rune.Tests.csproj
 
 # Regenerate assets when needed
@@ -736,10 +736,30 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
   recreated on `Loaded`, and `UpdateDesiredTiles` no longer answers a zero-area
   viewport by asking for nothing (which is indistinguishable from being told to
   render nothing, and equally permanent).
+  **Fixed: backspace did nothing in a form field, and nothing could be
+  selected.** Four separate causes behind one report, each confirmed by probe
+  before anything was changed:
+  - **Backspace** was sent through `FORM_OnKeyDown`, which **refuses it** and
+    returns false. PDFium's edit control handles Delete and the arrows in its key
+    handler but backspace in its *character* handler, so it has to go through
+    `FORM_OnChar` as character 8. Delete worked, which is exactly what made this
+    look like a dead key rather than a routing mistake.
+  - **Shift+arrow** passed no modifier, so PDFium moved the caret and selected
+    nothing. `FWL_EVENTFLAG_ShiftKey` is what turns one into the other.
+  - **Dragging** could not select, because a click was a button-down and a
+    button-up at the same point with nothing between. PDFium's edit control
+    starts a selection on the down and extends it on each *move*, so the viewer
+    now sends a real press, moves and release, with the pointer captured.
+  - **Ctrl+A** was not routed at all, and is another character-handler case:
+    `FORM_OnKeyDown(A, ctrl)` is refused, `FORM_OnChar(1, ctrl)` selects all.
+
+  Backspace is routed from `KeyDown` rather than from `CharacterReceived`
+  deliberately: KeyDown certainly fires for it, and `TryHandleFormCharacter`
+  drops control characters, so it cannot delete twice however the events arrive.
   **Fixed: `Ctrl+T` was promised and not wired.** The text button's tooltip named
   it, no accelerator existed, and neither the text nor the picture tool appeared
   in the command palette or `ShortcutCatalog`.
-  334 → 355 tests.
+  334 → 366 tests.
 
 - **v0.6.0** (2026-08-09) — the release that stops the reader disabling itself.
   **Fixed: rotating the page no longer turns half the app off.** Text selection,
@@ -974,8 +994,9 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
 
 ## 10. Known bugs
 
-**One open, and it is not Rune's to fix.** Everything else below is fixed, kept
-because each cause is worth remembering. The three v0.4.1 bugs are listed in
+**Two open: a combo box that will not drop its list, and a picker failure that is
+not Rune's to fix.** Everything else below is fixed, kept because each cause is
+worth remembering. The three v0.4.1 bugs are listed in
 full; the rest have their post-mortems in §9 — the two zoom/blur bugs and the
 invisible hover ghost (v0.5.x), in v0.6.0 the fourteen rotation guards,
 `Rotate()` discarding the user's find results, and a typed-signature preview
@@ -990,7 +1011,17 @@ normal until a rotate or a night-mode toggle, at which point it went white and
 stayed white. When something "sometimes" fails to redraw, suspect the render
 thread's *lifetime* before suspecting the render.
 
-0. **The file picker can fail to open, transiently.** `PickSingleFileAsync`
+0. **A combo box takes focus but its list never drops down.** Confirmed
+   pre-existing, not a regression from the v0.7.0 pointer rework: a build from
+   before it behaves identically. Clicking the drop button focuses the widget and
+   draws its focus ring, and no popup appears. Rune hosts no combo UI of its own
+   (`FormSetIndexSelected` exists in the engine with no caller), so the list is
+   PDFium's own, drawn by the form-fill layer. `FFI_SetTimer`/`FFI_KillTimer` are
+   deliberately NULL here (§7), which is the first thing to rule out. The value
+   itself is fine: it round-trips through save, and it can be typed into.
+   **Not investigated further** — it surfaced while verifying a different fix.
+
+1. **The file picker can fail to open, transiently.** `PickSingleFileAsync`
    threw `COMException 0x80004005` three times in a row on a v0.6.0 build
    (errors.log, 2026-08-09 21:18 local). The import code was byte-identical to
    v0.5.1, where the same path demonstrably worked, so the fault was never in
@@ -1006,18 +1037,18 @@ thread's *lifetime* before suspecting the render.
    now says the picker failed rather than blaming the image. If it comes back,
    the log will say which picker and whether the retry helped.
 
-1. ~~Navigation keys go dead after clicking a tab or the page-number box.~~
+2. ~~Navigation keys go dead after clicking a tab or the page-number box.~~
    **Fixed.** `PdfViewer` is now `IsTabStop = true` and takes focus on pointer
    press (it had to be, for form fields to receive keystrokes at all).
    `IsTextInputFocused()` additionally reports true while a PDF form field has
    focus, so arrows move the caret rather than scrolling the document.
-2. ~~Selected pages are nearly invisible in light theme.~~ **Fixed.** Cause was
+3. ~~Selected pages are nearly invisible in light theme.~~ **Fixed.** Cause was
    the thumbnail `Border`'s opaque background painting over the ListViewItem's
    selection tint. The current page now draws its own accent ring as a second
    Border overlay (`ThumbnailItem.RingThickness`), owing nothing to the
    container. Only the *thickness* is bound — the accent brush stays in XAML as
    a `{ThemeResource}`.
-3. ~~Night mode doesn't invert sidebar thumbnails.~~ **Fixed.** `DocumentView.ToBitmap`
+4. ~~Night mode doesn't invert sidebar thumbnails.~~ **Fixed.** `DocumentView.ToBitmap`
    inverts BGRA during the copy it already performs (~55k pixels, sub-ms), and
    `PdfViewer.NightModeChanged` re-renders realized containers. The homepage
    recent-document cards are deliberately **not** inverted: the start page isn't
@@ -1097,7 +1128,7 @@ thread's *lifetime* before suspecting the render.
   When it does go out it goes as **one v0.7.0 release covering both versions**,
   with the notes saying plainly that the intervening ones went out through the
   Store or not at all.
-- **355 tests passing** (326 at v0.6.0); x64 and ARM64 Release both build clean,
+- **366 tests passing** (326 at v0.6.0); x64 and ARM64 Release both build clean,
   and the Release test run is green, which is what CI checks on a PR.
 - **PDFium 153.0.7988**, unchanged this release.
 - **Version bumped to 0.7.0** in both `Rune.App.csproj` and
@@ -1203,6 +1234,12 @@ Added for **v0.7.0**, all on `hello.pdf` unless noted:
   confirmed: two tabs, switch across and back, `Ctrl+I`, and every tile and
   thumbnail re-renders inverted. Before the fix they stayed as they were, and a
   rotate left them white permanently.
+- **Form editing**, all four routes that were broken, on `form.pdf`: backspace
+  takes exactly one character off (not two, which is what a double-routed key
+  would do); Shift+Home draws a real selection highlight and typing replaces it;
+  dragging across the value selects the part dragged over; Ctrl+A selects the
+  lot. The checkbox still takes its tick through the split press and release,
+  which is the regression that rework could have caused.
 
 Nothing with a runtime surface is now unverified on screen.
 

@@ -144,8 +144,50 @@ public sealed partial class PdfViewer
         _formFocusPage = page;
         _formFocusField = hit;
         Focus(FocusState.Pointer);
-        DispatchFormClick(document, page, local.X, local.Y);
+
+        // Press only. The release comes from Canvas_PointerReleased and anything
+        // in between is a drag, which is the only way PDFium's edit control will
+        // select text: it starts the selection on the button-down and extends it
+        // on each move. Sending a down and an up at one point, as this used to,
+        // places the caret and can never select anything.
+        _formPointerDown = true;
+        DispatchFormPointer(document, page, local.X, local.Y, FormPointer.Down);
         return true;
+    }
+
+    private bool _formPointerDown;
+
+    /// <summary>True while a press that landed on a field has not been released.</summary>
+    private bool IsDraggingInFormField => _formPointerDown;
+
+    private enum FormPointer { Down, Move, Up }
+
+    /// <summary>Extends the selection while the button is held inside a field.</summary>
+    private void UpdateFormDrag(Point docPoint)
+    {
+        if (!_formPointerDown || _layout is null || _document is not { HasFillableForm: true } document)
+        {
+            return;
+        }
+        var local = ToPageLocal(_formFocusPage, docPoint);
+        DispatchFormPointer(document, _formFocusPage, local.X, local.Y, FormPointer.Move);
+    }
+
+    /// <summary>Ends the drag. The selection PDFium built survives the release.</summary>
+    private void CommitFormDrag(Point docPoint)
+    {
+        if (!_formPointerDown)
+        {
+            return;
+        }
+        _formPointerDown = false;
+
+        if (_layout is null || _document is not { HasFillableForm: true } document)
+        {
+            return;
+        }
+        var local = ToPageLocal(_formFocusPage, docPoint);
+        DispatchFormPointer(document, _formFocusPage, local.X, local.Y, FormPointer.Up);
     }
 
     /// <summary>Whether a field is the one that currently has focus.</summary>
@@ -254,21 +296,37 @@ public sealed partial class PdfViewer
         return true;
     }
 
-    private async void DispatchFormClick(PdfDocument document, int page, double localX, double localY)
+    /// <summary>
+    /// Sends one pointer event to the focused field's page.
+    ///
+    /// Order matters and is guaranteed: the scheduler runs same-priority ops
+    /// first-in-first-out on its single thread, so a down, its moves and its up
+    /// reach PDFium in the order the user made them even though each is queued
+    /// from a separate async call.
+    /// </summary>
+    private async void DispatchFormPointer(
+        PdfDocument document, int page, double localX, double localY, FormPointer which)
     {
+        int modifier = FormModifiersNow();
         try
         {
-            await _scheduler.RunAsync(
-                PdfWorkPriority.Interactive, () => document.FormClick(page, localX, localY));
+            await _scheduler.RunAsync(PdfWorkPriority.Interactive, () => which switch
+            {
+                FormPointer.Down => document.FormPointerDown(page, localX, localY, modifier),
+                FormPointer.Move => document.FormPointerMove(page, localX, localY, modifier),
+                _ => document.FormPointerUp(page, localX, localY, modifier),
+            });
         }
         catch
         {
             return; // document swapped or closed under us
         }
 
-        if (_document == document)
+        // Checkboxes and radios change appearance on the release, so the cached
+        // geometry is only stale once the gesture is over. Refreshing on every
+        // move of a drag would be a round-trip per pointer event.
+        if (which == FormPointer.Up && _document == document)
         {
-            // Checkboxes and radios change appearance on the click itself.
             InvalidateFormFields(page);
         }
     }
@@ -305,6 +363,9 @@ public sealed partial class PdfViewer
             return false;
         }
 
+        int modifier = FormModifiersNow();
+        bool control = (modifier & PdfDocument.FormModifiers.Control) != 0;
+
         switch (key)
         {
             case VirtualKey.Escape:
@@ -314,7 +375,28 @@ public sealed partial class PdfViewer
                 KillFormFocus();
                 return key != VirtualKey.Tab; // let Tab move on normally
 
+            // Backspace is NOT a key as far as PDFium's edit control is
+            // concerned. It handles Delete and the arrows in its key handler and
+            // backspace in its CHARACTER handler, so FORM_OnKeyDown(8) returns
+            // false and changes nothing, which is exactly how it behaved here:
+            // Delete worked, backspace did nothing at all.
+            //
+            // It is routed from KeyDown rather than from CharacterReceived on
+            // purpose. KeyDown certainly fires for it; whether a WM_CHAR follows
+            // is not ours to rely on, and TryHandleFormCharacter drops control
+            // characters, so this cannot delete twice.
             case VirtualKey.Back:
+                DispatchFormEdit(document, _formFocusPage,
+                    page => document.FormChar(page, Backspace, modifier));
+                return true;
+
+            // Ctrl+A likewise arrives as a control character, not as a letter
+            // with a flag: FORM_OnKeyDown(A, ctrl) is refused.
+            case (VirtualKey)0x41 when control: // A
+                DispatchFormEdit(document, _formFocusPage,
+                    page => document.FormChar(page, SelectAll, modifier));
+                return true;
+
             case VirtualKey.Delete:
             case VirtualKey.Left:
             case VirtualKey.Right:
@@ -322,12 +404,39 @@ public sealed partial class PdfViewer
             case VirtualKey.End:
             case VirtualKey.Up:
             case VirtualKey.Down:
-                DispatchFormEdit(document, _formFocusPage, page => document.FormKeyDown(page, (int)key));
+                // The modifier is what makes shift-arrow SELECT rather than just
+                // move the caret. Passing 0 here, as this did, leaves a field
+                // that cannot be selected from the keyboard at all.
+                DispatchFormEdit(document, _formFocusPage,
+                    page => document.FormKeyDown(page, (int)key, modifier));
                 return true;
 
             default:
                 return false;
         }
+    }
+
+    /// <summary>ASCII backspace, which is how PDFium's edit control wants it.</summary>
+    private const int Backspace = 8;
+
+    /// <summary>Ctrl+A as its control character.</summary>
+    private const int SelectAll = 1;
+
+    /// <summary>
+    /// The modifier keys held right now, in PDFium's flags. Read from the live
+    /// keyboard state because <c>KeyRoutedEventArgs</c> carries no modifier set.
+    /// </summary>
+    private static int FormModifiersNow()
+    {
+        int flags = 0;
+        if (IsHeld(VirtualKey.Shift)) { flags |= PdfDocument.FormModifiers.Shift; }
+        if (IsHeld(VirtualKey.Control)) { flags |= PdfDocument.FormModifiers.Control; }
+        if (IsHeld(VirtualKey.Menu)) { flags |= PdfDocument.FormModifiers.Alt; }
+        return flags;
+
+        static bool IsHeld(VirtualKey key) => Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(key)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
     }
 
     private async void DispatchFormEdit(PdfDocument document, int page, Func<int, bool> edit)

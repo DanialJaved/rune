@@ -1338,6 +1338,15 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
+        // Dragging inside a form field selects its text, which PDFium can only
+        // do if it sees the moves between the press and the release.
+        if (IsDraggingInFormField)
+        {
+            UpdateFormDrag(doc);
+            e.Handled = true;
+            return;
+        }
+
         if (_isSelecting)
         {
             UpdateSelection(doc);
@@ -1433,6 +1442,9 @@ public sealed partial class PdfViewer : UserControl
         // of page text must take the click, not start a drag-select inside it.
         if (TryHandleFormPress(docPoint))
         {
+            // Captured so the moves that select the field's text keep arriving
+            // even when the pointer wanders outside the widget mid-drag.
+            Canvas.CapturePointer(e.Pointer);
             e.Handled = true;
             return;
         }
@@ -1498,6 +1510,13 @@ public sealed partial class PdfViewer : UserControl
         if (_draggingStamp)
         {
             CommitStampDrag();
+            Canvas.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+            return;
+        }
+        if (IsDraggingInFormField)
+        {
+            CommitFormDrag(DocumentPointFromPointer(e));
             Canvas.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
             return;
