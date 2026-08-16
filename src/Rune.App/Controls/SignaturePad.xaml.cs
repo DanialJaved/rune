@@ -9,7 +9,6 @@ using Microsoft.UI.Xaml.Shapes;
 using Rune.Engine;
 using Rune.Services;
 using Windows.Foundation;
-using Windows.Storage.Pickers;
 using Windows.UI;
 
 namespace Rune.Controls;
@@ -43,8 +42,19 @@ public sealed partial class SignaturePad : UserControl
     /// <summary>Transparent margin left around the ink when the result is cropped.</summary>
     private const int CropPadding = 4;
 
-    private const string DefaultCaption = "Draw your signature below, or import a photo of one.";
+    private const string DefaultCaption = "Draw your signature below, type it, or import a photo of one.";
     private const string UnreadableCaption = "That image couldn't be read. Try a PNG or a JPEG.";
+
+    /// <summary>
+    /// Shown when the machine has none of the handwriting faces (a stripped
+    /// LTSC or N image). Better to say so than to hand back something that
+    /// looks typed and call it a signature.
+    /// </summary>
+    private const string NoScriptFontCaption =
+        "This PC has no handwriting font installed, so typing will not look handwritten. Draw or import instead.";
+
+    /// <summary>Typed-signature font size in pad pixels, and the size Rasterize renders at.</summary>
+    private const float TypedFontSize = 64f;
 
     /// <summary>The preview never crops, so the bitmap allocated at import stays the right size.</summary>
     private static readonly MatteOptions PreviewOptions = new() { Crop = false };
@@ -61,10 +71,113 @@ public sealed partial class SignaturePad : UserControl
     {
         InitializeComponent();
         UpdateSwatches();
+        InitializeTypedStyles();
     }
 
     /// <summary>True when there is something worth saving.</summary>
-    public bool HasContent => _imported is not null || _strokes.Any(s => s.Count > 1);
+    public bool HasContent =>
+        _imported is not null || _strokes.Any(s => s.Count > 1) || TypedSignature is not null;
+
+    // ---- typed ----
+
+    /// <summary>
+    /// The typed text and the face to draw it in, or null when nothing has been
+    /// typed or no handwriting font is available. Whitespace does not count:
+    /// a stray space would otherwise stamp an empty rectangle.
+    /// </summary>
+    private (string Text, string Family)? TypedSignature
+    {
+        get
+        {
+            string text = TypedBox.Text.Trim();
+            if (text.Length == 0 || SelectedTypedStyle is not { } style)
+            {
+                return null;
+            }
+            return SignatureFonts.Resolve(style) is { } family ? (text, family) : null;
+        }
+    }
+
+    private SignatureFonts.Style? SelectedTypedStyle =>
+        TypedStyleBox.SelectedIndex >= 0 && TypedStyleBox.SelectedIndex < SignatureFonts.Styles.Length
+            ? SignatureFonts.Styles[TypedStyleBox.SelectedIndex]
+            : null;
+
+    /// <summary>
+    /// Fills the style picker with the styles this machine can actually render.
+    /// A style whose faces are all missing is listed but disabled, rather than
+    /// hidden: the list staying the same length keeps the dialog from resizing,
+    /// and a greyed entry explains itself.
+    /// </summary>
+    private void InitializeTypedStyles()
+    {
+        foreach (var style in SignatureFonts.Styles)
+        {
+            string? family = SignatureFonts.Resolve(style);
+            TypedStyleBox.Items.Add(new ComboBoxItem
+            {
+                Content = style.Name,
+                IsEnabled = family is not null,
+                // Preview the face in the list itself.
+                FontFamily = family is not null ? new Microsoft.UI.Xaml.Media.FontFamily(family) : TypedStyleBox.FontFamily,
+            });
+        }
+
+        int firstUsable = Array.FindIndex(SignatureFonts.Styles, s => SignatureFonts.Resolve(s) is not null);
+        if (firstUsable >= 0)
+        {
+            TypedStyleBox.SelectedIndex = firstUsable;
+        }
+        else
+        {
+            // Nothing to type in. Say so once, up front, and keep the box out of
+            // the way rather than letting someone type into a dead control.
+            TypedBox.IsEnabled = false;
+            TypedStyleBox.IsEnabled = false;
+            Caption.Text = NoScriptFontCaption;
+        }
+    }
+
+    private void TypedBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (TypedBox.Text.Trim().Length > 0)
+        {
+            // Typing replaces anything drawn or imported — one mode at a time.
+            ClearImport();
+            ClearStrokes();
+        }
+        RefreshTypedPreview();
+    }
+
+    private void TypedStyleBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshTypedPreview();
+
+    private void RefreshTypedPreview()
+    {
+        if (TypedSignature is { } typed)
+        {
+            TypedPreview.FontFamily = new Microsoft.UI.Xaml.Media.FontFamily(typed.Family);
+            TypedPreview.FontSize = TypedFontSize;
+            // Set here rather than relying on SetInk, which only runs when a
+            // swatch is clicked: inherited, the TextBlock takes the dialog's
+            // foreground, which is white in dark theme and invisible on the
+            // white pad.
+            TypedPreview.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(_ink);
+            TypedPreview.Text = typed.Text;
+        }
+        else
+        {
+            TypedPreview.Text = string.Empty;
+        }
+    }
+
+    private void ClearTyped()
+    {
+        if (TypedBox.Text.Length == 0)
+        {
+            return;
+        }
+        TypedBox.Text = string.Empty;   // raises TextChanged, which clears the preview
+    }
 
     /// <summary>Key the paper out of an imported photo. Seeded from settings, read back after Save.</summary>
     public bool RemoveBackground
@@ -100,8 +213,9 @@ public sealed partial class SignaturePad : UserControl
 
     private void Pad_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        // Starting to draw replaces any imported image — one or the other.
+        // Starting to draw replaces an import or typed text — one mode at a time.
         ClearImport();
+        ClearTyped();
 
         _current = [e.GetCurrentPoint(Pad).Position];
         _strokes.Add(_current);
@@ -158,6 +272,9 @@ public sealed partial class SignaturePad : UserControl
         {
             line.Stroke = brush;
         }
+        // The swatches apply to a typed signature too — RasterizeTyped draws in
+        // _ink, so the preview has to follow or the two disagree.
+        TypedPreview.Foreground = brush;
     }
 
     private void UpdateSwatches()
@@ -181,11 +298,17 @@ public sealed partial class SignaturePad : UserControl
 
     private void ClearButton_Click(object sender, RoutedEventArgs e)
     {
+        ClearStrokes();
+        ClearImport();
+        ClearTyped();
+    }
+
+    private void ClearStrokes()
+    {
         _strokes.Clear();
         _current = null;
         _currentLine = null;
         Pad.Children.Clear();
-        ClearImport();
     }
 
     private void ClearImport()
@@ -204,66 +327,88 @@ public sealed partial class SignaturePad : UserControl
     private async void ImportButton_Click(object sender, RoutedEventArgs e) => await StartImportAsync();
 
     /// <summary>
-    /// Runs the picker and loads the chosen image. Public so the Sign flyout's
-    /// "Import image…" can open this dialog straight into the picker.
+    /// A picked image, or the reason there isn't one. All three states matter:
+    /// an image to show, a failure to report, or a cancel that says nothing.
     /// </summary>
-    public async Task StartImportAsync()
+    public readonly record struct ImportOutcome(SavedSignature? Image, string? Failure);
+
+    /// <summary>
+    /// Picks a file and decodes it, touching no XAML, so it can run *before* the
+    /// dialog that will show it exists.
+    ///
+    /// That ordering is the point. This used to run from the dialog's Opened
+    /// event, which fired an out-of-process picker from inside a ContentDialog's
+    /// open transition — see PROJECT.md §10 for the E_FAIL that came out of it.
+    /// Picking first and building the pad around the answer has no such window,
+    /// and it stops an empty pad flashing behind the picker or being left
+    /// stranded when the picker is cancelled.
+    /// </summary>
+    public static async Task<ImportOutcome> PickImportAsync(nint owner)
     {
-        LastFailure = null;
+        var picked = await FilePickerHost.PickOpenAsync(owner, ".png", ".jpg", ".jpeg");
+        if (picked.Failed)
+        {
+            // The picker never opened, so this is emphatically not a bad image.
+            // Saying "that image couldn't be read" here sent the last person who
+            // hit it looking at their photo instead of at Windows.
+            return new ImportOutcome(null, FilePickerHost.FailureMessage);
+        }
+        if (picked.File is not { } file)
+        {
+            return default; // cancelled
+        }
+
         try
         {
-            await ImportAsync();
+            // Capped at decode time so WIC does the scaling. Past MaxSingleTilePx
+            // a bitmap silently fails to draw inside a CanvasVirtualControl
+            // session, which is where the on-page hover ghost lives — a 4000px
+            // phone photo would arm a signature that simply never appears.
+            //
+            // OpenReadAsync rather than the path: a picked file can be a OneDrive
+            // placeholder or a Phone Link item whose Path is empty.
+            using var stream = await file.OpenReadAsync();
+            var loaded = await SignatureStore.TryLoadAsync(stream, file.Path, TileMath.MaxSingleTilePx);
+            return loaded is null
+                ? new ImportOutcome(null, UnreadableCaption)
+                : new ImportOutcome(loaded, null);
         }
         catch (Exception ex)
         {
-            // Never allowed to escape. Both callers are async void — the button
-            // handler and the dialog's Opened event — where an unhandled
-            // exception takes the whole process down rather than failing the
-            // import. PickSingleFileAsync alone can throw for a second picker
-            // already open or a dead owner window.
-            Rune.Services.ErrorLog.Default.Write(nameof(SignaturePad), ex);
-            Fail(UnreadableCaption);
+            // Never allowed to escape: every caller is reached from async void,
+            // where this takes the process down rather than failing the import.
+            ErrorLog.Default.Write(nameof(SignaturePad), ex);
+            return new ImportOutcome(null, UnreadableCaption);
         }
     }
 
-    private async Task ImportAsync()
+    /// <summary>Runs the picker from inside the open pad, for its own Import button.</summary>
+    public async Task StartImportAsync()
     {
-        var picker = new FileOpenPicker();
-        picker.FileTypeFilter.Add(".png");
-        picker.FileTypeFilter.Add(".jpg");
-        picker.FileTypeFilter.Add(".jpeg");
-        // Mandatory in WinUI 3: a picker with no owner window never opens.
-        WinRT.Interop.InitializeWithWindow.Initialize(
-            picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!));
+        LastFailure = null;
+        ApplyImport(await PickImportAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!)));
+    }
 
-        var file = await picker.PickSingleFileAsync();
-        if (file is null)
+    /// <summary>
+    /// Shows a picked image, or reports why there is not one. A cancel does
+    /// neither, which is what makes it safe to call unconditionally.
+    /// </summary>
+    public void ApplyImport(ImportOutcome outcome)
+    {
+        if (outcome.Failure is { } failure)
+        {
+            Fail(failure);
+            return;
+        }
+        if (outcome.Image is not { } loaded)
         {
             return;
         }
 
-        // Capped at decode time so WIC does the scaling. Past MaxSingleTilePx a
-        // bitmap silently fails to draw inside a CanvasVirtualControl session,
-        // which is where the on-page hover ghost lives — a 4000px phone photo
-        // would arm a signature that simply never appears.
-        //
-        // OpenReadAsync rather than the path: a picked file can be a OneDrive
-        // placeholder or a Phone Link item whose Path is empty.
-        SavedSignature? loaded;
-        using (var stream = await file.OpenReadAsync())
-        {
-            loaded = await SignatureStore.TryLoadAsync(stream, file.Path, TileMath.MaxSingleTilePx);
-        }
-
-        if (loaded is null)
-        {
-            Fail(UnreadableCaption);
-            return;
-        }
-
-        // An import replaces anything drawn — one or the other, never both.
-        _strokes.Clear();
-        Pad.Children.Clear();
+        // An import replaces anything drawn or typed — one mode at a time.
+        ClearStrokes();
+        ClearTyped();
         _imported = loaded;
         _preview = new WriteableBitmap(loaded.Width, loaded.Height);
         ImportedPreview.Source = _preview;
@@ -416,6 +561,11 @@ public sealed partial class SignaturePad : UserControl
             return (img.Bgra, img.Width, img.Height);
         }
 
+        if (TypedSignature is { } typed)
+        {
+            return RasterizeTyped(typed.Text, typed.Family);
+        }
+
         if (InkBounds() is not { } box)
         {
             return null;
@@ -457,6 +607,61 @@ public sealed partial class SignaturePad : UserControl
                         _ink, (float)StrokeWidth, style);
                 }
             }
+        }
+
+        return (ToStraightAlpha(target.GetPixelBytes()), width, height);
+    }
+
+    /// <summary>
+    /// Rasterises typed text to straight BGRA, cropped to the glyphs.
+    ///
+    /// Cropped by measuring rather than by scanning pixels: DirectWrite reports
+    /// the drawn extent, and a script face routinely overhangs its layout box on
+    /// both sides — a descender on a "y", the entry stroke on a capital. Using
+    /// the layout box would clip the ink; using LayoutBounds alone would leave a
+    /// margin that makes the placed size disagree with the preview.
+    /// </summary>
+    private (byte[] Bgra, int Width, int Height)? RasterizeTyped(string text, string family)
+    {
+        // 2x for the same reason the drawn path renders at 2x: the stamp gets
+        // scaled up on the page and should stay crisp.
+        const float scale = 2f;
+        const float pad = 6f;
+
+        var device = CanvasDevice.GetSharedDevice();
+        using var format = new Microsoft.Graphics.Canvas.Text.CanvasTextFormat
+        {
+            FontFamily = family,
+            FontSize = TypedFontSize * scale,
+            WordWrapping = Microsoft.Graphics.Canvas.Text.CanvasWordWrapping.NoWrap,
+        };
+
+        // DrawBounds is the inked extent, which is what needs to survive the crop.
+        using var layout = new Microsoft.Graphics.Canvas.Text.CanvasTextLayout(device, text, format, 0, 0);
+        var bounds = layout.DrawBounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            return null; // nothing inked (all-whitespace slipped through, or a face with no glyphs for it)
+        }
+
+        int width = Math.Clamp((int)Math.Ceiling(bounds.Width + pad * 2), 1, TileMath.MaxSingleTilePx);
+        int height = Math.Clamp((int)Math.Ceiling(bounds.Height + pad * 2), 1, TileMath.MaxSingleTilePx);
+
+        using var target = new CanvasRenderTarget(
+            device, width, height, 96,
+            Windows.Graphics.DirectX.DirectXPixelFormat.B8G8R8A8UIntNormalized,
+            CanvasAlphaMode.Premultiplied);
+
+        using (var session = target.CreateDrawingSession())
+        {
+            session.Clear(Colors.Transparent);
+            // Shift the inked box to the origin, so the crop is exact and the
+            // glyphs' overhang on either side is kept rather than cut off.
+            session.DrawTextLayout(
+                layout,
+                (float)(-bounds.X + pad),
+                (float)(-bounds.Y + pad),
+                _ink);
         }
 
         return (ToStraightAlpha(target.GetPixelBytes()), width, height);

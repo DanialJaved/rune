@@ -44,7 +44,7 @@ public sealed partial class PdfViewer : UserControl
     private const float PreviewTargetWidthPx = 216f;
 
     private readonly DispatcherQueue _dispatcher;
-    private readonly RenderScheduler _scheduler;
+    private RenderScheduler _scheduler;
 
     private PdfDocument? _document;
     private (float Width, float Height)[] _pageSizes = [];
@@ -226,9 +226,10 @@ public sealed partial class PdfViewer : UserControl
     private static Microsoft.UI.Input.InputSystemCursorShape CursorFor(AnnotationTool tool) => tool switch
     {
         AnnotationTool.Pen or AnnotationTool.Highlighter => Microsoft.UI.Input.InputSystemCursorShape.Cross,
-        // A note is placed at a point, and the eraser and signature both act on
-        // whatever is under the pointer — a hand reads as "click a thing".
-        AnnotationTool.Note or AnnotationTool.Signature => Microsoft.UI.Input.InputSystemCursorShape.Cross,
+        // A note, a picture and a signature are all placed at a point, so the
+        // crosshair says where the point is.
+        AnnotationTool.Note or AnnotationTool.Signature or AnnotationTool.Image
+            => Microsoft.UI.Input.InputSystemCursorShape.Cross,
         AnnotationTool.Eraser => Microsoft.UI.Input.InputSystemCursorShape.Hand,
         _ => Microsoft.UI.Input.InputSystemCursorShape.Arrow,
     };
@@ -352,8 +353,36 @@ public sealed partial class PdfViewer : UserControl
             ApplyViewerBackground();
             Canvas.Invalidate();
         };
-        Unloaded += (_, _) => _scheduler.Dispose();
+        // The scheduler owns a render thread, so it is stopped when the control
+        // leaves the tree. But a TabView unloads the content of a tab you switch
+        // AWAY from, and that is not going away at all — so it has to be able to
+        // come back, or that tab can never render anything again.
+        //
+        // It looks fine for a while, which is what made this hard to see: the
+        // tiles and thumbnails already rendered are still cached and still drawn.
+        // The page only goes white when something invalidates them, and then it
+        // stays white for good. Two tabs, switch across and back, press Ctrl+R:
+        // page and thumbnails both blank, permanently.
+        Unloaded += (_, _) =>
+        {
+            _schedulerStopped = true;
+            _scheduler.Dispose();
+        };
+        Loaded += (_, _) =>
+        {
+            if (!_schedulerStopped)
+            {
+                return;
+            }
+            _schedulerStopped = false;
+            _scheduler = new RenderScheduler(OnTileRendered);
+            // Nothing has changed about the view, so nothing else will ask.
+            RequestDesiredUpdate();
+        };
     }
+
+    /// <summary>True while the render thread is stopped because the tab is not on screen.</summary>
+    private bool _schedulerStopped;
 
     private double DisplayScale => XamlRoot?.RasterizationScale ?? 1.0;
     private float RenderScale => (float)(_zoom * DisplayScale);
@@ -615,19 +644,19 @@ public sealed partial class PdfViewer : UserControl
         }
         _rotation = next;
 
-        // Selection, search highlights, and link rects are all in unrotated
-        // text coordinates — stale after rotation. Drop them.
-        _selection = null;
-        _selectionPage = -1;
-        _selectionAnchorChar = -1;
+        // Selection, search hits, link rects and page text are all measured in
+        // unrotated page coordinates, which makes them rotation-independent —
+        // they survive this. They used to be dropped here because nothing could
+        // *place* them once the view turned; now that the drawing and hit-testing
+        // paths both go through PageRotationTransform, throwing away the user's
+        // find results and selection on every Ctrl+R would be pure loss. Only an
+        // in-progress drag goes, since the pointer is no longer over what it
+        // grabbed.
         _isSelecting = false;
-        _searchByPage.Clear();
-        _activeHit = null;
-        _links.Clear();
-        _linksRequested.Clear();
-        ClearPageTextCache();
 
-        // Previews are rendered per-rotation; drop them along with stale tiles.
+        // Tiles and previews are rendered per-rotation, so those really are
+        // stale. This invalidation is load-bearing — it is the fix for the v0.2
+        // "rotate shows blank pages" bug.
         ClearCaches();
 
         double positionRatio = _layout is { TotalHeight: > 0 }
@@ -799,6 +828,11 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
+        // An open text box is anchored to the page, not to the window, so it has
+        // to be re-placed on every view change including the intermediate ones.
+        // Skipping those would leave it sliding against the content mid-scroll.
+        PositionTextEditor();
+
         if (e.IsIntermediate)
         {
             // Mid-scroll: coalesce the (allocating) want-list recompute; the
@@ -866,7 +900,7 @@ public sealed partial class PdfViewer : UserControl
     /// </summary>
     private void PrefetchVisiblePageData()
     {
-        if (_layout is null || _document is null || _rotation != 0)
+        if (_layout is null || _document is null)
         {
             return;
         }
@@ -924,7 +958,7 @@ public sealed partial class PdfViewer : UserControl
 
         // Plain wheel resizes the signature waiting to be placed. Only while one
         // is actually pending, so the wheel keeps scrolling the rest of the time.
-        if (!ctrl && TryResizePendingSignature(point.Properties.MouseWheelDelta))
+        if (!ctrl && TryResizePendingStamp(point.Properties.MouseWheelDelta))
         {
             e.Handled = true;
             return;
@@ -966,7 +1000,7 @@ public sealed partial class PdfViewer : UserControl
     /// <inheritdoc cref="MarkupSelection(MarkupKind)"/>
     public async void MarkupSelection(MarkupKind kind, Color color, byte alpha)
     {
-        if (_document is null || _selection is not { Count: > 0 } selection || _rotation != 0)
+        if (_document is null || _selection is not { Count: > 0 } selection)
         {
             return;
         }
@@ -1161,8 +1195,7 @@ public sealed partial class PdfViewer : UserControl
 
         var menu = new MenuFlyout();
 
-        bool annotationsAllowed = _rotation == 0;
-        if (annotationsAllowed && _selection is { Count: > 0 } sel && sel.PageIndex == page)
+        if (_selection is { Count: > 0 } sel && sel.PageIndex == page)
         {
             AddMenuItem(menu, "Highlight", Symbol.Highlight, () => MarkupSelection(MarkupKind.Highlight));
             AddMenuItem(menu, "Underline", Symbol.Underline, () => MarkupSelection(MarkupKind.Underline));
@@ -1173,71 +1206,78 @@ public sealed partial class PdfViewer : UserControl
             AddMenuItem(menu, "Copy", Symbol.Copy, CopySelectionToClipboard);
         }
 
-        if (annotationsAllowed)
+        if (menu.Items.Count > 0)
         {
-            if (menu.Items.Count > 0)
-            {
-                menu.Items.Add(new MenuFlyoutSeparator());
-            }
-            AddMenuItem(menu, "Add note here", Symbol.Comment,
-                () => NoteRequested?.Invoke(this, (page, localX, localY)));
+            menu.Items.Add(new MenuFlyoutSeparator());
+        }
+        AddMenuItem(menu, "Add note here", Symbol.Comment,
+            () => NoteRequested?.Invoke(this, (page, localX, localY)));
 
-            // Offer deletion when the click lands on an annotation. The query
-            // runs on the render thread so a slow tile render can't freeze the
-            // UI while the menu is being built.
-            AnnotationInfo? hit = null;
-            try
-            {
-                var annotations = await _scheduler.RunAsync(
-                    PdfWorkPriority.Interactive, () => document.GetAnnotations(page));
-                hit = HitTestAnnotation(annotations, localX, localY);
-            }
-            catch
-            {
-                // Document swapped/closed; show the menu without a delete entry.
-            }
-            if (_document != document)
-            {
-                return;
-            }
-            if (hit is not null)
-            {
-                int annotIndex = hit.Index;
-                AddMenuItem(menu, hit.IsNote ? $"Delete note{FormatNotePreview(hit.Contents)}" : "Delete annotation",
-                    Symbol.Delete, async () =>
+        // Right-click is already how markup and notes are reached, so it is
+        // where a field's own options belong too. Pure lookup against cached
+        // geometry, so it adds nothing to the time before the menu appears.
+        if (TextFieldAt(page, localX, localY) is { } field)
+        {
+            AddMenuItem(menu, "Text appearance…", Symbol.Font,
+                () => RequestFieldAppearance(page, field.Name));
+        }
+
+        // Offer deletion when the click lands on an annotation. The query
+        // runs on the render thread so a slow tile render can't freeze the
+        // UI while the menu is being built.
+        AnnotationInfo? hit = null;
+        try
+        {
+            var annotations = await _scheduler.RunAsync(
+                PdfWorkPriority.Interactive, () => document.GetAnnotations(page));
+            hit = HitTestAnnotation(annotations, localX, localY);
+        }
+        catch
+        {
+            // Document swapped/closed; show the menu without a delete entry.
+        }
+        if (_document != document)
+        {
+            return;
+        }
+        if (hit is not null)
+        {
+            int annotIndex = hit.Index;
+            AddMenuItem(menu, hit.IsNote ? $"Delete note{FormatNotePreview(hit.Contents)}" : "Delete annotation",
+                Symbol.Delete, async () =>
+                {
+                    (bool Removed, AnnotationSpec? Spec) result;
+                    try
                     {
-                        (bool Removed, AnnotationSpec? Spec) result;
-                        try
+                        // Capture the annotation BEFORE deleting so undo can rebuild it.
+                        result = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
                         {
-                            // Capture the annotation BEFORE deleting so undo can rebuild it.
-                            result = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+                            var captured = document.CaptureAnnotation(page, annotIndex);
+                            bool ok = document.RemoveAnnotation(page, annotIndex);
+                            return (ok, captured);
+                        });
+                    }
+                    catch
+                    {
+                        return;
+                    }
+                    if (result.Removed && _document == document)
+                    {
+                        InvalidatePage(page);
+                        DocumentEdited?.Invoke(this, EventArgs.Empty);
+                        if (result.Spec is { } spec)
+                        {
+                            AnnotationEdited?.Invoke(this, new AnnotationEditEventArgs
                             {
-                                var captured = document.CaptureAnnotation(page, annotIndex);
-                                bool ok = document.RemoveAnnotation(page, annotIndex);
-                                return (ok, captured);
+                                Label = spec.Subtype == Rune.PdfiumInterop.PdfiumNative.AnnotText ? "delete note" : "delete annotation",
+                                PageIndex = page,
+                                SnapshotBytes = spec.Stamp?.ByteCount ?? 0,
+                                UndoAction = d => d.AddAnnotationFromSpec(spec),
+                                RedoAction = d => d.RemoveLastAnnotation(page),
                             });
                         }
-                        catch
-                        {
-                            return;
-                        }
-                        if (result.Removed && _document == document)
-                        {
-                            InvalidatePage(page);
-                            DocumentEdited?.Invoke(this, EventArgs.Empty);
-                            if (result.Spec is { } spec)
-                            {
-                                AnnotationEdited?.Invoke(this, new AnnotationEditEventArgs
-                                {
-                                    Label = spec.Subtype == Rune.PdfiumInterop.PdfiumNative.AnnotText ? "delete note" : "delete annotation",
-                                    PageIndex = page,
-                                    UndoAction = d => d.AddAnnotationFromSpec(spec),
-                                    RedoAction = d => d.RemoveLastAnnotation(page),
-                                });
-                            }
-                        }
-                    });
-            }
+                    }
+                });
         }
 
         if (menu.Items.Count > 0)
@@ -1277,9 +1317,16 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        if (_placingSignature)
+        if (_placingStamp)
         {
-            UpdateSignaturePlacement(doc);
+            UpdateStampPlacement(doc);
+            e.Handled = true;
+            return;
+        }
+
+        if (IsResizingStamp)
+        {
+            UpdateStampResize(doc);
             e.Handled = true;
             return;
         }
@@ -1291,6 +1338,15 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
+        // Dragging inside a form field selects its text, which PDFium can only
+        // do if it sees the moves between the press and the release.
+        if (IsDraggingInFormField)
+        {
+            UpdateFormDrag(doc);
+            e.Handled = true;
+            return;
+        }
+
         if (_isSelecting)
         {
             UpdateSelection(doc);
@@ -1298,8 +1354,8 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        // Preview the pending signature under the cursor before it is placed.
-        if (UpdateSignatureHover(doc))
+        // Preview the pending picture under the cursor before it is placed.
+        if (UpdateStampHover(doc))
         {
             Canvas.Invalidate();
         }
@@ -1314,7 +1370,7 @@ public sealed partial class PdfViewer : UserControl
     private void Canvas_PointerExited(object sender, PointerRoutedEventArgs e)
     {
         // Leave no ghost stranded at the edge when the pointer goes elsewhere.
-        if (UpdateSignatureHover(null))
+        if (UpdateStampHover(null))
         {
             Canvas.Invalidate();
         }
@@ -1326,6 +1382,12 @@ public sealed partial class PdfViewer : UserControl
         {
             return;
         }
+
+        // A press on the page ends any trip to the format bar, so an open box
+        // goes back to committing on focus loss as normal. Without this a bar
+        // interaction that never restyled anything would leave the box unable to
+        // close itself.
+        SuspendTextCommit = false;
 
         var docPoint = DocumentPointFromPointer(e);
 
@@ -1352,13 +1414,18 @@ public sealed partial class PdfViewer : UserControl
                 e.Handled = true;
                 return;
 
+            case AnnotationTool.Text:
+                BeginTextAt(docPoint);
+                e.Handled = true;
+                return;
+
             case AnnotationTool.Eraser:
                 _ = EraseAnnotationAt(docPoint);
                 e.Handled = true;
                 return;
 
-            case AnnotationTool.Signature when HasPendingSignature:
-                BeginSignaturePlacement(docPoint, e.Pointer);
+            case AnnotationTool.Signature or AnnotationTool.Image when HasPendingStamp:
+                BeginStampPlacement(docPoint, e.Pointer);
                 e.Handled = true;
                 return;
         }
@@ -1375,6 +1442,9 @@ public sealed partial class PdfViewer : UserControl
         // of page text must take the click, not start a drag-select inside it.
         if (TryHandleFormPress(docPoint))
         {
+            // Captured so the moves that select the field's text keep arriving
+            // even when the pointer wanders outside the widget mid-drag.
+            Canvas.CapturePointer(e.Pointer);
             e.Handled = true;
             return;
         }
@@ -1423,9 +1493,16 @@ public sealed partial class PdfViewer : UserControl
             e.Handled = true;
             return;
         }
-        if (_placingSignature)
+        if (_placingStamp)
         {
-            CommitSignaturePlacement();
+            CommitStampPlacement();
+            Canvas.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+            return;
+        }
+        if (IsResizingStamp)
+        {
+            CommitStampResize();
             Canvas.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
             return;
@@ -1433,6 +1510,13 @@ public sealed partial class PdfViewer : UserControl
         if (_draggingStamp)
         {
             CommitStampDrag();
+            Canvas.ReleasePointerCapture(e.Pointer);
+            e.Handled = true;
+            return;
+        }
+        if (IsDraggingInFormField)
+        {
+            CommitFormDrag(DocumentPointFromPointer(e));
             Canvas.ReleasePointerCapture(e.Pointer);
             e.Handled = true;
             return;
@@ -1460,7 +1544,7 @@ public sealed partial class PdfViewer : UserControl
     /// <summary>Note tool: ask the shell for the note text at this point.</summary>
     private void RequestNoteAt(Point docPoint)
     {
-        if (_layout is null || _document is null || _rotation != 0)
+        if (_layout is null || _document is null)
         {
             return;
         }
@@ -1472,7 +1556,7 @@ public sealed partial class PdfViewer : UserControl
     /// <summary>Eraser tool: delete the annotation under the pointer, undoably.</summary>
     private async Task EraseAnnotationAt(Point docPoint)
     {
-        if (_layout is null || _document is not { } document || _rotation != 0)
+        if (_layout is null || _document is not { } document)
         {
             return;
         }
@@ -1529,8 +1613,15 @@ public sealed partial class PdfViewer : UserControl
             {
                 Label = "erase",
                 PageIndex = page,
+                // A stamp's spec carries its pixels; markup and ink carry only
+                // geometry, so they cost the undo stack's memory cap nothing.
+                SnapshotBytes = spec.Stamp?.ByteCount ?? 0,
                 UndoAction = d => d.AddAnnotationFromSpec(spec),
-                RedoAction = d => d.RemoveAnnotation(page, hit.Index),
+                // Undo re-adds by appending, so what redo has to remove is the
+                // LAST annotation, not the index the erase originally hit. Redo
+                // only ever runs after an undo, so this is always the right one,
+                // and it is what the right-click delete has always done.
+                RedoAction = d => d.RemoveLastAnnotation(page),
             });
         }
     }
@@ -1550,13 +1641,13 @@ public sealed partial class PdfViewer : UserControl
 
     private void BeginInkStroke(Point docPoint, Pointer pointer)
     {
-        // Raised before the rotation guard: the user pressed to draw, so the
-        // pen panel should get out of the way either way.
+        // Raised first: the user pressed to draw, so the pen panel should get
+        // out of the way even if there is nothing to draw on.
         InkStrokeStarted?.Invoke(this, EventArgs.Empty);
 
-        if (_layout is null || _document is null || _rotation != 0)
+        if (_layout is null || _document is null)
         {
-            return; // ink geometry only tracked for the unrotated view
+            return;
         }
         _inkPage = _layout.PageAt(docPoint.Y);
         _inkPoints.Clear();
@@ -1586,9 +1677,9 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        var rect = _layout!.GetPageRect(_inkPage);
-        // Document space → page-local top-left points (undo centering + zoom).
-        var stroke = _inkPoints.Select(p => ((p.X - rect.X) / _zoom, (p.Y - rect.Y) / _zoom)).ToList();
+        // The live stroke is captured in document space so it can be drawn
+        // without a per-point conversion; the file wants unrotated page-local.
+        var stroke = _inkPoints.Select(p => ToPageLocal(_inkPage, p)).ToList();
 
         var document = _document;
         int page = _inkPage;
@@ -1657,9 +1748,9 @@ public sealed partial class PdfViewer : UserControl
 
     private void BeginSelection(Point docPoint, Pointer pointer)
     {
-        if (_layout is null || _document is null || _rotation != 0)
+        if (_layout is null || _document is null)
         {
-            return; // selection geometry only tracked for the unrotated view
+            return;
         }
 
         int page = _layout.PageAt(docPoint.Y);
@@ -1713,11 +1804,35 @@ public sealed partial class PdfViewer : UserControl
         Canvas.Invalidate();
     }
 
-    /// <summary>Document (layout) point → page-local points (top-left origin, unscaled).</summary>
+    /// <summary>
+    /// Document (layout) point → <b>unrotated</b> page-local points (top-left
+    /// origin, unscaled) — the space page text, links, form fields, annotations
+    /// and stamps are all measured in.
+    ///
+    /// Undoing the centering offset and the zoom only gets as far as the *drawn*
+    /// box; on a quarter turn that box has the page's axes swapped, so the last
+    /// step has to undo the rotation too. Skipping it is what forced every
+    /// interactive path to disable itself while rotated.
+    /// </summary>
     private (double X, double Y) ToPageLocal(int page, Point docPoint)
     {
         var rect = _layout!.GetPageRect(page);
-        return ((docPoint.X - rect.X) / _zoom, (docPoint.Y - rect.Y) / _zoom);
+        return RotationFor(page).ToUnrotated((docPoint.X - rect.X) / _zoom, (docPoint.Y - rect.Y) / _zoom);
+    }
+
+    /// <summary>Unrotated page-local point → document (layout) space. The inverse of <see cref="ToPageLocal"/>.</summary>
+    private Point ToDocumentPoint(int page, double localX, double localY)
+    {
+        var rect = _layout!.GetPageRect(page);
+        var (drawnX, drawnY) = RotationFor(page).ToDrawn(localX, localY);
+        return new Point(rect.X + drawnX * _zoom, rect.Y + drawnY * _zoom);
+    }
+
+    /// <summary>The current view rotation paired with a page's own unrotated size.</summary>
+    private PageRotationTransform RotationFor(int page)
+    {
+        var size = _pageSizes[Math.Clamp(page, 0, _pageSizes.Length - 1)];
+        return new PageRotationTransform(_rotation, size.Width, size.Height);
     }
 
     public void ClearSelection()
@@ -1755,7 +1870,10 @@ public sealed partial class PdfViewer : UserControl
         if (_layout is not null && hit.Rects.Count > 0)
         {
             var pageRect = _layout.GetPageRect(hit.PageIndex);
-            double hitTop = pageRect.Y + hit.Rects[0].Y * _zoom;
+            // Where the hit is *drawn*, not where the file puts it: on a quarter
+            // turn a hit near the top of the page can be anywhere down the side.
+            var drawn = RotationFor(hit.PageIndex).ToDrawn(hit.Rects[0]);
+            double hitTop = pageRect.Y + drawn.Y * _zoom;
             // Center the hit in the viewport where possible.
             double target = Math.Max(0, hitTop - Scroller.ViewportHeight / 2);
             Scroller.ChangeView(null, target, null, disableAnimation: true);
@@ -1779,9 +1897,9 @@ public sealed partial class PdfViewer : UserControl
 
     private PdfLink? HitTestLink(Point documentPoint)
     {
-        if (_layout is null || _document is null || _rotation != 0)
+        if (_layout is null || _document is null)
         {
-            return null; // link geometry is only tracked for the unrotated view
+            return null;
         }
 
         int page = _layout.PageAt(documentPoint.Y);
@@ -1791,10 +1909,7 @@ public sealed partial class PdfViewer : UserControl
             return null;
         }
 
-        var rect = _layout.GetPageRect(page);
-        // Document point → page-local points (undo centering offset and zoom).
-        double localX = (documentPoint.X - rect.X) / _zoom;
-        double localY = (documentPoint.Y - rect.Y) / _zoom;
+        var (localX, localY) = ToPageLocal(page, documentPoint);
         foreach (var link in links)
         {
             if (localX >= link.X && localX <= link.X + link.Width &&
@@ -1992,7 +2107,7 @@ public sealed partial class PdfViewer : UserControl
 
         DrawLiveInk(session);
         DrawStampSelection(session);
-        DrawSignatureGhost(session);
+        DrawStampGhost(session);
     }
 
     /// <summary>Draws the in-progress ink stroke as a polyline (committed once released).</summary>
@@ -2046,7 +2161,7 @@ public sealed partial class PdfViewer : UserControl
                 var color = active ? activeSearchColor : searchColor;
                 foreach (var r in hit.Rects)
                 {
-                    session.FillRectangle(HighlightRect(pageRect, r), color);
+                    session.FillRectangle(HighlightRect(pageIndex, pageRect, r), color);
                 }
             }
         }
@@ -2056,13 +2171,22 @@ public sealed partial class PdfViewer : UserControl
         {
             foreach (var r in selection.Rects)
             {
-                session.FillRectangle(HighlightRect(pageRect, r), RuneColors.Selection(_nightMode));
+                session.FillRectangle(HighlightRect(pageIndex, pageRect, r), RuneColors.Selection(_nightMode));
             }
         }
     }
 
-    private Rect HighlightRect(DipRect pageRect, TextRect r) =>
-        new(pageRect.X + r.X * _zoom, pageRect.Y + r.Y * _zoom, r.Width * _zoom, r.Height * _zoom);
+    /// <summary>
+    /// A page-local text rect → where to paint it, in document space. The rect
+    /// describes the file, so it has to be rotated into the drawn box before it
+    /// is scaled and offset, or a highlight lands beside its words on a quarter
+    /// turn instead of on them.
+    /// </summary>
+    private Rect HighlightRect(int pageIndex, DipRect pageRect, TextRect r)
+    {
+        var d = RotationFor(pageIndex).ToDrawn(r);
+        return new Rect(pageRect.X + d.X * _zoom, pageRect.Y + d.Y * _zoom, d.Width * _zoom, d.Height * _zoom);
+    }
 
     // ---------------------------------------------------------------- tile pipeline
 
@@ -2100,6 +2224,21 @@ public sealed partial class PdfViewer : UserControl
             _scheduler.SetDesired([]);
             return;
         }
+
+        // A viewport with no area yields an empty want-list, and asking for
+        // nothing is indistinguishable from being told to render nothing: the
+        // page stays blank and nothing ever asks again, because the view has
+        // not changed. That is reachable in one gesture — switch to another tab
+        // and back, then rotate. The returning tab's ScrollViewer has not been
+        // measured yet, so it is still 0x0 when Rotate() rebuilds the list, and
+        // the page (and its thumbnails) stay white until the window is resized.
+        // Retry on the coalescing timer instead, by which point layout has run.
+        if (Scroller.ViewportWidth <= 0 || Scroller.ViewportHeight <= 0)
+        {
+            RequestDesiredUpdate();
+            return;
+        }
+
         float zoomFactor = Scroller.ZoomFactor;
         if (Math.Abs(zoomFactor - 1f) > 0.001f)
         {

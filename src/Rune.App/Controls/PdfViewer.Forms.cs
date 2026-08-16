@@ -8,6 +8,9 @@ using Windows.System;
 
 namespace Rune.Controls;
 
+/// <summary>A request to restyle one form field's typed text, with what it declares today.</summary>
+public sealed record FormAppearanceRequest(int PageIndex, string FieldName, FieldAppearance Current);
+
 // Interactive form filling.
 //
 // Field geometry is prefetched onto the UI thread (the same trick PageText
@@ -97,9 +100,7 @@ public sealed partial class PdfViewer
     /// </summary>
     private bool TryHandleFormPress(Point docPoint)
     {
-        // Rotation is not plumbed through the form hit-test yet; filling stays
-        // disabled while rotated rather than editing the wrong field.
-        if (_layout is null || _document is not { HasFillableForm: true } document || _rotation != 0)
+        if (_layout is null || _document is not { HasFillableForm: true } document)
         {
             return false;
         }
@@ -143,29 +144,189 @@ public sealed partial class PdfViewer
         _formFocusPage = page;
         _formFocusField = hit;
         Focus(FocusState.Pointer);
-        DispatchFormClick(document, page, local.X, local.Y);
+
+        // Press only. The release comes from Canvas_PointerReleased and anything
+        // in between is a drag, which is the only way PDFium's edit control will
+        // select text: it starts the selection on the button-down and extends it
+        // on each move. Sending a down and an up at one point, as this used to,
+        // places the caret and can never select anything.
+        _formPointerDown = true;
+        DispatchFormPointer(document, page, local.X, local.Y, FormPointer.Down);
         return true;
+    }
+
+    private bool _formPointerDown;
+
+    /// <summary>True while a press that landed on a field has not been released.</summary>
+    private bool IsDraggingInFormField => _formPointerDown;
+
+    private enum FormPointer { Down, Move, Up }
+
+    /// <summary>Extends the selection while the button is held inside a field.</summary>
+    private void UpdateFormDrag(Point docPoint)
+    {
+        if (!_formPointerDown || _layout is null || _document is not { HasFillableForm: true } document)
+        {
+            return;
+        }
+        var local = ToPageLocal(_formFocusPage, docPoint);
+        DispatchFormPointer(document, _formFocusPage, local.X, local.Y, FormPointer.Move);
+    }
+
+    /// <summary>Ends the drag. The selection PDFium built survives the release.</summary>
+    private void CommitFormDrag(Point docPoint)
+    {
+        if (!_formPointerDown)
+        {
+            return;
+        }
+        _formPointerDown = false;
+
+        if (_layout is null || _document is not { HasFillableForm: true } document)
+        {
+            return;
+        }
+        var local = ToPageLocal(_formFocusPage, docPoint);
+        DispatchFormPointer(document, _formFocusPage, local.X, local.Y, FormPointer.Up);
     }
 
     /// <summary>Whether a field is the one that currently has focus.</summary>
     private bool IsFocusedField(FormFieldInfo field) =>
         _formFocusField is { } focused && focused.IsSamePlaceAs(field);
 
-    private async void DispatchFormClick(PdfDocument document, int page, double localX, double localY)
+    // ---- text appearance ----
+
+    /// <summary>Raised when the user asks to restyle a field's typed text.</summary>
+    public event EventHandler<FormAppearanceRequest>? FormAppearanceRequested;
+
+    /// <summary>
+    /// The text-accepting field at a page-local point, from the geometry already
+    /// cached for drawing borders. Pure lookup, no PDFium call: this runs while
+    /// a context menu is being built.
+    /// </summary>
+    private FormFieldInfo? TextFieldAt(int page, double localX, double localY)
     {
+        if (_document is not { HasFillableForm: true } || !_formFields.TryGetValue(page, out var fields))
+        {
+            return null;
+        }
+        return fields.FirstOrDefault(f =>
+            f.AcceptsText &&
+            localX >= f.X && localX <= f.X + f.Width &&
+            localY >= f.Y && localY <= f.Y + f.Height);
+    }
+
+    /// <summary>
+    /// Asks the shell to restyle a field, handing it whatever the field declares
+    /// today so the dialog opens on the current values rather than on a guess.
+    /// </summary>
+    private async void RequestFieldAppearance(int page, string name)
+    {
+        if (_document is not { } document)
+        {
+            return;
+        }
+
+        FieldAppearance? current;
         try
         {
-            await _scheduler.RunAsync(
-                PdfWorkPriority.Interactive, () => document.FormClick(page, localX, localY));
+            current = await _scheduler.RunAsync(
+                PdfWorkPriority.Interactive, () => document.GetFieldAppearance(page, name));
+        }
+        catch
+        {
+            return;
+        }
+        if (_document != document)
+        {
+            return;
+        }
+
+        FormAppearanceRequested?.Invoke(this,
+            new FormAppearanceRequest(page, name, current ?? FieldAppearance.Default));
+    }
+
+    /// <summary>
+    /// Applies a new text appearance and makes it undoable. Returns false when
+    /// the field has no <c>/DA</c> of its own to rewrite, which the shell reports
+    /// rather than leaving the user wondering why nothing changed.
+    /// </summary>
+    public async Task<bool> ApplyFieldAppearanceAsync(int page, string name, FieldAppearance wanted)
+    {
+        if (_document is not { } document)
+        {
+            return false;
+        }
+
+        (FieldAppearance? Previous, bool Applied) result;
+        try
+        {
+            result = await _scheduler.RunAsync(PdfWorkPriority.Interactive, () =>
+            {
+                // Read before writing: undo restores the string that was there,
+                // not a reconstruction of it.
+                var before = document.GetFieldAppearance(page, name);
+                return (before, document.SetFieldAppearance(page, name, wanted));
+            });
+        }
+        catch
+        {
+            return false;
+        }
+        if (!result.Applied || _document != document)
+        {
+            return false;
+        }
+
+        // The widget's appearance was rebuilt, so every cached tile of this page
+        // is stale.
+        InvalidatePage(page);
+        DocumentEdited?.Invoke(this, EventArgs.Empty);
+
+        if (result.Previous is { } previous)
+        {
+            AnnotationEdited?.Invoke(this, new AnnotationEditEventArgs
+            {
+                Label = "text appearance",
+                PageIndex = page,
+                UndoAction = d => d.SetFieldAppearance(page, name, previous),
+                RedoAction = d => d.SetFieldAppearance(page, name, wanted),
+            });
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Sends one pointer event to the focused field's page.
+    ///
+    /// Order matters and is guaranteed: the scheduler runs same-priority ops
+    /// first-in-first-out on its single thread, so a down, its moves and its up
+    /// reach PDFium in the order the user made them even though each is queued
+    /// from a separate async call.
+    /// </summary>
+    private async void DispatchFormPointer(
+        PdfDocument document, int page, double localX, double localY, FormPointer which)
+    {
+        int modifier = FormModifiersNow();
+        try
+        {
+            await _scheduler.RunAsync(PdfWorkPriority.Interactive, () => which switch
+            {
+                FormPointer.Down => document.FormPointerDown(page, localX, localY, modifier),
+                FormPointer.Move => document.FormPointerMove(page, localX, localY, modifier),
+                _ => document.FormPointerUp(page, localX, localY, modifier),
+            });
         }
         catch
         {
             return; // document swapped or closed under us
         }
 
-        if (_document == document)
+        // Checkboxes and radios change appearance on the release, so the cached
+        // geometry is only stale once the gesture is over. Refreshing on every
+        // move of a drag would be a round-trip per pointer event.
+        if (which == FormPointer.Up && _document == document)
         {
-            // Checkboxes and radios change appearance on the click itself.
             InvalidateFormFields(page);
         }
     }
@@ -202,6 +363,9 @@ public sealed partial class PdfViewer
             return false;
         }
 
+        int modifier = FormModifiersNow();
+        bool control = (modifier & PdfDocument.FormModifiers.Control) != 0;
+
         switch (key)
         {
             case VirtualKey.Escape:
@@ -211,7 +375,28 @@ public sealed partial class PdfViewer
                 KillFormFocus();
                 return key != VirtualKey.Tab; // let Tab move on normally
 
+            // Backspace is NOT a key as far as PDFium's edit control is
+            // concerned. It handles Delete and the arrows in its key handler and
+            // backspace in its CHARACTER handler, so FORM_OnKeyDown(8) returns
+            // false and changes nothing, which is exactly how it behaved here:
+            // Delete worked, backspace did nothing at all.
+            //
+            // It is routed from KeyDown rather than from CharacterReceived on
+            // purpose. KeyDown certainly fires for it; whether a WM_CHAR follows
+            // is not ours to rely on, and TryHandleFormCharacter drops control
+            // characters, so this cannot delete twice.
             case VirtualKey.Back:
+                DispatchFormEdit(document, _formFocusPage,
+                    page => document.FormChar(page, Backspace, modifier));
+                return true;
+
+            // Ctrl+A likewise arrives as a control character, not as a letter
+            // with a flag: FORM_OnKeyDown(A, ctrl) is refused.
+            case (VirtualKey)0x41 when control: // A
+                DispatchFormEdit(document, _formFocusPage,
+                    page => document.FormChar(page, SelectAll, modifier));
+                return true;
+
             case VirtualKey.Delete:
             case VirtualKey.Left:
             case VirtualKey.Right:
@@ -219,12 +404,39 @@ public sealed partial class PdfViewer
             case VirtualKey.End:
             case VirtualKey.Up:
             case VirtualKey.Down:
-                DispatchFormEdit(document, _formFocusPage, page => document.FormKeyDown(page, (int)key));
+                // The modifier is what makes shift-arrow SELECT rather than just
+                // move the caret. Passing 0 here, as this did, leaves a field
+                // that cannot be selected from the keyboard at all.
+                DispatchFormEdit(document, _formFocusPage,
+                    page => document.FormKeyDown(page, (int)key, modifier));
                 return true;
 
             default:
                 return false;
         }
+    }
+
+    /// <summary>ASCII backspace, which is how PDFium's edit control wants it.</summary>
+    private const int Backspace = 8;
+
+    /// <summary>Ctrl+A as its control character.</summary>
+    private const int SelectAll = 1;
+
+    /// <summary>
+    /// The modifier keys held right now, in PDFium's flags. Read from the live
+    /// keyboard state because <c>KeyRoutedEventArgs</c> carries no modifier set.
+    /// </summary>
+    private static int FormModifiersNow()
+    {
+        int flags = 0;
+        if (IsHeld(VirtualKey.Shift)) { flags |= PdfDocument.FormModifiers.Shift; }
+        if (IsHeld(VirtualKey.Control)) { flags |= PdfDocument.FormModifiers.Control; }
+        if (IsHeld(VirtualKey.Menu)) { flags |= PdfDocument.FormModifiers.Alt; }
+        return flags;
+
+        static bool IsHeld(VirtualKey key) => Microsoft.UI.Input.InputKeyboardSource
+            .GetKeyStateForCurrentThread(key)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
     }
 
     private async void DispatchFormEdit(PdfDocument document, int page, Func<int, bool> edit)
@@ -302,16 +514,18 @@ public sealed partial class PdfViewer
     /// hit-testing, which makes this pure managed drawing with no render-thread
     /// work and nothing to invalidate.
     ///
-    /// Skipped while rotated, for the same reason filling is: page-local
-    /// geometry is not mapped through the view rotation yet, so the rects would
-    /// land in the wrong place.
+    /// Field rects describe the file, so they go through the view rotation to
+    /// reach the drawn box — the same path selection and search highlights take.
+    /// PDFium's own widget fill already receives the rotation, so the two agree.
     /// </summary>
     private void DrawFormFieldBorders(CanvasDrawingSession session, int pageIndex, DipRect pageRect)
     {
-        if (_rotation != 0 || !_formFields.TryGetValue(pageIndex, out var fields))
+        if (!_formFields.TryGetValue(pageIndex, out var fields))
         {
             return;
         }
+
+        var rotation = RotationFor(pageIndex);
 
         var border = RuneColors.FormFieldBorder(_nightMode);
         var focusBorder = RuneColors.FormFieldFocusBorder(_nightMode);
@@ -326,11 +540,12 @@ public sealed partial class PdfViewer
                 continue;
             }
 
+            var drawn = rotation.ToDrawn(field.X, field.Y, field.Width, field.Height);
             var rect = new Rect(
-                pageRect.X + field.X * _zoom,
-                pageRect.Y + field.Y * _zoom,
-                Math.Max(1, field.Width * _zoom),
-                Math.Max(1, field.Height * _zoom));
+                pageRect.X + drawn.X * _zoom,
+                pageRect.Y + drawn.Y * _zoom,
+                Math.Max(1, drawn.Width * _zoom),
+                Math.Max(1, drawn.Height * _zoom));
 
             bool focused = IsFocusedField(field);
             var color = field.IsReadOnly ? readOnlyBorder : focused ? focusBorder : border;

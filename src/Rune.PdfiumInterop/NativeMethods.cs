@@ -571,6 +571,46 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFPageObj_Transform(IntPtr pageObject, double a, double b, double c, double d, double e, double f);
 
+    // ---- Text objects (fpdf_edit.h) ----
+    //
+    // Real text on a page, as opposed to a picture of text. The 14 standard
+    // fonts need no embedding, which is why they are the ones Rune writes: the
+    // file gains a few hundred bytes rather than a font program.
+
+    /// <summary>
+    /// One of the standard 14 by PostScript name — "Helvetica", "Helvetica-Bold",
+    /// "Times-Roman", "Courier-Oblique" and so on. ASCII (FPDF_BYTESTRING), not
+    /// UTF-16. Must be closed with <see cref="FPDFFont_Close"/>.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFText_LoadStandardFont(
+        IntPtr document, [MarshalAs(UnmanagedType.LPStr)] string font);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFPageObj_CreateTextObj(IntPtr document, IntPtr font, float fontSize);
+
+    /// <summary>Sets the run's string. UTF-16LE (FPDF_WIDESTRING).</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFText_SetText(
+        IntPtr textObject, [MarshalAs(UnmanagedType.LPWStr)] string text);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPageObj_SetFillColor(
+        IntPtr pageObject, uint r, uint g, uint b, uint a);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern void FPDFFont_Close(IntPtr font);
+
+    /// <summary>
+    /// The object's own bounding box, in page space. For a text object this is
+    /// the extent PDFium will actually draw, which is why Rune measures with it
+    /// rather than carrying the standard-14 width tables: a table can disagree
+    /// with the renderer, this cannot.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPageObj_GetBounds(
+        IntPtr pageObject, out float left, out float bottom, out float right, out float top);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFPage_InsertObject(IntPtr page, IntPtr pageObject);
 
@@ -586,8 +626,79 @@ internal static partial class NativeMethods
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void FPDFPageObj_Destroy(IntPtr pageObject);
 
+    // ---- Reading an object back out (fpdf_edit.h) ----
+
+    /// <summary>FPDF_PAGEOBJ_TEXT.</summary>
+    internal const int FPDF_PAGEOBJ_TEXT = 1;
+
+    /// <summary>FPDF_PAGEOBJ_IMAGE.</summary>
+    internal const int FPDF_PAGEOBJ_IMAGE = 3;
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPageObj_GetType(IntPtr pageObject);
+
+    /// <summary>
+    /// The size the run was created at, before the object's matrix. Exact for
+    /// Rune's own text, which is only ever translated and never scaled.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFTextObj_GetFontSize(IntPtr textObject, out float size);
+
+    /// <summary>
+    /// The run's font. Borrowed, not owned: it belongs to the document, so it
+    /// must NOT be passed to <see cref="FPDFFont_Close"/>, which is only for a
+    /// font <see cref="FPDFText_LoadStandardFont"/> handed out.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFTextObj_GetFont(IntPtr textObject);
+
+    /// <summary>
+    /// The font's /BaseFont name as ASCII, including the NUL. Called with a null
+    /// buffer to ask for the length first, the way every sized PDFium getter works.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDFFont_GetBaseFontName(IntPtr font, byte[]? buffer, uint length);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPageObj_GetFillColor(
+        IntPtr pageObject, out uint r, out uint g, out uint b, out uint a);
+
+    /// <summary>
+    /// The image's own decoded bitmap, at its native pixel size and ignoring the
+    /// object's matrix. Caller destroys it with FPDFBitmap_Destroy.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFImageObj_GetBitmap(IntPtr imageObject);
+
+    /// <summary>
+    /// Like <see cref="FPDFImageObj_GetBitmap"/> but composited: transparency
+    /// from an /SMask is applied, which a plain GetBitmap can drop. Needs the
+    /// owning document and page.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFImageObj_GetRenderedBitmap(IntPtr document, IntPtr page, IntPtr imageObject);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFBitmap_GetWidth(IntPtr bitmap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFBitmap_GetHeight(IntPtr bitmap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFBitmap_GetStride(IntPtr bitmap);
+
+    /// <summary>1 Gray, 2 BGR, 3 BGRx, 4 BGRA.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFBitmap_GetFormat(IntPtr bitmap);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFBitmap_GetBuffer(IntPtr bitmap);
+
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr FPDFAnnot_GetObject(IntPtr annot, int index);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFAnnot_GetObjectCount(IntPtr annot);
 
     [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int FPDFAnnot_AppendObject(IntPtr annot, IntPtr pageObject);

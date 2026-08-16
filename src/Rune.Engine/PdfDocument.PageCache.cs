@@ -138,6 +138,27 @@ public sealed partial class PdfDocument
         }
     }
 
+    /// <summary>
+    /// Closes one page's handle so the next acquire loads it fresh.
+    ///
+    /// This exists for edits made straight into a page's dictionary, which
+    /// PDFium's form layer does not notice: it rebuilds a widget's appearance on
+    /// <c>FORM_OnAfterLoadPage</c>, and the only way to make that run again is to
+    /// let the handle go. Refuses while the page is leased, since closing a
+    /// handle another operation is holding is a use-after-free.
+    /// Caller must hold <see cref="PdfiumLibrary.Lock"/>.
+    /// </summary>
+    private bool EvictPageLocked(int pageIndex)
+    {
+        if (!_pageCache.TryGetValue(pageIndex, out var entry) || entry.Leases > 0)
+        {
+            return false;
+        }
+        CloseCachedPageLocked(pageIndex, entry);
+        _pageCache.Remove(pageIndex);
+        return true;
+    }
+
     private void TrimPageCacheLocked()
     {
         while (_pageCache.Count > PageCacheCapacity)

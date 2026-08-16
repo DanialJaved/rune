@@ -359,6 +359,51 @@ public static class SignatureMatte
         return output;
     }
 
+    /// <summary>
+    /// Rotates a BGRA buffer by whole quarter turns clockwise, swapping width
+    /// and height on an odd turn.
+    ///
+    /// Used when a signature is placed into a rotated view. The user rotated the
+    /// view because the page content is sideways, so the signature has to line up
+    /// with the content they can now read, not with the file's own axes. The view
+    /// applies <c>+rotation</c> on the way to the screen, so the pixels written
+    /// into the file are turned by <c>-rotation</c> to cancel it out — the caller
+    /// passes <c>4 - rotation</c> for that.
+    /// </summary>
+    public static (byte[] Bgra, int Width, int Height) RotateQuarterTurns(
+        byte[] bgra, int width, int height, int quarterTurnsClockwise)
+    {
+        ArgumentNullException.ThrowIfNull(bgra);
+
+        int turns = ViewRotationMath.Normalize(quarterTurnsClockwise);
+        if (turns == 0)
+        {
+            return (bgra, width, height);
+        }
+
+        bool swaps = ViewRotationMath.SwapsAxes(turns);
+        int outW = swaps ? height : width;
+        int outH = swaps ? width : height;
+        var output = new byte[outW * outH * 4];
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                // Where this source pixel lands after the turn. Same mapping as
+                // PageRotationTransform.ToDrawn, in pixels rather than points.
+                var (dx, dy) = turns switch
+                {
+                    1 => (height - 1 - y, x),
+                    2 => (width - 1 - x, height - 1 - y),
+                    _ => (y, width - 1 - x),
+                };
+                Array.Copy(bgra, (y * width + x) * 4, output, (dy * outW + dx) * 4, 4);
+            }
+        }
+        return (output, outW, outH);
+    }
+
     /// <summary>Copies a sub-rectangle out of a BGRA buffer. Shared by every crop path.</summary>
     public static (byte[] Bgra, int Width, int Height) CropTo(
         byte[] bgra, int width, int height, int x, int y, int cropWidth, int cropHeight)

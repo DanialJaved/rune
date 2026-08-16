@@ -50,16 +50,24 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 ### Markup
 
 - Highlight, underline, strikeout, sticky notes and freehand pen, all written as standard PDF annotations that any reader can open
-- Pen, highlighter, note, sign and eraser sit together in the middle of the header. Pick one and its colours, size and opacity open right beneath it
+- Pen, highlighter, note, text, picture, sign and eraser sit together in the middle of the header. Pick one and its colours, size and opacity open right beneath it
 - The highlighter works in a single gesture: drag across the text. It still writes real markup, so highlights stay attached to the words rather than floating over them
 - Undo and redo (`Ctrl+Z` / `Ctrl+Y`) across annotations and page edits alike
 - Flatten bakes annotations and filled fields into the page so they can't be edited back out
 
+### Typing and pictures
+
+- **Type anywhere on a page** (`Ctrl+T`), whether or not there is anything there already: click, and a caret appears with a bar offering font, size, bold, italic and colour. Every change lands on the words as you make it
+- What you type is **real PDF text**, not a picture of text. It stays crisp at any zoom, it is a few hundred bytes rather than a bitmap, and once flattened it is ordinary page text that search and copy find like any other
+- **Place a picture** on a page from any PNG, JPEG, BMP, GIF or TIFF. Transparency is kept, and nothing is keyed out: a picture you chose deliberately lands exactly as it is
+- Anything you place can be picked up again. Click it to select, drag to move, pull a corner to resize, `Delete` to remove. Resizing text **re-renders it at the new size** rather than stretching the letters, which is the point of keeping it as text
+
 ### Signing
 
-- Draw a signature with the mouse or a pen, or photograph one on paper and import it. **Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document
+- Draw a signature with the mouse or a pen, type it in a handwriting face, or photograph one on paper and import it. **Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document
+- Typed signatures use the handwriting fonts Windows already has, so nothing extra is downloaded and the app stays small
 - The matting runs entirely on your machine. Nothing is uploaded and no online service is involved
-- A semi-transparent preview follows the cursor so you can see exactly where it will land. Scroll to size it, click to place it, drag it afterwards if it isn't quite right
+- A semi-transparent preview follows the cursor so you can see exactly where it will land. Scroll to size it, click to place it, then drag it or pull a corner handle if it isn't quite right. Resizing keeps the proportions, so your handwriting never comes out stretched
 - Saved signatures are reusable and stay on your machine
 - This is a *visible* signature, ink on the page like signing a printout, not a cryptographic one
 - **Signature details** reads back what a digitally signed PDF claims: the signer's stated reason, time and format, and whether the signature covers the whole file. Rune does **not** verify signatures. It ships no cryptography and never calls a signature valid
@@ -67,12 +75,14 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 ### Forms
 
 - Click a field and type. Text boxes, dropdowns, checkboxes and radio buttons all save back into the PDF
+- Right-click a field for **Text appearance** to set the size and colour it fills in with, so your answers can stand apart from the printed form
 - Standard AcroForm documents only. XFA forms, which some tax and government PDFs use, say so plainly instead of silently swallowing your typing
 - Form JavaScript doesn't run, so auto-calculating fields keep what you type but won't recalculate
 
 ### Pages and keyboard
 
 - Page editing in the thumbnail sidebar: multi-select, drag to reorder, `Delete`, and copy, cut and paste pages across open tabs. Drop a PDF onto the sidebar to insert its pages
+- Extract the pages you have selected to a new file, leaving the document you are reading untouched
 - Command palette (`Ctrl+K`) with fuzzy filtering and go-to-page
 - Shortcuts overlay (`F1`) listing every binding in two columns
 - Bookmarks (`Ctrl+B`): name a page, jump back to it later, saved per document
@@ -97,12 +107,13 @@ Press `F1` in the app for the full list. The essentials:
 | Night mode / sidebar | `Ctrl+I` / `F9` |
 | Rotate right / left | `Ctrl+R` / `Ctrl+Shift+R` |
 | Presentation / bookmark page | `F5` / `Ctrl+B` |
-| Highlight / pen / save / save as | `Ctrl+H` / `Ctrl+E` / `Ctrl+S` / `Ctrl+Shift+S` |
+| Highlight / pen / type on the page | `Ctrl+H` / `Ctrl+E` / `Ctrl+T` |
+| Save / save as | `Ctrl+S` / `Ctrl+Shift+S` |
 | Copy / cut / paste (text or pages) | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
 
-Right-click a selection for underline and strikeout, or right-click anywhere to add a note. In the thumbnail sidebar, `Ctrl+C`, `Ctrl+X` and `Ctrl+V` act on **pages**; everywhere else they act on selected text.
+Right-click a selection for underline and strikeout, or right-click anywhere to add a note. Click a signature, picture or text box you have placed to select it, then drag it, pull a corner to resize it, or press `Delete`. In the thumbnail sidebar, `Ctrl+C`, `Ctrl+X` and `Ctrl+V` act on **pages**; everywhere else they act on selected text.
 
 ## Install
 
@@ -114,6 +125,12 @@ Right-click a selection for underline and strikeout, or right-click anywhere to 
 </a>
 
 **The Store is the way to install Rune.** One click, automatic updates, and it registers itself as a PDF handler. Microsoft signs the package, so there is no certificate step and nothing for SmartScreen or Smart App Control to warn about. It installs from the Store app or [from the web](https://apps.microsoft.com/detail/9NH37840QDM6).
+
+**winget**, if you prefer the terminal. Same Store package, same signature:
+
+```
+winget install --id 9NH37840QDM6 --source msstore --exact
+```
 
 **Portable:** if you want Rune without the Store, on a USB stick or on a machine where you can't install anything, grab `rune-vX.Y.Z-win-x64.zip` from [Releases](https://github.com/DanialJaved/rune/releases), extract it anywhere and run `Rune.exe`. No installation, no registry.
 
@@ -149,9 +166,9 @@ The debug build is an unpackaged self-contained exe, so you can just run it.
 
 ## Roadmap
 
-**Next:** typed signatures in a handwriting font (draw and import already ship), resizing a signature after placing it, colour and size for form-filling text, page extraction to a new file, more formats (ePub, CBZ), code signing for the portable build, smaller packages.
+**Next:** more formats (ePub, CBZ), code signing for the portable build, smaller packages still.
 
-**Known limits:** form JavaScript needs a V8-enabled PDFium build; text selection, annotation, form filling **and the whole signature flow** are disabled while the view is rotated; a signature can be moved after placing but not resized; signature *validation* would need a cryptography stack Rune doesn't ship.
+**Known limits:** form JavaScript needs a V8-enabled PDFium build; signature *validation* would need a cryptography stack Rune doesn't ship; a text box keeps the line breaks you type rather than wrapping to a width, and a placed picture is stored at up to 1024 pixels along its longest edge.
 
 ## License
 

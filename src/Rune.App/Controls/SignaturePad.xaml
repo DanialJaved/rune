@@ -6,7 +6,7 @@
     <StackPanel Spacing="10" Width="440">
         <TextBlock
             x:Name="Caption"
-            Text="Draw your signature below, or import a photo of one."
+            Text="Draw your signature below, type it, or import a photo of one."
             Style="{StaticResource CaptionTextBlockStyle}"
             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
             TextWrapping="Wrap" />
@@ -41,8 +41,50 @@
                     Stretch="Uniform"
                     Margin="8"
                     IsHitTestVisible="False" />
+                <!-- Typed preview. Same reason the live strokes are XAML rather
+                     than Win2D: a Win2D control in a dialog popup may never get
+                     a device. The family is resolved against the installed set
+                     so this shows the same face Rasterize will draw in.
+
+                     Inside a DownOnly Viewbox so a long name shrinks to fit
+                     instead of running off the paper — a signature the user
+                     cannot see the end of is worse than a smaller one. This
+                     scales the preview only; RasterizeTyped measures its own
+                     layout, so the stamp's resolution is unaffected. -->
+                <Viewbox
+                    Stretch="Uniform"
+                    StretchDirection="DownOnly"
+                    Margin="14,10"
+                    IsHitTestVisible="False">
+                    <TextBlock
+                        x:Name="TypedPreview"
+                        FontSize="64"
+                        TextAlignment="Center"
+                        TextWrapping="NoWrap" />
+                </Viewbox>
             </Grid>
         </Border>
+
+        <!-- Type instead of drawing. Third input mode alongside draw and import;
+             whichever the user touches last wins, and the other two clear. -->
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox
+                x:Name="TypedBox"
+                Grid.Column="0"
+                PlaceholderText="Or type your name"
+                MaxLength="64"
+                TextChanged="TypedBox_TextChanged" />
+            <ComboBox
+                x:Name="TypedStyleBox"
+                Grid.Column="1"
+                MinWidth="132"
+                SelectionChanged="TypedStyleBox_SelectionChanged"
+                ToolTipService.ToolTip="Handwriting style" />
+        </Grid>
 
         <!-- Always present, never collapsed. Showing or hiding a row re-centres
              the ContentDialog, so the whole dialog would jump the moment an

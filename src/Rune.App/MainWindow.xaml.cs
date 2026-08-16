@@ -7,7 +7,6 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Windows.ApplicationModel.DataTransfer;
-using Windows.Storage.Pickers;
 using Windows.System;
 using Windows.UI;
 
@@ -290,13 +289,24 @@ public sealed partial class MainWindow : Window
         SeedToolStyles(view.Viewer);
         view.Viewer.DocumentEdited += (_, _) => UpdateDirtyIndicator(view);
         view.Viewer.ActiveToolChanged += (_, tool) => SyncToolButtons(tool);
-        view.Viewer.SignaturePlaced += (_, widthPt) =>
+        view.Viewer.StampPlaced += (_, widthPt) =>
         {
-            _state.Settings.SignatureWidthPt = widthPt;
+            // Which setting this lands in depends on what was armed, and the
+            // shell is what armed it, so the viewer does not need to know.
+            if (view.Viewer.ActiveTool == AnnotationTool.Image)
+            {
+                _state.Settings.ImageWidthPt = widthPt;
+            }
+            else
+            {
+                _state.Settings.SignatureWidthPt = widthPt;
+            }
             _store.Save(_state);
         };
         view.SignaturesRead += (_, _) => UpdateToolbarForActive();
         view.Viewer.NoteRequested += Viewer_NoteRequested;
+        view.Viewer.FormAppearanceRequested += Viewer_FormAppearanceRequested;
+        AttachTextTool(view.Viewer);
         view.BookmarksChanged += (_, _) => PersistBookmarks(view);
         view.PagesEdited += (_, _) =>
         {
@@ -307,6 +317,7 @@ public sealed partial class MainWindow : Window
             }
         };
         view.PageOpFailed += (_, message) => ShowError(message);
+        view.ExtractRequested += (_, _) => _ = ExtractPagesAsync(view);
         view.UndoStateChanged += (_, _) =>
         {
             if (view == CurrentView)
@@ -471,6 +482,8 @@ public sealed partial class MainWindow : Window
             CaptureState(view);
             view.Viewer.LinkActivated -= Viewer_LinkActivated;
             view.Viewer.NoteRequested -= Viewer_NoteRequested;
+            view.Viewer.FormAppearanceRequested -= Viewer_FormAppearanceRequested;
+            DetachTextTool(view.Viewer);
             view.Close();
             _pendingRestore.Remove(view);
         }
@@ -605,7 +618,7 @@ public sealed partial class MainWindow : Window
                      // The annotation cluster. A tool button left out of this
                      // list stays permanently greyed out — nothing else enables it.
                      PenToolButton, HighlighterToolButton, NoteToolButton,
-                     SignToolButton, EraserToolButton,
+                     TextToolButton, ImageToolButton, SignToolButton, EraserToolButton,
                  })
         {
             control.IsEnabled = ready;
@@ -676,6 +689,8 @@ public sealed partial class MainWindow : Window
         PenToolButton.IsChecked = tool == AnnotationTool.Pen;
         HighlighterToolButton.IsChecked = tool == AnnotationTool.Highlighter;
         NoteToolButton.IsChecked = tool == AnnotationTool.Note;
+        TextToolButton.IsChecked = tool == AnnotationTool.Text;
+        ImageToolButton.IsChecked = tool == AnnotationTool.Image;
         SignToolButton.IsChecked = tool == AnnotationTool.Signature;
         EraserToolButton.IsChecked = tool == AnnotationTool.Eraser;
     }
@@ -696,6 +711,28 @@ public sealed partial class MainWindow : Window
     private void HighlighterToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Highlighter);
     private void NoteToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Note);
     private void SignToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Signature);
+
+    /// <summary>
+    /// The picture button runs the picker rather than arming an empty tool:
+    /// there is nothing to place until a file has been chosen, and a tool that
+    /// looks armed but does nothing on click is worse than no tool at all.
+    /// Clicking it while it is armed puts it away, like the text tool.
+    /// </summary>
+    private void ImageToolButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeViewer?.ActiveTool == AnnotationTool.Image)
+        {
+            _activeViewer.ClearPendingStamp();
+            SetActiveTool(AnnotationTool.None);
+            return;
+        }
+
+        // The ToggleButton has already checked itself. Put it back until there
+        // is actually a picture armed, or a cancelled picker leaves a tool that
+        // looks on and is not.
+        SyncToolButtons(_activeViewer?.ActiveTool ?? AnnotationTool.None);
+        _ = PickAndArmImageAsync();
+    }
     private void EraserToolButton_Click(object sender, RoutedEventArgs e) => ToolButton_Click(AnnotationTool.Eraser);
 
     // The per-tool options panels live in MainWindow.Tools.cs.
@@ -713,14 +750,13 @@ public sealed partial class MainWindow : Window
 
     private async void OpenButton_Click(object sender, RoutedEventArgs e)
     {
-        var picker = new FileOpenPicker();
-        picker.FileTypeFilter.Add(".pdf");
-
-        nint hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-        var file = await picker.PickSingleFileAsync();
-        if (file is not null)
+        var picked = await FilePickerHost.PickOpenAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(this), ".pdf");
+        if (picked.Failed)
+        {
+            ShowError(FilePickerHost.FailureMessage);
+        }
+        else if (picked.File is { } file)
         {
             OpenOrActivate(file.Path);
         }
@@ -902,6 +938,107 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>Sizes offered for form text. "Auto" is PDF's own 0, meaning fit the box.</summary>
+    private static readonly (string Label, double Value)[] FormTextSizes =
+    [
+        ("Auto", 0), ("8", 8), ("9", 9), ("10", 10), ("11", 11),
+        ("12", 12), ("14", 14), ("16", 16), ("18", 18), ("20", 20), ("24", 24),
+    ];
+
+    /// <summary>
+    /// The colours a filled field can take. Deliberately few: this sets how a
+    /// form is filled in, not how it is decorated, and the realistic answers are
+    /// black, a pen blue, and red for something that has to stand out.
+    /// </summary>
+    private static readonly (string Label, byte R, byte G, byte B)[] FormTextColors =
+    [
+        ("Black", 0, 0, 0),
+        ("Blue", 20, 60, 160),
+        ("Red", 190, 30, 30),
+        ("Green", 20, 110, 60),
+    ];
+
+    private async void Viewer_FormAppearanceRequested(object? sender, FormAppearanceRequest request)
+    {
+        if (CurrentView is not { } view || !ReferenceEquals(sender, view.Viewer))
+        {
+            return;
+        }
+
+        var sizes = new ComboBox { MinWidth = 120 };
+        foreach (var (label, _) in FormTextSizes)
+        {
+            sizes.Items.Add(label);
+        }
+        // Land on the size the field already declares; an unusual one (13.5pt,
+        // say) is not in the list, so fall back to Auto rather than silently
+        // showing 12 and changing the field the moment OK is pressed.
+        int index = Array.FindIndex(FormTextSizes, s => Math.Abs(s.Value - request.Current.FontSize) < 0.01);
+        sizes.SelectedIndex = index >= 0 ? index : 0;
+
+        var swatches = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+        int chosenColor = Array.FindIndex(FormTextColors,
+            c => c.R == request.Current.R && c.G == request.Current.G && c.B == request.Current.B);
+        if (chosenColor < 0)
+        {
+            chosenColor = 0;
+        }
+        for (int i = 0; i < FormTextColors.Length; i++)
+        {
+            var (label, r, g, b) = FormTextColors[i];
+            int slot = i;
+            var button = new Microsoft.UI.Xaml.Controls.Primitives.ToggleButton
+            {
+                Content = label,
+                IsChecked = i == chosenColor,
+                Tag = slot,
+            };
+            button.Click += (s, _) =>
+            {
+                chosenColor = slot;
+                foreach (var other in swatches.Children.OfType<Microsoft.UI.Xaml.Controls.Primitives.ToggleButton>())
+                {
+                    other.IsChecked = ReferenceEquals(other, s);
+                }
+            };
+            swatches.Children.Add(button);
+        }
+
+        var caption = (Style)Application.Current.Resources["CaptionTextBlockStyle"];
+        var body = new StackPanel { Spacing = 8, MinWidth = 320 };
+        body.Children.Add(new TextBlock { Text = "Size", Style = caption });
+        body.Children.Add(sizes);
+        body.Children.Add(new TextBlock { Text = "Colour", Style = caption });
+        body.Children.Add(swatches);
+
+        var dialog = new ContentDialog
+        {
+            Title = "Text appearance",
+            Content = body,
+            PrimaryButtonText = "Apply",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+
+        if (await ShowDialogAsync(dialog) != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        var (_, red, green, blue) = FormTextColors[chosenColor];
+        double size = FormTextSizes[Math.Max(0, sizes.SelectedIndex)].Value;
+
+        if (!await view.Viewer.ApplyFieldAppearanceAsync(
+                request.PageIndex, request.FieldName, new FieldAppearance(size, red, green, blue)))
+        {
+            // The field inherits its appearance from the form's default, which
+            // carries no font resource name this code can safely reuse. Saying so
+            // beats leaving the user to wonder why Apply did nothing.
+            ShowError("This field takes its text style from the document, so it cannot be changed here.");
+        }
+    }
+
     private async Task SaveActiveAsync()
     {
         if (CurrentView is not { IsDirty: true } view)
@@ -926,15 +1063,17 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var picker = new FileSavePicker
+        var picked = await FilePickerHost.PickSaveAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(this),
+            Path.GetFileNameWithoutExtension(view.FilePath),
+            "PDF document",
+            ".pdf");
+        if (picked.Failed)
         {
-            SuggestedFileName = Path.GetFileNameWithoutExtension(view.FilePath),
-        };
-        picker.FileTypeChoices.Add("PDF document", [".pdf"]);
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-
-        var file = await picker.PickSaveFileAsync();
-        if (file is null)
+            ShowError(FilePickerHost.FailureMessage);
+            return;
+        }
+        if (picked.File is not { } file)
         {
             return;
         }
@@ -957,6 +1096,72 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             ShowError($"Save As failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Palette route into extract. The palette entry is offered whenever a
+    /// document is open, so it has to say what to do when no pages are picked
+    /// rather than appearing to do nothing.
+    /// </summary>
+    private async Task ExtractSelectedPagesFromPaletteAsync()
+    {
+        if (CurrentView is not { IsDocumentLoaded: true } view)
+        {
+            return;
+        }
+        if (view.SelectedPageCount == 0)
+        {
+            ShowNotice(
+                "Select pages in the thumbnail sidebar first, then extract them.",
+                InfoBarSeverity.Informational);
+            return;
+        }
+        await ExtractPagesAsync(view);
+    }
+
+    /// <summary>
+    /// Writes the thumbnail selection out as a new PDF. The picker lives here
+    /// because it needs the window handle; the work itself is DocumentView's.
+    /// The current document is left alone — extract is a copy, not a cut.
+    /// </summary>
+    private async Task ExtractPagesAsync(DocumentView view)
+    {
+        if (view.SelectedPageCount == 0 || !view.IsDocumentLoaded)
+        {
+            return;
+        }
+
+        var picked = await FilePickerHost.PickSaveAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(this),
+            $"{Path.GetFileNameWithoutExtension(view.FilePath)} {view.SelectedPageRangeLabel()}",
+            "PDF document",
+            ".pdf");
+        if (picked.Failed)
+        {
+            ShowError(FilePickerHost.FailureMessage);
+            return;
+        }
+        if (picked.File is not { } file)
+        {
+            return;
+        }
+
+        // Writing over the document being read from would pull the file out from
+        // under the open handle mid-export.
+        if (string.Equals(file.Path, view.FilePath, StringComparison.OrdinalIgnoreCase))
+        {
+            ShowError("Pick a different file: extracting over the open document would overwrite it.");
+            return;
+        }
+
+        int count = view.SelectedPageCount;
+        if (await view.ExtractSelectedPagesAsync(file.Path))
+        {
+            // Not ShowError: this succeeded, so it gets success semantics.
+            ShowNotice(
+                $"Extracted {count} page{(count == 1 ? "" : "s")} to {file.Name}.",
+                InfoBarSeverity.Success);
         }
     }
 
@@ -1029,6 +1234,75 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    private void ReportProblemMenuItem_Click(object sender, RoutedEventArgs e) => _ = ShowReportProblemAsync();
+
+    /// <summary>
+    /// Rune has no telemetry and makes no network requests, by design. That
+    /// means a crash reaches nobody unless the user carries it out by hand, and
+    /// until now nothing in the app said where the log even was. This shows the
+    /// details a useful report needs and opens the two places to get them.
+    /// </summary>
+    private async Task ShowReportProblemAsync()
+    {
+        string logPath = ErrorLog.Default.Path_;
+        bool haveLog = File.Exists(logPath);
+
+        var panel = new StackPanel { Spacing = 12, MinWidth = 420 };
+        panel.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Text = "Rune collects nothing and sends nothing anywhere, so bug reports only "
+                 + "arrive if you send them. Open an issue on GitHub and paste in the details below.",
+        });
+
+        // Selectable, because the point is to paste this into an issue.
+        var details = new StackPanel { Spacing = 4 };
+        foreach (var (label, value) in new (string, string)[]
+        {
+            ("Rune", $"{CurrentVersion} ({(IsPackaged ? "Store" : "portable")})"),
+            ("Windows", Environment.OSVersion.Version.ToString()),
+            ("Architecture", System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString()),
+        })
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            row.Children.Add(new TextBlock { Text = label, Opacity = 0.6, MinWidth = 110 });
+            row.Children.Add(new TextBlock { Text = value, IsTextSelectionEnabled = true });
+            details.Children.Add(row);
+        }
+        panel.Children.Add(details);
+
+        panel.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.7,
+            Text = haveLog
+                ? $"Errors are logged to {logPath}. Attach it if the problem was a crash."
+                : $"Nothing has been logged yet. If Rune misbehaves, errors appear in {logPath}.",
+        });
+
+        var dialog = new ContentDialog
+        {
+            Title = "Report a problem",
+            Content = panel,
+            PrimaryButtonText = "Open issue tracker",
+            SecondaryButtonText = haveLog ? "Show the log" : null,
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+
+        var result = await ShowDialogAsync(dialog);
+        if (result == ContentDialogResult.Primary)
+        {
+            await Launcher.LaunchUriAsync(new Uri("https://github.com/DanialJaved/rune/issues/new"));
+        }
+        else if (result == ContentDialogResult.Secondary && haveLog)
+        {
+            // Select the file in Explorer rather than opening it: the log is
+            // plain text, but what the user needs is to find and attach it.
+            await Launcher.LaunchFolderPathAsync(Path.GetDirectoryName(logPath));
+        }
+    }
+
     private async void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
         var themeBox = new ComboBox
@@ -1081,6 +1355,28 @@ public sealed partial class MainWindow : Window
     /// <summary>The running build's version, for the Settings footer.</summary>
     private static string CurrentVersion =>
         (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0, 0)).ToString(3);
+
+    /// <summary>
+    /// True for the MSIX (Store) build, false for the portable zip. Worth
+    /// reporting in a bug: the two differ in how they are installed and
+    /// updated, and only one of them is signed.
+    /// <c>Package.Current</c> throws when there is no package identity, which
+    /// is the documented way to ask.
+    /// </summary>
+    private static bool IsPackaged
+    {
+        get
+        {
+            try
+            {
+                return Windows.ApplicationModel.Package.Current is not null;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
 
     // ---------------------------------------------------------------- shortcuts overlay
 
@@ -1186,9 +1482,12 @@ public sealed partial class MainWindow : Window
                 new("Highlight selection", "Ctrl+H", () => viewer.MarkupSelection(MarkupKind.Highlight)),
                 new("Draw (toggle pen)", "Ctrl+E", TogglePenTool),
                 new("Highlighter tool", "", () => SetActiveTool(AnnotationTool.Highlighter)),
+                new("Type on the page", "Ctrl+T", () => SetActiveTool(AnnotationTool.Text)),
+                new("Place a picture…", "", () => _ = PickAndArmImageAsync()),
                 new("Eraser tool", "", () => SetActiveTool(AnnotationTool.Eraser)),
                 new("Save", "Ctrl+S", () => _ = SaveActiveAsync()),
                 new("Save As…", "Ctrl+Shift+S", () => _ = SaveAsActiveAsync()),
+                new("Extract selected pages to a new file…", "", () => _ = ExtractSelectedPagesFromPaletteAsync()),
                 new("Print", "Ctrl+P", () => _ = PrintAsync()),
                 new("Document properties", "Ctrl+D", () => _ = ShowPropertiesAsync()),
                 new("Toggle night mode", "Ctrl+I", ToggleNightMode),
@@ -1397,6 +1696,8 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.D, VirtualKeyModifiers.Control, () => _ = ShowPropertiesAsync());
         AddAccelerator(VirtualKey.H, VirtualKeyModifiers.Control, () => _activeViewer?.MarkupSelection(MarkupKind.Highlight));
         AddAccelerator(VirtualKey.E, VirtualKeyModifiers.Control, TogglePenTool);
+        AddAccelerator(VirtualKey.T, VirtualKeyModifiers.Control,
+            () => TextToolButton_Click(this, null!), skipWhenTextInputFocused: true);
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control, () => _ = SaveActiveAsync());
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => _ = SaveAsActiveAsync());
 
@@ -1436,28 +1737,28 @@ public sealed partial class MainWindow : Window
             {
                 HideFindBar();
             }
-            else if (_activeViewer?.CancelSignaturePlacement() == true)
+            else if (_activeViewer?.CancelStampPlacement() == true)
             {
                 // Abandon a half-drawn placement before disarming the tool.
             }
-            else if (_activeViewer?.ClearSignatureSelection() == true)
+            else if (_activeViewer?.ClearObjectSelection() == true)
             {
-                // Deselect a placed signature before disarming anything.
+                // Deselect a placed object before disarming anything.
             }
             else if (_activeViewer?.ActiveTool is not (null or AnnotationTool.None))
             {
-                _activeViewer?.ClearPendingSignature();
+                _activeViewer?.ClearPendingStamp();
                 SetActiveTool(AnnotationTool.None); // finally, put the tool away
             }
         }, requiresDocument: false);
 
-        // Delete removes the selected signature. Guarded on there being one, so
-        // Delete keeps deleting pages when the thumbnail sidebar has focus.
+        // Delete removes the selected picture or text box. Guarded on there
+        // being one, so Delete keeps deleting pages when the sidebar has focus.
         AddAccelerator(VirtualKey.Delete, VirtualKeyModifiers.None, () =>
         {
-            if (_activeViewer?.HasSelectedSignature == true)
+            if (_activeViewer?.HasSelectedObject == true)
             {
-                _activeViewer.DeleteSelectedSignature();
+                _activeViewer.DeleteSelectedObject();
             }
         }, skipWhenTextInputFocused: true);
 

@@ -45,12 +45,16 @@ One slim toolbar. Everything else lives in a single menu, so the page gets the s
 • Tabs, with each document remembering where you stopped reading
 • Sidebar with page thumbnails, chapters and your own bookmarks
 • Text selection, copy, and find-in-document with highlight-all
-• Form filling — click a field and type; text boxes, dropdowns and checkboxes all save back into the PDF (standard AcroForm documents; XFA forms are not supported)
-• Sign a document — draw your signature, or photograph one on paper and import it: Rune removes the paper automatically, on your device, so only the ink lands on the page. Place it, move it, and reuse it next time. Signatures are stored only on your device
+• Form filling — click a field and type; text boxes, dropdowns and checkboxes all save back into the PDF, and you can set the size and colour a field fills in with so your answers stand apart from the printed form (standard AcroForm documents; XFA forms are not supported)
+• Sign a document — draw your signature, type it in a handwriting style, or photograph one on paper and import it: Rune removes the paper automatically, on your device, so only the ink lands on the page. Place it, move it, resize it by its corners, and reuse it next time. Signatures are stored only on your device
+• Everything keeps working when you rotate the page — selecting text, highlighting, filling forms and signing all follow the rotation, so a sideways scan is as usable as any other document
 • Flatten — bake annotations and filled fields into the page so they can't be edited out
 • Signature details — read what a digitally signed document reports, including whether the signature covers the whole file
 • Annotations — highlight, underline, strikeout, sticky notes and freehand pen — saved as standard PDF annotations that any reader can see
-• Page editing — reorder by dragging, delete, copy and paste pages between open documents, or drop a PDF into the sidebar to merge it in
+• Type anywhere on a page (Ctrl+T), whether or not there is anything there already: click, and a bar offers font, size, bold, italic and colour, with every change landing on the words as you make it. What you type is real PDF text rather than a picture of text, so it stays sharp at any zoom and can be searched and copied once the document is flattened
+• Place a picture on a page from a PNG, JPEG, BMP, GIF or TIFF. Transparency is kept, and nothing is removed from it: a picture you chose is placed exactly as it is
+• Anything you place can be picked up again. Click to select it, drag to move it, pull a corner to resize it, or press Delete. Resizing text re-renders it at the new size instead of stretching the letters
+• Page editing — reorder by dragging, delete, copy and paste pages between open documents, drop a PDF into the sidebar to merge it in, or extract a selection to a new file
 • Undo and redo for everything
 • Presentation mode (F5) for showing slides fullscreen
 • Night mode that inverts page colours for comfortable reading in the dark
@@ -147,7 +151,8 @@ invalidate this justification and the privacy declaration together.
 ## Screenshots
 
 Store requires at least one 1366×768 or larger desktop screenshot; up to 10.
-The current set in `docs/store-screenshots/`, shot against v0.5.0 at 1920×1080:
+The set in `docs/store-screenshots/` is now the full 10, all 1920×1080. Shots
+1 to 7 were taken against v0.5.0, shots 8 to 10 against v0.6.0:
 
 1. `01-reading-light` — light mode, thumbnails sidebar, the everyday view
 2. `02-night-mode` — night mode on the same page (thumbnails invert too)
@@ -157,10 +162,18 @@ The current set in `docs/store-screenshots/`, shot against v0.5.0 at 1920×1080:
 6. `06-presentation` — presentation mode (F5), fullscreen
 7. `07-signature` — a photographed signature imported with the paper keyed out,
    previewed over a checkerboard so the transparency is legible in a thumbnail
+8. `08-page-editing` — three pages multi-selected in the thumbnail sidebar,
+   showing the accent bars and the current-page ring
+9. `09-shortcuts` — the F1 overlay, both columns complete (the clipping bug that
+   held this shot back was fixed in `99617b8`)
+10. `10-signature-resize` — a typed signature placed on the page and selected,
+    with its four aspect-locked corner handles
 
-Still to shoot: the **page-editing sidebar** with pages selected, and the
-**shortcuts overlay** (the clipping bug that blocked it was fixed in `99617b8`,
-so it is now only a matter of taking the shot).
+Shot 8 is the selection state rather than the right-click menu on purpose: a
+`MenuFlyout` renders in its own HWND and does not appear in a `PrintWindow`
+capture, which was confirmed again when these were taken. `CopyFromScreen` is no
+way around it, because this display is exactly 1920×1080 and the taskbar
+overlays the bottom 60 px of any window placed at (0,0).
 
 Capture at 1920×1080 with `PrintWindow(PW_RENDERFULLCONTENT)` (PROJECT.md §7),
 windowed, using a licence-safe document. `PrintWindow` returns a solid black

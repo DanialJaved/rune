@@ -57,6 +57,14 @@ internal static class RuneColors
     public static Color SelectedStampWash(bool night) =>
         night ? Color.FromArgb(45, 120, 180, 255) : Color.FromArgb(35, 0, 120, 215);
 
+    /// <summary>
+    /// Corner resize handles. Near-opaque and light, so they read as grabbable
+    /// against both the dashed frame and whatever the signature sits on — a
+    /// handle the same colour as the border would disappear into it.
+    /// </summary>
+    public static Color SelectedStampHandle(bool night) =>
+        night ? Color.FromArgb(245, 235, 245, 255) : Color.FromArgb(245, 255, 255, 255);
+
     // ---- Form fields ----
     //
     // PDFium's FFLDraw pass fills widgets and draws no edge, so two fields that

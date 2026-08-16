@@ -2,8 +2,9 @@
 
 > A single-file brain-dump so a fresh session (human or AI) can understand
 > and continue this project without re-deriving context. Last updated for
-> **v0.5.0** (2026-07-31), including the pre-submission security pass and the
-> move to Store-first distribution.
+> **v0.7.0** (2026-08-10): type real text anywhere on a page, place a picture,
+> and pick either back up to move or resize it. Artifacts have NOT been rebuilt
+> for 0.7.0 and nothing is published; §13 has what is left.
 >
 > **Start here:** §1 what it is · §4 how rendering works (the load-bearing part)
 > · §7 gotchas (read before debugging) · §10 known bugs · §13 current state.
@@ -34,8 +35,8 @@ Flow Launcher.
 | Layer | Choice | Notes |
 |---|---|---|
 | Language/runtime | **C# / .NET 10** | |
-| UI | **WinUI 3** (Windows App SDK **2.2.0**) | Fluent, Mica, dark mode |
-| PDF engine | **PDFium** via `bblanchon.PDFium.Win32` NuGet (152.x) | Chrome's renderer; BSD-3-Clause/Apache-2.0 |
+| UI | **WinUI 3** (Windows App SDK **2.2.0**, referenced as sub-packages — see §7) | Fluent, Mica, dark mode |
+| PDF engine | **PDFium** via `bblanchon.PDFium.Win32` NuGet (153.x) | Chrome's renderer; BSD-3-Clause/Apache-2.0 |
 | Canvas | **Win2D** (`Microsoft.Graphics.Win2D` 1.4.0) | virtualized `CanvasVirtualControl` |
 | MVVM helpers | `CommunityToolkit.Mvvm` 8.4.2 | used lightly |
 | Build model | Unpackaged self-contained `.exe` for dev; MSIX at release | |
@@ -52,9 +53,11 @@ Flow Launcher.
 ```
 src/
   Rune.PdfiumInterop/   Thin P/Invoke bindings over pdfium.dll
-    NativeMethods.cs      Raw [DllImport] signatures (fpdfview/doc/text/annot/save)
+    NativeMethods.cs      Raw [DllImport] signatures (fpdfview/doc/text/annot/edit/save)
     PdfiumNative.cs       Public facade so the engine never touches DllImports
     PdfiumLibrary.cs      Global FPDF_InitLibrary + the serialization lock
+    PdfiumFormEnvironment.cs  FPDF_FORMFILLINFO callbacks — the only way to set a
+                          field value, since FPDFAnnot_SetFormFieldValue does not exist
     FileAccessAdapter.cs  FPDF_FILEACCESS bridge → lazy FileStream reads (huge/Unicode paths)
     PdfiumException.cs     Maps FPDF_GetLastError to friendly messages
 
@@ -63,11 +66,34 @@ src/
     PdfDocument.Annotations.cs  AddMarkup/AddNote/AddInk/GetAnnotations/RemoveAnnotation/
                           Capture+RestoreAnnotation (undo)/SaveAs/IsDirty
     PdfDocument.Pages.cs  DeletePages/MovePages/ExportPages/InsertPages(FromFile)/RestoreMovedPages
+    PdfDocument.PageCache.cs  Stable FPDF_PAGE handles across operations (v0.5.0) —
+                          PDFium needs one page handle to survive keystrokes
+    PdfDocument.Forms.cs  AcroForm fill: FormClick/FormChar/field geometry, XFA detection,
+                          Get/SetFieldAppearance (the /DA rewrite + forced repaint)
+    FieldAppearance.cs    The /DA grammar: read and rewrite size + colour, conservatively
+    PdfDocument.Stamps.cs Image stamps: AddStamp/MoveAnnotation/ResizeStamp/
+                          TryReadStampImage/GetStampKind (the signature mechanism, and
+                          the picture one — StampKind tells a text box from a picture)
+    PdfDocument.Text.cs   Real text on a page: AddTextBox writes one text object per
+                          line and measures what PDFium built; TryReadTextBox reads the
+                          words, size, face and colour back out; ResizeTextBox
+                          re-renders at a scaled size. TextBoxContent owns the
+                          standard-14 name in both directions (v0.7.0)
+    PdfDocument.Flatten.cs   FPDFPage_Flatten — bakes annotations into page content
+    PdfDocument.Signatures.cs  Read-only report of what a signed file CLAIMS. Never verifies.
+    SignatureMatte.cs     Keys the paper out of a photographed signature; also the
+                          shared BGRA helpers (premultiply, crop, quarter-turn rotate)
+    SignatureCoverage.cs  /ByteRange arithmetic: does a signature cover the whole file
     RenderScheduler.cs    THE single render thread + priority op queue (see §4)
     PageText.cs           Per-page text + char boxes → managed selection hit-testing
     PageLayout.cs         Immutable vertical-stack layout (zoom/rotation, min viewport w/h)
+    PageRotationTransform.cs  Unrotated page space ↔ the drawn box (v0.6.0). The reason
+                          selection/forms/signing work while rotated — see §9
+    ViewRotationMath.cs   Quarter-turn normalization (C# % keeps the left operand's sign)
+    ZoomAnchor.cs         Keeps the point under the cursor still while zooming
     Tiles.cs              TileKey + TileMath (MaxSingleTilePx = 1024 — see §7 gotcha)
     PageBitmap.cs         Pooled BGRA pixel buffer (ArrayPool)
+    ThumbnailMetrics.cs   Aspect-correct thumbnail box sizing
     DipRect.cs            Simple rect struct in device-independent px
     OutlineItem.cs        TOC node model
     PdfLink.cs            Clickable-link model
@@ -75,6 +101,7 @@ src/
     DocumentSearch.cs     Full-document text search (routes through the op queue)
     UndoStack.cs          Bounded per-document undo/redo stack (generic)
     BookmarkRemap.cs      Pure page-index remap math (delete/insert/move)
+    ErrorLog.cs           Append-only crash log; every method swallows its own failures
     AppState.cs           RecentFile(+Bookmarks)/SessionState/AppSettings/AppState/AppStateStore
                           (namespace Rune.Services — physically here so it's unit-testable)
 
@@ -83,29 +110,50 @@ src/
                           merges Styles/Tokens.xaml + Styles/Controls.xaml
     MainWindow.xaml(.cs)  Shell: TabView-in-titlebar, SLIM header + hamburger menu,
                           floating zoom pill, find bar, presentation/shortcuts/bookmark/
-                          undo wiring, settings/palette, drag-drop, homepage grid
+                          undo wiring, settings/palette, drag-drop, homepage grid,
+                          page extract, "Report a problem"
+    MainWindow.Tools.cs   The annotation toolbar's tool flyouts (pen/highlighter/sign),
+                          and the picture tool's pick-decode-arm path
+    MainWindow.TextTool.cs  The text tool's shell half: its button and the floating
+                          format bar (font/size/bold/italic/colour), built in code so
+                          the lists come from TextBoxFonts alone (v0.7.0)
     ShortcutCatalog.cs    Single source of truth for the F1 shortcuts overlay
     Styles/Tokens.xaml, Styles/Controls.xaml   spacing scale + shared control styles
+    Styles/RuneColors.cs  Every colour Win2D draws (XAML uses {ThemeResource})
     Controls/
       PdfViewer.xaml(.cs)     The viewport: Win2D canvas, virtualized scroll, zoom,
                               tiles, text selection, search, links, ink, night mode,
                               page-mutation refresh, annotation undo events
+      PdfViewer.Forms.cs      Form-field hit-testing, keystroke routing, field borders
+      PdfViewer.StampPlacement.cs  Arming, the hover ghost, placement. One pipeline for
+                              a signature and a picture; only the source differs (v0.7.0)
+      PdfViewer.TextEditing.cs  The on-page text box: a real XAML TextBox over the
+                              canvas, anchored to a page point (v0.7.0)
+      PdfViewer.ObjectSelection.cs  Selecting anything placed: move, corner handles,
+                              and the one difference between the two kinds — a picture
+                              is rescaled, text is re-rendered at a new size (v0.7.0)
       DocumentView.xaml(.cs)  Per-tab: viewer + sidebar (thumbnails/chapters/bookmarks
-                              switcher), page editing (reorder/delete/clipboard/insert),
-                              undo stack owner, lazy open, save-in-place
+                              switcher), page editing (reorder/delete/clipboard/insert/
+                              extract), undo stack owner, lazy open, save-in-place
+      SignaturePad.xaml(.cs)  The Add-a-signature dialog: draw, type or import
+      SignatureFonts.cs       Which of Windows' handwriting faces this PC actually has
+      NoticeHost.xaml(.cs)    The app's ONLY message surface (floating card, v0.5.0)
       PresentationView.xaml(.cs) F5 fullscreen one-page-at-a-time overlay (tiled)
       CommandPalette.xaml(.cs) Ctrl+K fuzzy command palette
-      BookmarkItem.cs, AnnotationEdit.cs, ThumbnailItem.cs, OutlineNode.cs, RecentCard.cs
+      BookmarkItem.cs, AnnotationEdit.cs, AnnotationTool.cs, ThumbnailItem.cs,
+      OutlineNode.cs, RecentCard.cs
     Services/
       DialogHost.cs           Serializes every ContentDialog (WinUI allows ONE — see §7)
+      FilePickerHost.cs       Every file picker in the app: owner window, one retry, honest failure
       PageClipboard.cs        App-wide page clipboard (serialized bytes, cross-tab)
       PrintService.cs         PrintManagerInterop + PrintDocument (live preview, page ranges)
+      SignatureStore.cs       Saved signatures as PNGs under %LOCALAPPDATA%\Rune
       ThumbnailCache.cs       Homepage first-page thumbnails (disk-cached PNGs)
     Package.appxmanifest      Store identity + .pdf file-type association (§8b)
     Assets/                   rune.ico + MSIX visual assets (generated)
 
 tests/
-  Rune.Tests/           xUnit — 244 tests against a generated corpus (see §6)
+  Rune.Tests/           xUnit — 366 tests against a generated corpus (see §6)
 
 tools/
   gen-corpus.ps1        Hand-authors the test PDFs (no PDF lib needed)
@@ -114,14 +162,14 @@ tools/
 docs/
   store-listing.md      Store submission copy: description, search terms, age
                         rating answers, runFullTrust justification, screenshot plan
-  store-screenshots/    6 × 1920×1080 PNGs for the Store listing
+  store-screenshots/    10 × 1920×1080 PNGs for the Store listing
+.github/
+  workflows/ci.yml      Build x64 + ARM64, run tests, permissions: contents: read
+  ISSUE_TEMPLATE/       Bug and feature forms + a link to private vuln reporting
 PRIVACY.md              Required by the Store (live URL is checked at cert time)
+SECURITY.md             Where to report a parser bug, and the PDFium/Rune boundary
+THIRD-PARTY-NOTICES.md  Ships inside every binary (PDFium's licence requires it)
 ```
-
-Engine files added in v0.4.x worth knowing about: `ErrorLog.cs` (crash log,
-never throws), `ViewRotationMath.cs` (negative quarter-turn normalization),
-`ThumbnailMetrics.cs` (aspect-correct box sizing), `BookmarkRemap.cs`,
-`UndoStack.cs`, `PageText.cs`.
 
 ---
 
@@ -176,7 +224,7 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 
 ---
 
-## 5. Feature set (as shipped in v0.5.1)
+## 5. Feature set (as shipped in v0.7.0)
 
 - Tabs **in the title bar** (Chrome/Terminal style), lazy-loaded per tab
 - Continuous virtualized scroll; zoom 10–640% at cursor; fit-width/page; rotate
@@ -193,6 +241,12 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 - **Page editing** in the thumbnail sidebar: multi-select, drag-to-reorder,
   Delete, **Ctrl+C/X/V page clipboard incl. across tabs**, drop an external
   `.pdf` into the sidebar to insert its pages. Serialized-bytes clipboard.
+  **Extract** the selection to a new file (context menu + palette), which leaves
+  the open document untouched.
+- **Everything interactive works while the view is rotated** (v0.6.0) —
+  selection, markup, links, form filling, signing. `PageRotationTransform` maps
+  between unrotated page space and the drawn box; find results and selection now
+  survive a Ctrl+R rather than being cleared.
 - **Undo / redo** (Ctrl+Z / Ctrl+Y): unified per-document stack over
   annotations (spec-based re-create) and page ops (snapshot / inverse-permute).
   Cleared on save-in-place + close. Dynamic menu labels.
@@ -209,18 +263,38 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 - **Form filling** (AcroForm text/checkbox/radio/combo/list): PDFium's form-fill
   environment drives every edit through `FORM_OnChar` — there is no programmatic
   setter — with Rune-drawn field borders over the top. Values round-trip through
-  save.
-- **Signing**: draw a signature, or **import a photo or scan and have the paper
-  keyed out automatically** (`SignatureMatte`). Placed as a stamp annotation with
-  a live semi-transparent preview under the cursor, wheel-sizing before
-  placement, and drag-to-move after. Saved signatures are reusable and stay on
-  the device.
+  save. **Text colour and size** are settable per field (right-click → "Text
+  appearance…"), by rewriting the widget's `/DA` — see §7 for why the repaint is
+  the hard half.
+- **Signing**: draw a signature, **type it** in one of Windows' handwriting faces
+  (`SignatureFonts`, nothing bundled), or **import a photo or scan and have the
+  paper keyed out automatically** (`SignatureMatte`). Placed as a stamp annotation
+  with a live semi-transparent preview under the cursor, wheel-sizing before
+  placement, and drag-to-move **or aspect-locked corner-handle resize** after.
+  Saved signatures are reusable and stay on the device.
+- **Text on a page** (`Ctrl+T`, v0.7.0): click anywhere, blank or not, and type.
+  A floating bar offers font, size, bold, italic and colour, applied live. Stored
+  as **real text objects** inside a stamp annotation, not a raster, so it is
+  crisp at any zoom and becomes ordinary searchable page text once flattened.
+  The editor is a real XAML `TextBox` over the canvas (IME, selection, clipboard
+  and screen readers for free), anchored to a page point.
+- **Pictures** (v0.7.0): place any PNG/JPEG/BMP/GIF/TIFF through the same
+  arm → ghost → click-or-drag → `AddStamp` pipeline signatures use. **No
+  matting**: `SignatureMatte` exists to remove paper from a photographed
+  signature, and a picture the user chose should land as it is.
+- **One selection model** (v0.7.0): anything placed is selectable with a plain
+  click, then movable, resizable by aspect-locked corner handles, and deletable.
+  A picture is resized by rescaling its pixels; **text is resized by re-rendering
+  it at a new point size**, which is the whole reason for storing text as text.
 - **Signature details**: reports what a signed document *claims*, including
   whole-file coverage. Deliberately does **not** verify — see the disclaimer in
   `MainWindow.xaml.cs`, which must never be softened.
 - **Flatten** (`PdfDocument.Flatten`): bakes annotations and form values into
   page content for a fixed, non-editable copy.
 - Session restore; printing with preview + page ranges; document properties
+- **Report a problem** (menu): version, Store vs portable, Windows build, and the
+  path to `errors.log`, with buttons to the issue tracker and the log folder.
+  With no telemetry by design this is the only route a crash reaches anyone.
 
 ### Keyboard shortcuts (see `ShortcutCatalog.cs` for the authoritative list)
 | Action | Keys |
@@ -236,8 +310,10 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 | Night / sidebar | `Ctrl+I` / `F9` |
 | Rotate right / left | `Ctrl+R` / `Ctrl+Shift+R` |
 | Presentation / bookmark | `F5` / `Ctrl+B` |
-| Highlight / pen / save / save as | `Ctrl+H` / `Ctrl+E` / `Ctrl+S` / `Ctrl+Shift+S` |
-| Pen, highlighter, note, sign, eraser | annotation toolbar (no direct chords) |
+| Highlight / pen / text | `Ctrl+H` / `Ctrl+E` / `Ctrl+T` |
+| Save / save as | `Ctrl+S` / `Ctrl+Shift+S` |
+| Pen, highlighter, note, text, picture, sign, eraser | annotation toolbar (only the pen and text have chords) |
+| Move / resize / delete something placed | click it, drag it or a corner, `Delete` |
 | Copy / cut / paste (text or pages) | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
@@ -257,7 +333,7 @@ dotnet build src/Rune.App/Rune.App.csproj -p:Platform=x64
 # Run (accepts an optional PDF path; also --page N --zoom Z for scripted tests)
 src/Rune.App/bin/x64/Debug/net10.0-windows10.0.19041.0/win-x64/Rune.exe [file.pdf]
 
-# Test (244 tests)
+# Test (366 tests)
 dotnet test tests/Rune.Tests/Rune.Tests.csproj
 
 # Regenerate assets when needed
@@ -295,6 +371,42 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
   pinned to **1024** in `Tiles.cs` — do **not** raise it. (This was the root
   cause of the "rotate shows blank page" bug: only rotated landscape pages
   produced tiles that wide.)
+- **PDFium text-object landmines** (v0.7.0; see `PdfDocument.Text.cs`):
+  - **Set the annotation's rect BEFORE appending objects to it.** PDFium sizes
+    the appearance form's bounding box from the rect at the moment an object is
+    appended, so appending into a still-empty rect gives a zero-sized box and the
+    text renders as *nothing at all* — while every read-back reports exactly what
+    was asked for. Setting the rect afterwards does not rebuild it. The stamp
+    path always did this in the right order; the text path had to learn it.
+  - **FreeText is a dead end.** PDFium generates no appearance for it, and
+    `FPDFAnnot_AppendObject` is gated on a subtype check admitting only ink and
+    stamp. A FreeText annotation is refused the object and draws nothing. Real
+    text goes in a **stamp** annotation.
+  - `FPDFTextObj_GetFont` returns the **document's** font, not a loaned one.
+    Never pass it to `FPDFFont_Close` — that frees a font the page still draws
+    with. Only a font from `FPDFText_LoadStandardFont` is yours to close.
+  - `/Contents` on a text stamp is its alt text, which is correct per the spec
+    and is what `TryReadTextBox` reads the words from. Edge draws a small comment
+    marker beside any annotation that has `/Contents`. That is Edge's choice, it
+    is cosmetic, and flattening removes the annotation entirely.
+- **A `TextBox` will not go transparent by setting `Background`.** Its template
+  swaps in `TextControlBackground*` and `TextControlForeground*` per visual
+  state, so both properties lose the moment the box takes focus — which for the
+  on-page editor is immediately. Override those keys on the element itself, and
+  mutate one brush instance rather than assigning a new one, because the template
+  resolves the resource once when it is applied.
+- **Do not add `Microsoft.WindowsAppSDK` back as a package reference.**
+  `Rune.App.csproj` deliberately references the six sub-packages it needs
+  (Base, Foundation, InteractiveExperiences, WinUI, DWrite, Runtime) instead.
+  The meta-package hard-depends on `.Widgets`, `.AI` and `.ML`, and `.ML` pulls
+  in `Microsoft.Windows.AI.MachineLearning` — `onnxruntime.dll` (20.7 MB) plus
+  `DirectML.dll` (17.8 MB) in a PDF reader that runs no inference. There is no
+  supported opt-out property; the sub-package list is the only route, and none
+  of the six depends on AI, ML or Widgets. **Upgrading the SDK means bumping six
+  lines and re-reading the meta-package's nuspec** for any newly added
+  dependency Rune actually needs. Verify by *launching* the build, not just
+  compiling: a missing WinAppSDK binary fails at first XAML load. Night mode is
+  the sharpest single check — it goes through Win2D's `InvertEffect`.
 - **PDFium form-fill landmines** (all cost real time in v0.5.0; see
   `PdfiumFormEnvironment.cs` and `PdfDocument.Forms.cs`):
   - **`FPDFAnnot_SetFormFieldValue` does not exist.** The only way to change a
@@ -321,6 +433,23 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
     value. `SaveAs` and `FlattenPage` both do this themselves.
   - `FPDFImageObj_SetBitmap` takes a page **array**, not a page.
   - `FPDFSignatureObj_GetSubFilter`/`GetTime` are ASCII; `GetReason` is UTF-16.
+- **File pickers are brokered out of process, and that broker can just fail.**
+  Every `PickSingleFileAsync` spawns a fresh `PickerHost.exe`; when its
+  activation fails you get `COMException 0x80004005` (E_FAIL) and no dialog ever
+  appears. A real v0.6.0 build hit this three times in a row (§10) and it has
+  never reproduced since. Consequences for anything touching a picker: go through
+  `Services/FilePickerHost`, which owns `InitializeWithWindow`, retries once and
+  logs both attempts; never call a picker from `ContentDialog.Opened`, since that
+  fires it from inside the dialog's open transition; and never report a picker
+  failure as a problem with the file, because at that point no file was chosen.
+- **A `/DA` rewrite does not repaint the widget.** PDFium builds a form widget's
+  appearance stream during page setup and caches it, so
+  `FPDFAnnot_SetStringValue(annot, "DA", …)` reads back perfectly while the page
+  goes on drawing the old appearance. `SetFieldAppearance` therefore evicts the
+  page handle afterwards (`EvictPageLocked`), which makes the next acquire re-run
+  `FORM_OnAfterLoadPage` and rebuild it. Assert on **pixels**, not on the string:
+  this is the same shape as the v0.6.0 stamp resize, where `GetMatrix` agreed
+  with what was asked for and the render did not.
 - **Theme brushes in code-behind**: never resolve one via
   `Application.Current.Resources["...Brush"]` — it returns the **dark** value
   whatever the active theme is. Define a `Style` in `Styles/Controls.xaml` and
@@ -501,6 +630,17 @@ get no SmartScreen/SAC warning.
 
 **Product ID `9NH37840QDM6`** — live at https://apps.microsoft.com/detail/9NH37840QDM6
 
+**winget works, and needed no work.** The listing is mapped into the `msstore`
+source, so `winget install --id 9NH37840QDM6 --source msstore --exact` installs
+the same Microsoft-signed package. Verified with `winget show --id 9NH37840QDM6
+--source msstore` (v0.6.0 prep). The community `winget-pkgs` route was never
+viable: it wants a downloadable installer URL, which Store-only distribution
+doesn't provide.
+
+`winget show` also reads back the **live** Store description, which makes it a
+free way to check that what Partner Center actually serves matches
+`docs/store-listing.md`.
+
 ```powershell
 # Store upload bundle (unsigned — the Store signs it), x64 + ARM64
 dotnet restore src/Rune.App/Rune.App.csproj
@@ -534,6 +674,196 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
 
 ## 9. Version history
 
+- **v0.7.0** (2026-08-10) — put a word, or a picture, anywhere on a page.
+  **Added: the text tool.** Arm it (`Ctrl+T`), click any part of any page whether
+  or not there is anything there, and a box opens with a caret in it. A bar
+  floats over the page offering font, size, bold, italic and colour, and every
+  change lands on the words immediately. Esc or a click elsewhere commits; an
+  empty box is dropped without leaving an annotation, a dirty marker or anything
+  on the undo stack.
+  The text is **real text**, which was the open question this release had to
+  settle. PDFium generates no appearance for a FreeText annotation, and
+  `FPDFAnnot_AppendObject` admits only ink and stamp subtypes, so FreeText is
+  refused the object and renders as nothing. As a *stamp* annotation carrying
+  text objects it works, stays a discrete object the existing move/erase/undo
+  machinery already handles, and flattens into ordinary searchable page text.
+  Nothing in the path carries font metrics: the lines are laid out around an
+  arbitrary origin, measured with `FPDFPageObj_GetBounds`, and moved as a block,
+  so the box is whatever PDFium will actually draw and cannot drift from it.
+  **Added: place a picture.** Any PNG, JPEG, BMP, GIF or TIFF, through the same
+  arm → hover ghost → click-or-drag → `AddStamp` pipeline a signature uses; only
+  the source was ever signature-specific, so `PdfViewer.Signature.cs` became
+  `PdfViewer.StampPlacement.cs` and the placement carries a label ("signature" or
+  "image") for its undo entry rather than the shell keeping a parallel state
+  machine. No matting: `SignatureMatte` exists to remove paper from a
+  photographed signature, and a picture the user deliberately chose should land
+  as it is. An image arms at its natural size capped to half the page, because a
+  1024px photo at 96dpi is 768pt and wider than the paper.
+  **Added: one selection model.** Selection used to be signature-only in
+  practice. A text box *was* selectable and draggable, but `CommitStampResize`
+  went through `ResizeStamp`, which begins by reading the stamp's pixels back —
+  a text annotation has none, so the corner drag silently snapped back and the
+  handles did nothing. Both kinds now share select/move/delete, and differ only
+  in the resize: a picture is rescaled, **text is re-rendered at a new point
+  size**. That is the whole reason for storing text as text, and it is why a text
+  box resizes aspect-locked rather than by width: Rune does no line wrapping, so
+  the words break where the user broke them and the two axes have to move
+  together.
+  Resizing text needs the style back out of the file, and it is read rather than
+  cached, for the same reason `TryReadStampImage` exists: a cache would refuse to
+  resize a box that was already in the document when it opened, and annotation
+  indexes shift underneath one anyway. The words come from `/Contents`, the size
+  from `FPDFTextObj_GetFontSize`, the face from `FPDFTextObj_GetFont` +
+  `FPDFFont_GetBaseFontName`, and the colour from `FPDFPageObj_GetFillColor`.
+  `TextBoxContent.TryParsePostScriptName` is written by generating all twelve
+  standard-14 names and comparing, so the two directions cannot drift.
+  **Fixed: erasing a signature could not be undone.** `CaptureAnnotation`
+  returned null for subtype 13, so the eraser raised no undo entry at all and
+  Ctrl+Z did nothing. It was easy to miss while stamps were rare; it would not
+  have been once text and pictures were stamps too. `AnnotationSpec` already
+  carried both pixels and words and `AddAnnotationFromSpec` already rebuilt both,
+  so the fix was to admit the subtype and fill whichever applies. The eraser's
+  *redo* was wrong too: undo re-adds by appending, so redo has to remove the last
+  annotation rather than the index the erase originally hit.
+  **Fixed: switching tabs stopped a view rendering, permanently.** `PdfViewer`
+  disposed its `RenderScheduler` on `Unloaded`, and a `TabView` unloads the
+  content of a tab you switch away from — which is not going away at all. The
+  render thread never came back, and nothing recreated it. It looked fine for a
+  while, which is what hid it: the tiles and thumbnails already rendered stayed
+  cached and were still drawn. The page only went white when something
+  invalidated them, and then stayed white for good. Two tabs, switch across and
+  back, press `Ctrl+R`: page and thumbnails both blank. The scheduler is now
+  recreated on `Loaded`, and `UpdateDesiredTiles` no longer answers a zero-area
+  viewport by asking for nothing (which is indistinguishable from being told to
+  render nothing, and equally permanent).
+  **Fixed: backspace did nothing in a form field, and nothing could be
+  selected.** Four separate causes behind one report, each confirmed by probe
+  before anything was changed:
+  - **Backspace** was sent through `FORM_OnKeyDown`, which **refuses it** and
+    returns false. PDFium's edit control handles Delete and the arrows in its key
+    handler but backspace in its *character* handler, so it has to go through
+    `FORM_OnChar` as character 8. Delete worked, which is exactly what made this
+    look like a dead key rather than a routing mistake.
+  - **Shift+arrow** passed no modifier, so PDFium moved the caret and selected
+    nothing. `FWL_EVENTFLAG_ShiftKey` is what turns one into the other.
+  - **Dragging** could not select, because a click was a button-down and a
+    button-up at the same point with nothing between. PDFium's edit control
+    starts a selection on the down and extends it on each *move*, so the viewer
+    now sends a real press, moves and release, with the pointer captured.
+  - **Ctrl+A** was not routed at all, and is another character-handler case:
+    `FORM_OnKeyDown(A, ctrl)` is refused, `FORM_OnChar(1, ctrl)` selects all.
+
+  Backspace is routed from `KeyDown` rather than from `CharacterReceived`
+  deliberately: KeyDown certainly fires for it, and `TryHandleFormCharacter`
+  drops control characters, so it cannot delete twice however the events arrive.
+  **Fixed: `Ctrl+T` was promised and not wired.** The text button's tooltip named
+  it, no accelerator existed, and neither the text nor the picture tool appeared
+  in the command palette or `ShortcutCatalog`.
+  334 → 366 tests.
+
+- **v0.6.0** (2026-08-09) — the release that stops the reader disabling itself.
+  **Fixed: rotating the page no longer turns half the app off.** Text selection,
+  annotation, links, form filling and the whole signature flow all early-returned
+  on `_rotation != 0` — fourteen guards across five files, with nothing on screen
+  to say why. The cause was two helpers: `ToPageLocal` undid the centring offset
+  and the zoom, which lands in the *drawn* box, while every consumer (`PageText`
+  char boxes, form field rects, annotation rects, the x/y `AddStamp` takes) is
+  measured in unrotated page points; `HighlightRect` had the inverse assumption.
+  On a quarter turn those two spaces have the page's axes swapped, so rather than
+  return a point on the wrong part of the page, each caller switched itself off.
+  New `PageRotationTransform` maps between them and the guards are gone. It is
+  managed arithmetic rather than `FPDF_DeviceToPage` on purpose — pointer moves
+  hit it per event, and v0.4.0 moved hit-testing off PDFium precisely to stop that
+  freezing the UI thread. Two paths needed more than the guard removed: form
+  field borders now go through the same rotation PDFium's own widget fill gets,
+  and a signature placed while rotated has its pixels turned the other way first
+  (`SignatureMatte.RotateQuarterTurns`) so it reads upright against the content
+  the user was looking at rather than against the file's axes.
+  `Rotate()` also stopped discarding the user's work: it cleared selection,
+  search hits, links and the page-text cache on every turn because none of it
+  could be placed once rotated. All four are in unrotated page coordinates and
+  therefore rotation-independent, so find a hit, rotate, and the hit is still
+  there. Tiles and previews are still dropped — those really are per-rotation,
+  and that invalidation is the v0.2 blank-page fix.
+  **Added: page extract.** `ExportPages` already returned a selection as PDF
+  bytes (it backs the page clipboard), so extract needed no engine work: a
+  thumbnail context-menu entry, a palette entry, and a save picker. Extracting
+  over the open document is refused rather than pulling the file out from under
+  the read handle.
+  **Added: resizing a placed signature**, with aspect-locked corner handles.
+  This was attempted, backed out, and then solved from the other end, which is
+  worth recording. Editing the appearance in place —
+  `FPDFPageObj_SetMatrix` plus `FPDFAnnot_UpdateObject` — is exact once and then
+  compounds: `UpdateObject` re-serializes the appearance while keeping the old
+  `/BBox`, PDFium maps that BBox onto the annotation rect, and so growing a stamp
+  and shrinking it back drew it at half the size asked for, with `GetMatrix`
+  reading back correct all the while. Clearing the appearance first to reset the
+  BBox destroys its objects. What broke the deadlock was disproving the premise
+  in the old roadmap note: PDFium *will* hand a stamp's pixels back, through
+  `FPDFImageObj_GetRenderedBitmap`, straight-alpha and intact after a save and
+  reopen. So `ResizeStamp` reads the pixels, removes the annotation and re-creates
+  it through `AddStamp`, which builds a fresh appearance every time and therefore
+  cannot accumulate. It also works on a signature that was already in the file,
+  which a session-side pixel cache never would have.
+  **Added: typed signatures**, the third input mode beside draw and import. No
+  font is bundled — Segoe Script, Segoe Print and Ink Free ship with Windows, and
+  bundling one would undo part of the size work below. `SignatureFonts` resolves
+  each style against the installed set and feeds the same answer to the preview
+  and the render, so they cannot disagree; when nothing resolves the pad disables
+  the field and says why instead of quietly producing something that looks typed.
+  Cropping uses DirectWrite's `DrawBounds` rather than the layout box, because a
+  script face overhangs its box on both sides.
+  **Removed 19 MB from the zip (88 → 69 MB).** The `Microsoft.WindowsAppSDK`
+  meta-package hard-depends on `.Widgets`, `.AI` and `.ML`, and `.ML` pulls in
+  `Microsoft.Windows.AI.MachineLearning`: `onnxruntime.dll` (20.7 MB) plus
+  `DirectML.dll` (17.8 MB) inside a PDF reader that runs no inference. There is no
+  opt-out property, so `Rune.App.csproj` now references the six sub-packages Rune
+  actually needs. Size was the smaller half of the reason: an OAuth component and
+  an ML runtime sitting in a package whose Store listing and `runFullTrust`
+  justification both say "no network connections, collects no data" is a fair
+  question, and "the meta-package put it there" is not much of an answer. See §7
+  before touching it again.
+  **Security:** PDFium 152.0.7961 → **153.0.7988**, a full Chrome milestone of PDF
+  fixes. `SECURITY.md` added, pointing exploitable bugs at private vulnerability
+  reporting and drawing the line between a PDFium parser bug (Chromium's tracker)
+  and Rune's own code.
+  **Added: "Report a problem…"** in the menu — version, Store or portable,
+  Windows build, and where the log is. `ErrorLog` had been writing to
+  `%LOCALAPPDATA%\Rune` from eleven call sites since v0.4.1 with nothing in the
+  app saying so, and with no telemetry by design that is the only route a crash
+  reaches anyone. Issue templates ask for the same details up front.
+  **Fixed: the file picker, and everything that reaches one.** A real v0.6.0
+  build logged three `COMException 0x80004005` in a row out of
+  `SignaturePad.ImportAsync`, all from `PickSingleFileAsync` itself. The import
+  code turned out to be byte-identical to v0.5.1, where the same path
+  demonstrably worked, so the fault was never in it — Windows 11 brokers these
+  pickers into a fresh `PickerHost.exe` per call and a failed activation looks
+  exactly like this. It never reproduced (§10 lists everything that was tried),
+  so the answer is resilience rather than a logic change. `FilePickerHost` now
+  owns every picker in the app: the owner window, one retry, both attempts
+  logged, and a result that tells picked from cancelled from failed. Four of the
+  five call sites — Open, Save As, Extract, Insert pages — previously ran a
+  picker inside `async void` reach with no `try` at all, which is the shape that
+  killed the process in v0.4.1. The signature import also stopped firing its
+  picker from `ContentDialog.Opened`: it picks first and builds the pad around
+  the answer, which removes the race, stops an empty pad flashing behind the
+  picker, and means cancelling leaves nothing to dismiss. And a picker that never
+  opened no longer reports "that image couldn't be read", which had sent the
+  person who hit it looking at their photo instead of at Windows.
+  **Added: colour and size for form-filling text**, the last roadmap item that
+  was not blocked by something external. The setting lives in the widget's `/DA`
+  string; `DefaultAppearance` reads and rewrites it while keeping the font
+  resource name the file already uses, because that name is a key into the
+  AcroForm `/DR` and inventing one renders the field in no font at all. Writing
+  the string was the easy half: PDFium caches a widget's appearance stream, so
+  the `/DA` read back perfectly while the page went on drawing the old one.
+  Evicting the page handle afterwards makes the next acquire re-run
+  `FORM_OnAfterLoadPage` and rebuild it. The tests count pixels rather than
+  reading the string back — including after a save and reopen — because that is
+  the only assertion that can tell those two apart.
+  **Also:** winget turned out to already work through the `msstore` source, so it
+  needed a README line and not a project; `MaxVersionTested` was two Windows
+  builds behind. 244 → 326 tests.
 - **v0.5.1** (2026-08-08) — signature import that actually works on a photo.
   **Added:** `SignatureMatte`, an adaptive local matte that keys the paper out
   of a photographed or scanned signature automatically — tiled 90th-percentile
@@ -664,22 +994,61 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
 
 ## 10. Known bugs
 
-None open. The three v0.4.1 bugs below, and the two zoom/blur bugs found while
-using v0.5.0 (see §9), were all fixed in v0.5.0; kept here with their fixes
-because each one's cause is worth remembering.
+**Two open: a combo box that will not drop its list, and a picker failure that is
+not Rune's to fix.** Everything else below is fixed, kept because each cause is
+worth remembering. The three v0.4.1 bugs are listed in
+full; the rest have their post-mortems in §9 — the two zoom/blur bugs and the
+invisible hover ghost (v0.5.x), in v0.6.0 the fourteen rotation guards,
+`Rotate()` discarding the user's find results, and a typed-signature preview
+that inherited the dialog's white foreground onto white paper, and in v0.7.0 the
+dead render thread after a tab switch, erasing a stamp leaving nothing to undo,
+and the eraser's redo removing the wrong annotation.
 
-1. ~~Navigation keys go dead after clicking a tab or the page-number box.~~
+**Worth repeating, because it hid a real bug for three releases:** the
+tab-switch one was invisible for as long as nothing invalidated a cache. The
+page kept drawing from tiles rendered before the switch, so everything looked
+normal until a rotate or a night-mode toggle, at which point it went white and
+stayed white. When something "sometimes" fails to redraw, suspect the render
+thread's *lifetime* before suspecting the render.
+
+0. **A combo box takes focus but its list never drops down.** Confirmed
+   pre-existing, not a regression from the v0.7.0 pointer rework: a build from
+   before it behaves identically. Clicking the drop button focuses the widget and
+   draws its focus ring, and no popup appears. Rune hosts no combo UI of its own
+   (`FormSetIndexSelected` exists in the engine with no caller), so the list is
+   PDFium's own, drawn by the form-fill layer. `FFI_SetTimer`/`FFI_KillTimer` are
+   deliberately NULL here (§7), which is the first thing to rule out. The value
+   itself is fine: it round-trips through save, and it can be typed into.
+   **Not investigated further** — it surfaced while verifying a different fix.
+
+1. **The file picker can fail to open, transiently.** `PickSingleFileAsync`
+   threw `COMException 0x80004005` three times in a row on a v0.6.0 build
+   (errors.log, 2026-08-09 21:18 local). The import code was byte-identical to
+   v0.5.1, where the same path demonstrably worked, so the fault was never in
+   it: Windows 11 brokers these pickers into a fresh `PickerHost.exe` per call,
+   and a failed activation surfaces exactly this way.
+   **Not reproducible.** Tried afterwards: Ctrl+O, Save As, the flyout import,
+   the pad's own Import button, five repeats in a row, and a deliberate race
+   against losing the foreground. All fine, every time.
+   **What was done about it:** `FilePickerHost` retries once and logs both
+   attempts, so a recurrence leaves evidence of whether the retry covered it;
+   the signature import no longer fires its picker from `ContentDialog.Opened`,
+   which was the one genuinely fragile thing on that path; and a picker failure
+   now says the picker failed rather than blaming the image. If it comes back,
+   the log will say which picker and whether the retry helped.
+
+2. ~~Navigation keys go dead after clicking a tab or the page-number box.~~
    **Fixed.** `PdfViewer` is now `IsTabStop = true` and takes focus on pointer
    press (it had to be, for form fields to receive keystrokes at all).
    `IsTextInputFocused()` additionally reports true while a PDF form field has
    focus, so arrows move the caret rather than scrolling the document.
-2. ~~Selected pages are nearly invisible in light theme.~~ **Fixed.** Cause was
+3. ~~Selected pages are nearly invisible in light theme.~~ **Fixed.** Cause was
    the thumbnail `Border`'s opaque background painting over the ListViewItem's
    selection tint. The current page now draws its own accent ring as a second
    Border overlay (`ThumbnailItem.RingThickness`), owing nothing to the
    container. Only the *thickness* is bound — the accent brush stays in XAML as
    a `{ThemeResource}`.
-3. ~~Night mode doesn't invert sidebar thumbnails.~~ **Fixed.** `DocumentView.ToBitmap`
+4. ~~Night mode doesn't invert sidebar thumbnails.~~ **Fixed.** `DocumentView.ToBitmap`
    inverts BGRA during the copy it already performs (~55k pixels, sub-ms), and
    `PdfViewer.NightModeChanged` re-renders realized containers. The homepage
    recent-document cards are deliberately **not** inverted: the start page isn't
@@ -689,37 +1058,31 @@ because each one's cause is worth remembering.
 
 ## 11. Roadmap (not yet built)
 
-- **Typed signatures** (a script font) — Draw and Import shipped; typing is the
-  least convincing of the three and is easy to add to `SignaturePad` later.
-- **Resize handles on a placed signature** — size is chosen before placement
-  (click = last-used width, drag = custom, wheel = scale the preview) and a
-  placed signature can be dragged to a new spot, but not resized. PDFium
-  translates a stamp's appearance to the rect without scaling it, so resizing
-  has to go through delete-and-re-create — which needs the pixels, and those are
-  only retained for a stamp Rune placed in this session. See
-  `PdfDocument.Stamps.cs` for the measurement.
 - **Form JavaScript** — needs a V8-enabled PDFium build (`bblanchon.PDFium.V8.*`,
   a one-line csproj swap for a much larger binary). Without it, auto-calculating
   fields accept typed values but never recalculate.
-- **Form filling, annotation and signing while rotated** — every interactive
-  path still early-returns when `_rotation != 0`, including the whole signature
-  flow (place, select, move). `PdfiumNative.DeviceToPage` now takes a
-  rotation argument, but the viewer's `ToPageLocal`/`HighlightRect` still assume
-  the unrotated view, and so do `PageText` and `AnnotationInfo`.
 - **Signature validation** — out of reach without a crypto stack. Rune reports
   only what the file claims plus byte-range coverage, and must never say "valid".
-- Page **extract** to a new file (reorder/delete/insert already shipped in v0.4)
+- **Text that wraps.** A text box keeps the breaks the user typed; it has no
+  width to wrap to. Giving it one means writing a line-breaker in the app whose
+  breaks match what PDFium draws, and the engine deliberately carries no font
+  metrics (it measures PDFium's own output instead). Doing it properly probably
+  means measuring candidate lines through the engine rather than guessing in the
+  shell. Until then, resizing text is aspect-locked, because with fixed breaks
+  the two axes have to move together.
+- **Sharper placed pictures.** An imported image is capped at 1024 px on its
+  longest edge, which is `TileMath.MaxSingleTilePx` — the ceiling the on-page
+  hover ghost lives under (§7). Raising it for the *file* while keeping a
+  downscaled buffer for the *ghost* is the obvious next step, at the cost of
+  several MB per photo, since a stamp is stored as a raw bitmap that PDFium
+  compresses on save.
 - More formats (ePub, CBZ — would need MuPDF; note AGPL implications)
 - **Code signing** — *solved for Store installs* (the Store re-signs). Still open
   for the portable zip: Azure Trusted Signing ~$10/mo. Deferred.
-- **winget** — the community `winget-pkgs` route needs a downloadable installer
-  URL, which Store-only binary distribution doesn't provide. The route that fits
-  is the **`msstore` source**, where a published Store app installs by product
-  ID: `winget install --id 9NH37840QDM6 --source msstore --exact`. Not every
-  listing is mapped, so **check whether it already resolves** before planning any
-  work — if it does, winget support is done and needs only a README line.
-- Smaller / size-optimized packages (zip ~88 MB, Store bundle ~106 MB — both
-  carry the self-contained .NET + WindowsAppSDK runtimes)
+- Smaller packages still. v0.6.0 took the zip from ~88 MB to **69 MB** by
+  dropping the Windows App SDK's AI, ML and Widgets payload (see §7); what
+  remains is the self-contained .NET + WinUI runtime, and trimming that is a
+  much harder problem — `PublishTrimmed` and XAML's reflection do not get along.
 
 ---
 
@@ -733,8 +1096,11 @@ because each one's cause is worth remembering.
   allowed, so a PR isn't strictly required — but recent work has gone through
   PRs (#2–#5) and that reads well on a public repo.
 - Verify features by **driving the real app** (screenshots), not just tests, for
-  anything with a runtime surface — then commit. This session, on-screen checks
-  caught three bugs that compiled and passed 118 tests.
+  anything with a runtime surface — then commit. On-screen checks caught three
+  bugs in v0.4.1 that compiled and passed 118 tests, and two more in v0.6.0 (a
+  preview drawn white-on-white, and `Rotate()` throwing away the user's find
+  results). **Read §13's harness notes before writing a driver** — two of those
+  traps cost an hour each and both look like app bugs rather than harness bugs.
 - **The Store is the promoted install path.** GitHub carries the portable zip
   only, shipped unsigned with the SAC/SmartScreen limitation documented honestly.
   Store builds are signed by Microsoft.
@@ -746,41 +1112,193 @@ because each one's cause is worth remembering.
 
 ---
 
-## 13. Current state (2026-08-08)
+## 13. Current state (2026-08-10)
 
-- Working branch `fix/v0.6.0` (a label — the release is versioned **0.5.1**)
-  holds the signature-import work plus the fixes listed in §9.
-- **`origin/main` is behind, and merging must happen BEFORE the Store
-  submission.** `main` still carries `UpdateService.cs` and a `PRIVACY.md` that
-  describes the portable build's GitHub API check, while `docs/store-listing.md`
-  tells Partner Center there is "no networking code in the application" — and
-  the privacy-policy URL submitted for certification points at `main`. The
-  pre-submission security pass (`eca53e4`) never landed there; PR #7 merged only
-  as far as `e712901`.
-- **Security pass (v0.5.0):** PDFium bumped 152.0.7934 → **152.0.7961**
-  (two builds of Chrome's PDF fixes); `UpdateService` deleted, so the app now has
-  no networking code at all; whole-page render size clamped against an `int`
-  overflow reachable from a hostile MediaBox via print; the Partner Center email
-  and local `C:\Users\…` paths removed from this file; `permissions: contents:
-  read` added to CI.
-- **244 tests passing**; x64 and ARM64 Release builds clean. CI now builds both
-  architectures — it was x64-only, so an ARM64 break could have reached the
-  Store unseen.
-- **GitHub releases: latest published is still v0.4.0**, two versions behind the
-  Store. Neither v0.4.1 nor v0.5.0 was ever tagged.
-- Microsoft Store: **live** at product `9NH37840QDM6`, currently **v0.5.0**.
-  The 0.5.1 bundle is **not yet built**; `artifacts/store/` still holds 0.4.1.
-- Store screenshots were re-shot against v0.5.0 (`3058f5e`), and `07-signature`
-  covers the import flow this release adds.
-- **README rebuilt** on the store-screenshot set: `01-reading-light` as a hero,
-  then a 2×2 grid of `02`, `03`, `04`, `07`. The Store CTA is now Microsoft's own
-  badge from `get.microsoft.com`, in a `<picture>` so it follows the reader's
-  GitHub theme, and `assets/rune.svg` finally appears on the page. The
-  release-version shields badge was dropped: it advertised v0.4.0 while the Store
-  shipped v0.5.0. Prose was rewritten to carry **no em dashes** and the 24-bullet
-  feature dump was regrouped under Reading / Markup / Signing / Forms / Pages.
-- `docs/screenshot-dark.png` / `screenshot-night.png` (the old README pair) were
-  **deleted**. They showed real document filenames in the tab strip and a v0.2-era
-  UI. The earlier decision to keep them stood only while nothing better was on the
-  page; the store set replaces them, so keeping stale unreferenced copies of a
-  filename leak had no upside.
+- Working branch **`feat/text-and-image`**. §9 has the release notes for both
+  versions on it.
+- **`origin/main` is at `f600288` (PR #10, the README refresh), which predates
+  v0.6.0 entirely.** Everything since — rotation, page extract, typed signatures,
+  signature resize, PDFium 153, the package trim, the picker rework, and all of
+  v0.7.0 — lives only on this branch. PR #11 in its history is the *text probe*,
+  not v0.6.0, and it is not on `origin/main` either. Local `main` is further
+  behind still, at PR #3.
+- **Nothing has been published.** No tag, no GitHub release, no Store
+  submission, for either version. Tags and GitHub Releases both stop at
+  **v0.4.0**; the Store is on **0.5.0**. Per §12 that all waits for the user.
+  When it does go out it goes as **one v0.7.0 release covering both versions**,
+  with the notes saying plainly that the intervening ones went out through the
+  Store or not at all.
+- **366 tests passing** (326 at v0.6.0); x64 and ARM64 Release both build clean,
+  and the Release test run is green, which is what CI checks on a PR.
+- **PDFium 153.0.7988**, unchanged this release.
+- **Version bumped to 0.7.0** in both `Rune.App.csproj` and
+  `Package.appxmanifest`.
+- **Release artifacts have NOT been rebuilt** for 0.7.0. The v0.6.0 zip and
+  bundle in `artifacts/` are stale by a version; §8 has the commands.
+- **Store screenshots are still the v0.6.0 set**, 10 of 10 at 1920×1080. The
+  text tool and a placed picture deserve one, and the set is full, so it would
+  have to replace one.
+
+### Still to do before submitting
+
+Neither of these can be done from the repo; both are the user's.
+
+1. **Check the live Store description in Partner Center.** `winget show --id
+   9NH37840QDM6 --source msstore` reads back a description with no
+   forms/signing/flatten bullets that does **not** open with the .NET / Windows
+   App SDK disclosure. The 30 July certification report ("Pass with required
+   fix", policy 10.2.4.1) requires that disclosure in the first two lines. The
+   corrected copy is in `docs/store-listing.md`; it may never have been pasted
+   in. This is a Partner Center UI check.
+2. **Publish, once the user says so.** Two versions are waiting, and the branch
+   is now on GitHub as a PR into `main` so the work is no longer one drive away
+   from gone. What is left after that merges: rebuild the portable zip and the
+   Store bundle for 0.7.0 (§8), tag **v0.7.0** only, `gh release create`, then
+   the bundle and the screenshots to Partner Center. **GitHub Releases is still
+   at v0.4.0** while the Store shipped 0.5.0: 0.4.1, 0.5.0, 0.5.1 and 0.6.0 were
+   never tagged, so the notes have to say plainly that the intervening versions
+   went out through the Store or not at all.
+
+`docs/store-listing.md` carries the v0.7.0 bullets (typing on a page, placing a
+picture, and picking either back up to move or resize it) on top of the v0.6.0
+ones. Its own prose still has em dashes in it, unlike the README; if it is going
+to be pasted into a public listing under the user's name, that is worth a pass
+first (§12).
+
+
+### Verified by driving the app
+
+Everything below was checked on screen, not just by test:
+
+- **Rotation, both directions.** A find hit lands exactly on its word and moves
+  to the correct corner as the view turns (top-left → top-right → bottom-right →
+  bottom-left), and hits survive the turn instead of being cleared. Drag-to-select
+  was then checked at all four rotations: the selection wash lands on the glyphs,
+  following the text line whichever way it runs.
+- **Typed signatures**, end to end: typed, saved to the reusable list, placed on
+  the page with transparency intact.
+- **Signature resize**, end to end: a stamp already in the file, selected with a
+  plain click, corner handles drawn, bottom-right handle dragged. 259×86 → 512×179
+  on screen, with the ink filling the new box rather than the frame growing around
+  an unchanged image.
+- **The trimmed package**, by launching it — including night mode, the sharpest
+  single check because it runs through Win2D's `InvertEffect`. Repeated against
+  the final `dotnet publish` output that became the v0.6.0 zip.
+- **Form filling while rotated**, the last path that had only test coverage.
+  `form.pdf` at r=1: clicking the text field focuses it, the typed glyphs land
+  inside it and read with the rotated content rather than the file's axes, and
+  the checkbox takes its tick. Rune's own field borders sit on PDFium's widgets
+  at the turn, so the two drawing paths agree.
+- **The three new Store screenshots**, which is what surfaced the harness trap
+  in item 4 below.
+- **All four picker paths**, before and after the rework: Ctrl+O, Save As, the
+  flyout import and the pad's own Import button all open and cancel cleanly, a
+  photographed signature imports with the paper keyed out, and `errors.log` stays
+  empty throughout.
+- **Form text appearance**, end to end: typed a value, set red at 20pt through
+  the right-click entry, watched the glyphs change on the page, then Ctrl+Z back
+  to black 12pt and Ctrl+Y forward again.
+
+Added for **v0.7.0**, all on `hello.pdf` unless noted:
+
+- **A PNG with real transparency**, placed: the disc lands round with the page
+  showing through its corners, not in a white box, and nothing is keyed out.
+- **A JPEG photograph**, placed **while the view was rotated a quarter turn**: it
+  reads upright against the content the user was looking at, its cream
+  background intact (proving the matte is not on this path), and the file stores
+  it turned the other way so the two cancel out.
+- **The hover ghost**, at 75% over the page with its dashed outline, following
+  the pointer before the click that places it.
+- **Select, move, resize** of a placed picture: plain click selects, four corner
+  handles draw, the bottom-right drag took it from 299 to ~410 px on screen with
+  the ink filling the new box and the circle still a circle. Ctrl+Z back and
+  Ctrl+Y forward.
+- **The text tool** end to end: `Ctrl+T` (the accelerator this release wired),
+  click on blank paper, the format bar appears over the page, typing shows in
+  place, Esc commits.
+- **Resizing a text box**, which is the new behaviour worth seeing: the corner
+  drag **re-rendered the words at a larger point size** rather than stretching
+  them, the selection frame followed the re-measured box, and undo/redo both
+  came back exactly.
+- **Erase and undo, all three kinds** (signature, picture, text). This is what
+  the `CaptureAnnotation` fix bought: before it, Ctrl+Z after erasing a stamp did
+  nothing at all.
+- **Save, then reopen in Rune and in Edge.** Both render the picture with its
+  alpha and the text as text. Edge additionally draws a small comment marker
+  beside the text box, which is Edge showing the annotation's `/Contents` alt
+  text (§7).
+- **Flatten, then find.** Searching the flattened document for a word that was
+  typed reports **1 of 1** and highlights it on the page. That is the whole
+  point of the Stage 0 probe, confirmed end to end rather than inferred.
+- **Night mode after a tab switch**, which is how the dead-render-thread fix was
+  confirmed: two tabs, switch across and back, `Ctrl+I`, and every tile and
+  thumbnail re-renders inverted. Before the fix they stayed as they were, and a
+  rotate left them white permanently.
+- **Form editing**, all four routes that were broken, on `form.pdf`: backspace
+  takes exactly one character off (not two, which is what a double-routed key
+  would do); Shift+Home draws a real selection highlight and typing replaces it;
+  dragging across the value selects the part dragged over; Ctrl+A selects the
+  lot. The checkbox still takes its tick through the split press and release,
+  which is the regression that rework could have caused.
+
+Nothing with a runtime surface is now unverified on screen.
+
+### Notes on the screenshot harness
+
+A DPI-aware `SendInput` driver lives in the session scratchpad. Seven traps have
+cost real time here and will again if it is rebuilt. The last three are from
+v0.7.0, and all three present as "the app is ignoring input" when the app is
+fine. **Capturing with `CopyFromScreen` over the window rect and clicking at
+`windowLeft + x` avoids trap 4 entirely**, which is why the driver now does that
+rather than `PrintWindow`.
+
+1. **The `INPUT` struct must be exactly 40 bytes on x64.** Any trailing padding
+   makes `SendInput` fail with `ERROR_INVALID_PARAMETER`, silently — the cursor
+   still moves because `SetCursorPos` is a separate call, so it looks like the
+   app is ignoring clicks.
+2. **Declare per-monitor DPI awareness before anything else.** Without it
+   `GetWindowRect` returns logical coordinates while `PrintWindow` renders
+   physical pixels, so on this 125% display every capture is cropped to the left
+   ~80% of the window. That cost an hour: it looks exactly like the header's
+   right-hand buttons having vanished, and every coordinate read off such a
+   capture is then wrong, which in turn looks like pointer input not reaching the
+   Win2D canvas. **It does reach it** — drags, clicks and right-clicks on the
+   page all work.
+3. **Bound pixel searches to the page.** The document background is dark in this
+   theme, so a naive "find the dark pixels" glyph search matches the app's own
+   chrome, and a page-bounded search still catches the gap between two pages.
+   Locating text by running a find and looking for the highlight colour is far
+   more robust than looking for dark pixels.
+4. **`PrintWindow` captures the WINDOW rect; clicks go to CLIENT coordinates,
+   and on a restored window the two differ by 9 px in x.** So a coordinate read
+   off a capture has to have that subtracted before it is clicked. Big targets
+   absorb the error and small ones do not, which is the worst possible failure
+   mode: the toolbar buttons, the flyout entries and the dialog fields all
+   worked, so it read as "clicking a placed signature does not select it" (an
+   app bug) rather than "the click is 9 px off" (a harness bug). Probe it with
+   `ClientToScreen(hwnd, {0,0})` against `GetWindowRect` instead of assuming
+   zero. Related: `Focus-Rune` maximizes, so calling it after sizing to
+   1920×1080 silently invalidates every coordinate measured at that size.
+5. **In PowerShell, `$input.mi.dwFlags = X` sets the field on a COPY.**
+   `MOUSEINPUT` is a value type, so reading it through the outer struct's
+   property hands back a copy that is then thrown away. `SendInput` succeeds — it
+   was handed a valid `INPUT` with no flags set, which is a legal no-op — and
+   every click does nothing while the cursor visibly moves. Build the inner
+   struct first and assign it whole. Also: PowerShell 5.1 has no `[ushort]`
+   accelerator; it is `[uint16]`, and a missing one throws at *runtime*, inside
+   the function, where it is easy to miss in a wall of output.
+6. **`SetCursorPos` does not inject an input event.** It moves the cursor and
+   posts `WM_MOUSEMOVE`, but WinUI 3 feeds `PointerMoved` from the input queue,
+   so the app never sees the move: hover previews and cursor changes simply do
+   not happen, while clicks still work because `SendInput`'s button event is real
+   and carries the current position. Move with
+   `MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE` instead. This is what made the
+   placement ghost look broken when it was not. **Declare both constants** —
+   PowerShell resolves a missing `[Native]::MOUSEEVENTF_MOVE` to `$null`, `$null
+   -bor $null` is 0, and the move silently becomes a no-op.
+7. **Press and release need a dwell between them.** Sent as one `SendInput`
+   batch they share a timestamp, and `Canvas_PointerPressed` opens with
+   `if (!...IsLeftButtonPressed) return;` — by the time the handler runs the
+   button is already up, so the press is dropped. Toolbar buttons still work,
+   which makes it read as "placing on the canvas does nothing". ~90 ms apart is
+   enough.

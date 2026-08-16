@@ -155,6 +155,19 @@ public sealed partial class PdfDocument
     // ---- Input ----
 
     /// <summary>
+    /// The modifier flags PDFium's form layer takes (<c>FWL_EVENTFLAG_*</c>).
+    /// They are its own values, not Windows', and they are what makes shift-arrow
+    /// select rather than merely move.
+    /// </summary>
+    public static class FormModifiers
+    {
+        public const int None = 0;
+        public const int Shift = 1 << 0;
+        public const int Control = 1 << 1;
+        public const int Alt = 1 << 2;
+    }
+
+    /// <summary>
     /// Presses and releases the left button at a page-local point. Returns true
     /// when PDFium consumed the click, i.e. it landed on a widget.
     /// </summary>
@@ -188,13 +201,58 @@ public sealed partial class PdfDocument
         }
     }
 
-    /// <summary>Sends one character to the focused field. Returns true when consumed.</summary>
-    public bool FormChar(int pageIndex, int charCode)
-        => WithFormPage(pageIndex, (form, page) => PdfiumNative.FormOnChar(form, page, charCode));
+    /// <summary>
+    /// Sends one character to the focused field. Returns true when consumed.
+    ///
+    /// This is also the route for **backspace** (character 8), which
+    /// <see cref="FormKeyDown"/> refuses: PDFium's edit control handles Delete
+    /// and the arrows in its key handler but backspace in its character handler,
+    /// so sending it as a virtual key returns false and changes nothing.
+    /// </summary>
+    /// <param name="modifier">
+    /// <see cref="FormModifiers"/> flags. Control-key combinations arrive here as
+    /// their control character (Ctrl+A is 1) rather than as a letter plus a flag.
+    /// </param>
+    public bool FormChar(int pageIndex, int charCode, int modifier = 0)
+        => WithFormPage(pageIndex, (form, page) => PdfiumNative.FormOnChar(form, page, charCode, modifier));
 
-    /// <summary>Sends a virtual key (backspace, arrows, delete) to the focused field.</summary>
-    public bool FormKeyDown(int pageIndex, int keyCode)
-        => WithFormPage(pageIndex, (form, page) => PdfiumNative.FormOnKeyDown(form, page, keyCode));
+    /// <summary>
+    /// Sends a virtual key (delete, arrows, home, end) to the focused field.
+    /// </summary>
+    /// <param name="modifier">
+    /// <see cref="FormModifiers"/> flags. Shift is what turns a caret move into a
+    /// selection, so passing 0 here makes the field unselectable from the
+    /// keyboard however correct the key code is.
+    /// </param>
+    public bool FormKeyDown(int pageIndex, int keyCode, int modifier = 0)
+        => WithFormPage(pageIndex, (form, page) => PdfiumNative.FormOnKeyDown(form, page, keyCode, modifier));
+
+    /// <summary>Presses the left button at a page-local point, without releasing it.</summary>
+    public bool FormPointerDown(int pageIndex, double localX, double localY, int modifier = 0)
+        => WithFormPointer(pageIndex, localX, localY,
+            (form, page, x, y) => PdfiumNative.FormOnLButtonDown(form, page, x, y, modifier));
+
+    /// <summary>
+    /// Moves the pointer over the page. With the button held this is what extends
+    /// a selection inside a text field; PDFium's edit control tracks the drag
+    /// here, so a press and release alone can never select anything.
+    /// </summary>
+    public bool FormPointerMove(int pageIndex, double localX, double localY, int modifier = 0)
+        => WithFormPointer(pageIndex, localX, localY,
+            (form, page, x, y) => PdfiumNative.FormOnMouseMove(form, page, x, y, modifier));
+
+    /// <summary>Releases the left button at a page-local point.</summary>
+    public bool FormPointerUp(int pageIndex, double localX, double localY, int modifier = 0)
+        => WithFormPointer(pageIndex, localX, localY,
+            (form, page, x, y) => PdfiumNative.FormOnLButtonUp(form, page, x, y, modifier));
+
+    private bool WithFormPointer(
+        int pageIndex, double localX, double localY, Func<IntPtr, IntPtr, double, double, bool> action)
+        => WithFormPage(pageIndex, (form, page) =>
+        {
+            var (px, py) = ToPageSpaceLocked(page, pageIndex, localX, localY);
+            return action(form, page, px, py);
+        });
 
     /// <summary>Selects an option by index in the focused combo/list box.</summary>
     public bool FormSetIndexSelected(int pageIndex, int index, bool selected)
@@ -348,6 +406,117 @@ public sealed partial class PdfDocument
     /// <summary>Current value of a named field, or null if there is no such field on the page.</summary>
     public string? GetFormFieldValue(int pageIndex, string name)
         => GetFormFields(pageIndex).FirstOrDefault(f => f.Name == name)?.Value;
+
+    // ---- Text appearance (/DA) ----
+
+    /// <summary>
+    /// The size and colour a named field types in, or null when it has no
+    /// <c>/DA</c> of its own to read.
+    /// </summary>
+    public FieldAppearance? GetFieldAppearance(int pageIndex, string name)
+        => WithFieldAnnot(pageIndex, name, annot =>
+            DefaultAppearance.TryRead(PdfiumNative.GetAnnotString(annot, DefaultAppearanceKey)));
+
+    /// <summary>
+    /// Rewrites a field's <c>/DA</c> so its typed text takes a new size and
+    /// colour, and makes PDFium repaint the widget with it.
+    ///
+    /// Writing the string is the easy half. PDFium builds a widget's appearance
+    /// stream when the page is set up for forms and caches it, so an edit made
+    /// straight into the dictionary is invisible until that happens again — the
+    /// value reads back perfectly while the page keeps drawing the old one. The
+    /// second half of this method is therefore the point of it: drop the page
+    /// handle so the next acquire re-runs <c>FORM_OnAfterLoadPage</c> and the
+    /// appearance is rebuilt from the <c>/DA</c> just written.
+    ///
+    /// Returns false when the field has no <c>/DA</c> carrying a <c>Tf</c>. That
+    /// is not a failure to report loudly: it means the field inherits its
+    /// appearance from the AcroForm default, and the font resource name needed to
+    /// write a valid replacement is not available here. Guessing one produces a
+    /// field that renders in nothing at all.
+    /// </summary>
+    public bool SetFieldAppearance(int pageIndex, string name, FieldAppearance appearance)
+    {
+        // The in-progress edit lives in the focused widget, and rebuilding the
+        // page underneath it would strand that. Commit first, as saving does.
+        FormKillFocus();
+
+        bool written = WithFieldAnnot(pageIndex, name, annot =>
+        {
+            string? updated = DefaultAppearance.TryWrite(
+                PdfiumNative.GetAnnotString(annot, DefaultAppearanceKey), appearance);
+            return updated is not null
+                && PdfiumNative.SetAnnotString(annot, DefaultAppearanceKey, updated);
+        });
+
+        if (!written)
+        {
+            return false;
+        }
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            EvictPageLocked(pageIndex);
+        }
+        IsDirty = true;
+        return true;
+    }
+
+    /// <summary>PDF's key for the default appearance string.</summary>
+    private const string DefaultAppearanceKey = "DA";
+
+    /// <summary>
+    /// Runs <paramref name="read"/> against the widget annotation of a named
+    /// field. Returns <c>default</c> when the page or the field is not there.
+    /// </summary>
+    private T? WithFieldAnnot<T>(int pageIndex, string name, Func<IntPtr, T?> read)
+    {
+        if (!HasFillableForm)
+        {
+            return default;
+        }
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = AcquirePageLocked(pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return default;
+            }
+            try
+            {
+                IntPtr form = _formEnv!.Handle;
+                int count = PdfiumNative.GetAnnotCount(page);
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr annot = PdfiumNative.GetAnnot(page, i);
+                    if (annot == IntPtr.Zero)
+                    {
+                        continue;
+                    }
+                    try
+                    {
+                        if (PdfiumNative.GetAnnotSubtype(annot) == PdfiumNative.AnnotWidget
+                            && PdfiumNative.GetFormFieldName(form, annot) == name)
+                        {
+                            return read(annot);
+                        }
+                    }
+                    finally
+                    {
+                        PdfiumNative.CloseAnnot(annot);
+                    }
+                }
+                return default;
+            }
+            finally
+            {
+                ReleasePageLocked(pageIndex);
+            }
+        }
+    }
 
     private FormFieldInfo? DescribeFieldLocked(IntPtr form, IntPtr page, int pageIndex, IntPtr annot)
     {

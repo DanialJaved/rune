@@ -135,4 +135,16 @@
         <Setter Property="Foreground" Value="{ThemeResource SystemFillColorCautionBrush}" />
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
+
+    <!-- The box you type into on the page. It sits over the document, so it has
+         to disappear into it: no fill, no rounded chrome, just a thin accent
+         edge saying where the text will land. Every colour the text itself takes
+         is set in code from the chosen ink, so nothing here fixes a foreground. -->
+    <Style x:Key="PageTextEditorStyle" TargetType="TextBox">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderBrush" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+        <Setter Property="CornerRadius" Value="0" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="SelectionHighlightColor" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+    </Style>
 </ResourceDictionary>

@@ -2,6 +2,24 @@ using Rune.PdfiumInterop;
 
 namespace Rune.Engine;
 
+/// <summary>
+/// What a stamp annotation is actually carrying. Rune writes two kinds into the
+/// same subtype: a picture (a signature or a placed image) and a text box. They
+/// are selected and moved identically and resized differently, which is the only
+/// reason the caller has to ask.
+/// </summary>
+public enum StampKind
+{
+    /// <summary>Not a stamp, or a stamp with nothing Rune knows how to edit.</summary>
+    None,
+
+    /// <summary>Pixels: a signature, or an image the user placed.</summary>
+    Image,
+
+    /// <summary>Real text, resizable by re-rendering it.</summary>
+    Text,
+}
+
 // Image stamps — the mechanism behind visible signatures.
 //
 // A stamp is a subtype-13 annotation carrying an image object, rather than a
@@ -172,6 +190,222 @@ public sealed partial class PdfDocument
 
         IsDirty = true;
         return previous;
+    }
+
+    /// <summary>
+    /// Resizes a placed stamp to a new page-local box, top-left origin.
+    ///
+    /// Implemented as remove-and-re-create rather than by editing the existing
+    /// annotation's geometry, and that is a deliberate choice with a measurement
+    /// behind it. Rewriting the appearance matrix (<c>FPDFPageObj_SetMatrix</c>
+    /// plus <c>FPDFAnnot_UpdateObject</c>) is exact the first time and then
+    /// compounds: <c>UpdateObject</c> re-serializes the appearance while keeping
+    /// the old <c>/BBox</c>, PDFium maps that BBox onto the annotation rect, and
+    /// so a resize back to the original size drew at half of it. Clearing the
+    /// appearance first to reset the BBox destroys its objects. Going through
+    /// <see cref="AddStamp"/> builds a fresh appearance every time, so there is
+    /// nothing to accumulate.
+    ///
+    /// What used to make this impossible was needing the pixels back.
+    /// <see cref="TryReadStampImage"/> gets them, including for a signature that
+    /// was already in the file, so this is not limited to stamps placed in the
+    /// current session.
+    ///
+    /// Returns the index the re-created stamp now sits at, plus a spec that
+    /// re-creates the original — the pair an undo entry needs. Null when there
+    /// is no readable stamp there, which the caller should treat as "this one
+    /// cannot be resized" rather than as a failure.
+    /// </summary>
+    public (int NewIndex, AnnotationSpec Before)? ResizeStamp(
+        int pageIndex, int annotIndex, double x, double y, double widthPt, double heightPt)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+        ArgumentOutOfRangeException.ThrowIfNegative(annotIndex);
+
+        if (widthPt <= 0 || heightPt <= 0)
+        {
+            return null;
+        }
+
+        // Everything needed to put the original back, captured before anything
+        // is destroyed.
+        if (TryReadStampImage(pageIndex, annotIndex) is not { } image)
+        {
+            return null;
+        }
+        if (GetAnnotations(pageIndex).ElementAtOrDefault(annotIndex) is not { } original
+            || original.Subtype != PdfiumNative.AnnotStamp)
+        {
+            return null;
+        }
+
+        var before = new AnnotationSpec(
+            pageIndex,
+            PdfiumNative.AnnotStamp,
+            Quads: [],
+            InkStrokes: [],
+            Rect: ToPageRect(pageIndex, original.X, original.Y, original.Width, original.Height),
+            Color: (0, 0, 0, 0),
+            BorderWidth: 0,
+            Contents: string.Empty,
+            Stamp: image);
+
+        if (!RemoveAnnotation(pageIndex, annotIndex))
+        {
+            return null;
+        }
+
+        if (AddStamp(pageIndex, x, y, widthPt, heightPt, image.Bgra, image.Width, image.Height) is null)
+        {
+            // Put the original back rather than leaving the page a stamp short.
+            AddAnnotationFromSpec(before);
+            return null;
+        }
+
+        // Re-creating appends, so the stamp is now last.
+        return (GetAnnotations(pageIndex).Count - 1, before);
+    }
+
+    /// <summary>Page-local top-left box → PDF page space, outside the PDFium lock.</summary>
+    private (float L, float B, float R, float T) ToPageRect(
+        int pageIndex, double x, double y, double widthPt, double heightPt)
+    {
+        lock (PdfiumLibrary.Lock)
+        {
+            IntPtr page = AcquirePageLocked(pageIndex);
+            try
+            {
+                return ToPageRectLocked(page, pageIndex, x, y, widthPt, heightPt);
+            }
+            finally
+            {
+                ReleasePageLocked(pageIndex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// What kind of stamp sits at that index, by looking at the objects hanging
+    /// off it rather than at anything Rune wrote down. A picture and a text box
+    /// are the same subtype, so this is how a caller tells them apart.
+    /// </summary>
+    public StampKind GetStampKind(int pageIndex, int annotIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = AcquirePageLocked(pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return StampKind.None;
+            }
+            try
+            {
+                IntPtr annot = PdfiumNative.GetAnnot(page, annotIndex);
+                if (annot == IntPtr.Zero)
+                {
+                    return StampKind.None;
+                }
+                try
+                {
+                    if (PdfiumNative.GetAnnotSubtype(annot) != PdfiumNative.AnnotStamp)
+                    {
+                        return StampKind.None;
+                    }
+
+                    // The first object that is one of the two decides it. Rune
+                    // never writes both onto one annotation.
+                    int count = PdfiumNative.GetAnnotObjectCount(annot);
+                    for (int i = 0; i < count; i++)
+                    {
+                        IntPtr obj = PdfiumNative.GetAnnotObject(annot, i);
+                        if (obj == IntPtr.Zero)
+                        {
+                            continue;
+                        }
+                        if (PdfiumNative.IsImageObject(obj))
+                        {
+                            return StampKind.Image;
+                        }
+                        if (PdfiumNative.IsTextObject(obj))
+                        {
+                            return StampKind.Text;
+                        }
+                    }
+                    return StampKind.None;
+                }
+                finally
+                {
+                    PdfiumNative.CloseAnnot(annot);
+                }
+            }
+            finally
+            {
+                ReleasePageLocked(pageIndex);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads a stamp's pixels back out of the file, or null if that annotation
+    /// has no image to read.
+    ///
+    /// Rune keeps a <see cref="StampImage"/> for stamps it placed this session,
+    /// but not for one that was already in the document when it opened. This
+    /// recovers those, which is what lets a signature be re-created — and
+    /// therefore resized — no matter where it came from.
+    /// </summary>
+    public StampImage? TryReadStampImage(int pageIndex, int annotIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(pageIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(pageIndex, PageCount);
+
+        lock (PdfiumLibrary.Lock)
+        {
+            ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+            IntPtr page = AcquirePageLocked(pageIndex);
+            if (page == IntPtr.Zero)
+            {
+                return null;
+            }
+            try
+            {
+                IntPtr annot = PdfiumNative.GetAnnot(page, annotIndex);
+                if (annot == IntPtr.Zero)
+                {
+                    return null;
+                }
+                try
+                {
+                    int count = PdfiumNative.GetAnnotObjectCount(annot);
+                    for (int i = 0; i < count; i++)
+                    {
+                        IntPtr obj = PdfiumNative.GetAnnotObject(annot, i);
+                        if (obj == IntPtr.Zero || !PdfiumNative.IsImageObject(obj))
+                        {
+                            continue;
+                        }
+                        if (PdfiumNative.TryReadImagePixels(_handle, page, obj) is { } pixels)
+                        {
+                            return new StampImage(pixels.Bgra, pixels.Width, pixels.Height);
+                        }
+                    }
+                    return null;
+                }
+                finally
+                {
+                    PdfiumNative.CloseAnnot(annot);
+                }
+            }
+            finally
+            {
+                ReleasePageLocked(pageIndex);
+            }
+        }
     }
 
     /// <summary>

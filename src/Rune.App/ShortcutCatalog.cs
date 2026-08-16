@@ -40,9 +40,12 @@ internal static class ShortcutCatalog
         ]),
         new("Annotate",
         [
-            new("Pen, highlighter, note, sign, eraser", "toolbar"),
+            new("Pen, highlighter, note, text, picture, sign, eraser", "toolbar"),
             new("Highlight selection", "Ctrl+H"),
             new("Draw with the pen", "Ctrl+E"),
+            new("Type on the page", "Ctrl+T"),
+            new("Move or resize what you placed", "click it"),
+            new("Delete what you placed", "Delete"),
             new("Put the tool away", "Esc"),
             new("Copy selected text", "Ctrl+C"),
         ]),

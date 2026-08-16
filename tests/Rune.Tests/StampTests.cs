@@ -34,6 +34,18 @@ public class StampTests
         return pixels;
     }
 
+    /// <summary>Mid-grey at half alpha — the fixture that can tell straight from premultiplied.</summary>
+    private static byte[] HalfAlphaGrey(int width, int height)
+    {
+        var pixels = new byte[width * height * 4];
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = pixels[i + 1] = pixels[i + 2] = 128;
+            pixels[i + 3] = 128;
+        }
+        return pixels;
+    }
+
     [Fact]
     public void AddStamp_CreatesAStampAnnotation()
     {
@@ -253,13 +265,223 @@ public class StampTests
         doc.MoveAnnotation(0, 0, 300, 620);
         var moved = doc.GetAnnotations(0)[0];
 
-        // A move must not silently rescale. It cannot: PDFium translates a
-        // stamp's appearance to the rect but never scales it to fit, so a rect
-        // of a different size would report one size and draw another. Resizing
-        // an already-placed stamp is therefore not offered — see
-        // ApplyAnnotationRectLocked for the measurement behind that.
+        // A move must not silently rescale. PDFium translates a stamp's
+        // appearance to the rect but never scales it to fit, so changing the
+        // rect size here would report one size and draw another. Resizing goes
+        // through ResizeStamp, which re-creates the stamp instead.
         Assert.Equal(placed.Width, moved.Width, precision: 1);
         Assert.Equal(placed.Height, moved.Height, precision: 1);
+    }
+
+    // ---- reading a stamp's pixels back ----
+
+    /// <summary>
+    /// The capability the whole resize feature rests on. Rune keeps a
+    /// StampImage for stamps it placed this session but not for one that was
+    /// already in the file, and re-creating a stamp needs the pixels. This
+    /// proves PDFium hands them back, alpha included, even after a round trip
+    /// through disk.
+    /// </summary>
+    [Fact]
+    public void TryReadStampImage_RecoversPixelsAndAlphaAfterAReopen()
+    {
+        string path = TempPdf();
+        try
+        {
+            using (var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf")))
+            {
+                doc.AddStamp(0, 60, 400, 200, 80, HalfAlphaGrey(100, 40), 100, 40);
+                doc.SaveAs(path);
+            }
+
+            using var reopened = PdfDocument.Open(path);
+            var image = reopened.TryReadStampImage(0, 0);
+
+            Assert.NotNull(image);
+            Assert.True(image!.Width > 0 && image.Height > 0);
+
+            // Straight alpha, not premultiplied and not composited over white:
+            // grey 128 at alpha 128 has to come back as grey 128 at alpha 128,
+            // or a re-created signature would stamp as a pale block.
+            int mid = ((image.Height / 2) * image.Width + image.Width / 2) * 4;
+            Assert.Equal(128, image.Bgra[mid], tolerance: 8);
+            Assert.Equal(128, image.Bgra[mid + 1], tolerance: 8);
+            Assert.Equal(128, image.Bgra[mid + 2], tolerance: 8);
+            Assert.Equal(128, image.Bgra[mid + 3], tolerance: 8);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TryReadStampImage_ReturnsNullForANonStamp()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        doc.AddNote(0, 100, 100, "not a stamp");
+
+        Assert.Null(doc.TryReadStampImage(0, 0));
+    }
+
+    // ---- resize ----
+
+    [Fact]
+    public void ResizeStamp_ScalesTheDrawnImageNotJustTheBox()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+
+        var result = doc.ResizeStamp(0, 0, 60, 400, 400, 160);
+        Assert.NotNull(result);
+
+        var after = doc.RenderPage(0, 1.0f);
+        // The whole new box has to be inked. If only the rect had grown, the
+        // image would still be 200x80 and the outer band would be blank.
+        Assert.True(DarkInside(after, 60, 400, 400, 160) > 50000,
+            "the image did not scale to the new box");
+        Assert.True(DarkInside(after, 280, 400, 180, 160) > 20000,
+            "the right of the new box is empty, so only the rect grew");
+    }
+
+    /// <summary>
+    /// The case that defeated the appearance-matrix approach. Editing the matrix
+    /// in place was exact once and then compounded, because the regenerated
+    /// appearance kept its old /BBox: growing then shrinking back landed at half
+    /// the requested size. Re-creating builds a fresh appearance each time, so
+    /// this has to hold for any number of resizes.
+    /// </summary>
+    [Fact]
+    public void ResizeStamp_RepeatedResizesDoNotCompound()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+
+        int index = 0;
+        foreach (var (w, h) in new[] { (400.0, 160.0), (200.0, 80.0), (300.0, 120.0), (200.0, 80.0) })
+        {
+            var step = doc.ResizeStamp(0, index, 60, 400, w, h);
+            Assert.NotNull(step);
+            index = step!.Value.NewIndex;
+
+            var annotation = doc.GetAnnotations(0)[index];
+            Assert.Equal(w, annotation.Width, precision: 1);
+            Assert.Equal(h, annotation.Height, precision: 1);
+
+            // And the ink actually fills it, which the reported size alone
+            // would not have caught.
+            Assert.True(DarkInside(doc.RenderPage(0, 1.0f), 60, 400, (int)w, (int)h) > w * h * 0.75,
+                $"after resizing to {w}x{h} the ink did not fill the box");
+        }
+    }
+
+    /// <summary>
+    /// The other thing re-creation buys: it works on a stamp Rune never placed,
+    /// because the pixels come out of the file rather than a session cache.
+    /// </summary>
+    [Fact]
+    public void ResizeStamp_WorksOnAStampAlreadyInTheFile()
+    {
+        string path = TempPdf();
+        try
+        {
+            using (var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf")))
+            {
+                doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+                doc.SaveAs(path);
+            }
+
+            using var reopened = PdfDocument.Open(path);
+            Assert.NotNull(reopened.ResizeStamp(0, 0, 60, 400, 360, 144));
+
+            Assert.True(DarkInside(reopened.RenderPage(0, 1.0f), 60, 400, 360, 144) > 40000,
+                "a stamp loaded from disk did not resize");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ResizeStamp_TheReturnedSpecRestoresTheOriginal()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+
+        // Exactly the pair an undo entry replays.
+        var result = doc.ResizeStamp(0, 0, 60, 400, 400, 160);
+        Assert.NotNull(result);
+        Assert.True(doc.RemoveAnnotation(0, result!.Value.NewIndex));
+        doc.AddAnnotationFromSpec(result.Value.Before);
+
+        var restored = Assert.Single(doc.GetAnnotations(0));
+        Assert.Equal(200, restored.Width, precision: 1);
+        Assert.Equal(80, restored.Height, precision: 1);
+
+        var pixels = doc.RenderPage(0, 1.0f);
+        Assert.True(DarkInside(pixels, 60, 400, 200, 80) > 12000, "undo lost the stamp");
+        // The band only the enlarged version covered must be clear again.
+        Assert.True(DarkInside(pixels, 280, 490, 160, 60) < 500,
+            "undo restored the box but left the image enlarged");
+    }
+
+    [Fact]
+    public void ResizeStamp_SurvivesASaveAndReopen()
+    {
+        string path = TempPdf();
+        try
+        {
+            using (var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf")))
+            {
+                doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+                doc.ResizeStamp(0, 0, 60, 400, 300, 120);
+                doc.SaveAs(path);
+            }
+
+            using var reopened = PdfDocument.Open(path);
+            var annotation = Assert.Single(reopened.GetAnnotations(0));
+            Assert.Equal(300, annotation.Width, precision: 1);
+            Assert.Equal(120, annotation.Height, precision: 1);
+            Assert.True(DarkInside(reopened.RenderPage(0, 1.0f), 60, 400, 300, 120) > 25000,
+                "the resized stamp did not survive the round trip");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>Transparency has to survive a resize, or a signature turns into a block.</summary>
+    [Fact]
+    public void ResizeStamp_KeepsTransparency()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        int textBefore = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
+
+        doc.AddStamp(0, 40, 30, 300, 70, FullyTransparent(150, 35), 150, 35);
+        doc.ResizeStamp(0, 0, 40, 30, 540, 120); // now covers all the page text
+
+        int textAfter = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
+        Assert.True(textAfter >= textBefore * 0.95,
+            $"the resized stamp painted over the text: {textBefore} -> {textAfter} dark pixels");
+    }
+
+    [Theory]
+    [InlineData(0, 100)]
+    [InlineData(100, 0)]
+    [InlineData(-40, 100)]
+    public void ResizeStamp_DegenerateSizeIsIgnored(double widthPt, double heightPt)
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        doc.AddStamp(0, 60, 400, 200, 80, SolidBlack(100, 40), 100, 40);
+
+        Assert.Null(doc.ResizeStamp(0, 0, 60, 400, widthPt, heightPt));
+
+        // And the original is still there, not half-removed.
+        var untouched = Assert.Single(doc.GetAnnotations(0));
+        Assert.Equal(200, untouched.Width, precision: 1);
+        Assert.Equal(80, untouched.Height, precision: 1);
     }
 
     [Fact]

@@ -7,12 +7,12 @@
 
   <!-- Identity is assigned by Partner Center and must match EXACTLY, or the
        upload is rejected. The Store re-signs the package, so Publisher here is
-       the Store publisher ID, not Rune's self-signed cert (that one is still
-       used for the portable MSIX published on GitHub Releases). -->
+       the Store publisher ID. Rune's old self-signed cert is gone with the
+       sideloaded MSIX it signed; GitHub Releases carry the portable zip only. -->
   <Identity
     Name="Danimite.RunePDFReader"
     Publisher="CN=513DE1BC-C862-44F8-AEAD-F60E359F4BBF"
-    Version="0.5.1.0" />
+    Version="0.7.0.0" />
 
   <Properties>
     <DisplayName>Rune PDF Reader</DisplayName>
@@ -21,7 +21,7 @@
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26200.0" />
   </Dependencies>
 
   <Resources>

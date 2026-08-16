@@ -458,8 +458,71 @@ public sealed partial class DocumentView : UserControl
     /// <summary>Raised when a page operation fails with a user-relevant message.</summary>
     public event EventHandler<string>? PageOpFailed;
 
+    /// <summary>
+    /// Raised when the user asks to extract the selection. The shell handles it
+    /// because the save picker needs the window handle.
+    /// </summary>
+    public event EventHandler? ExtractRequested;
+
     private List<int> SelectedPageIndices() =>
         [.. ThumbList.SelectedItems.OfType<ThumbnailItem>().Select(t => t.PageIndex).OrderBy(i => i)];
+
+    /// <summary>How many pages the thumbnail sidebar has selected, for the shell's menu state.</summary>
+    public int SelectedPageCount => ThumbList.SelectedItems.Count;
+
+    /// <summary>
+    /// The selected pages as a filename fragment: "pages 2-5" for a run,
+    /// "pages 1, 4, 9" for a scattered pick, capped so a 200-page selection
+    /// cannot produce a filename the filesystem rejects.
+    /// </summary>
+    public string SelectedPageRangeLabel()
+    {
+        var pages = SelectedPageIndices();
+        if (pages.Count == 0)
+        {
+            return "pages";
+        }
+        if (pages.Count == 1)
+        {
+            return $"page {pages[0] + 1}";
+        }
+        // Contiguous runs read far better as a range than as a list.
+        bool contiguous = pages[^1] - pages[0] == pages.Count - 1;
+        if (contiguous)
+        {
+            return $"pages {pages[0] + 1}-{pages[^1] + 1}";
+        }
+        var shown = pages.Take(6).Select(p => (p + 1).ToString());
+        return "pages " + string.Join(", ", shown) + (pages.Count > 6 ? $" +{pages.Count - 6}" : "");
+    }
+
+    /// <summary>
+    /// Writes the selected pages out as a new PDF, leaving this document
+    /// untouched. Reuses <c>ExportPages</c>, the same engine call that backs the
+    /// page clipboard, so extract is a save destination rather than new
+    /// machinery. Returns true when the file was written.
+    /// </summary>
+    public async Task<bool> ExtractSelectedPagesAsync(string path)
+    {
+        var pages = SelectedPageIndices();
+        if (pages.Count == 0 || _document is not { } document || _pageOpRunning)
+        {
+            return false;
+        }
+
+        try
+        {
+            var bytes = await Viewer.RunOnRenderThreadAsync(
+                PdfWorkPriority.Interactive, () => document.ExportPages(pages));
+            await File.WriteAllBytesAsync(path, bytes);
+            return true;
+        }
+        catch (Exception ex) when (ex is Rune.PdfiumInterop.PdfiumException or IOException or UnauthorizedAccessException)
+        {
+            PageOpFailed?.Invoke(this, $"Could not extract pages: {ex.Message}");
+            return false;
+        }
+    }
 
     /// <summary>
     /// Runs one page mutation on the render thread, then rebuilds every
@@ -791,8 +854,8 @@ public sealed partial class DocumentView : UserControl
             {
                 // Undo can move or remove the very annotation that is selected,
                 // and the selection frame is drawn from a cached rect — leaving
-                // it would strand an empty box where the signature used to be.
-                Viewer.ClearSignatureSelection();
+                // it would strand an empty box where the object used to be.
+                Viewer.ClearObjectSelection();
                 Viewer.InvalidatePage(edit.PageIndex);
             }
             PagesEdited?.Invoke(this, EventArgs.Empty);
@@ -993,6 +1056,8 @@ public sealed partial class DocumentView : UserControl
         menu.Items.Add(paste);
         AddMenuAction(menu, "Insert PDF here…", Symbol.Add, () => _ = PickAndInsertPdfAsync(insertAt));
         menu.Items.Add(new MenuFlyoutSeparator());
+        AddMenuAction(menu, $"Extract {pages} to a new file…", Symbol.Save,
+            () => ExtractRequested?.Invoke(this, EventArgs.Empty));
         AddMenuAction(menu, $"Delete {pages}", Symbol.Delete, () => _ = DeleteSelectedPagesAsync());
 
         menu.ShowAt(ThumbList, e.GetPosition(ThumbList));
@@ -1008,12 +1073,13 @@ public sealed partial class DocumentView : UserControl
 
     private async Task PickAndInsertPdfAsync(int atIndex)
     {
-        var picker = new Windows.Storage.Pickers.FileOpenPicker();
-        picker.FileTypeFilter.Add(".pdf");
-        WinRT.Interop.InitializeWithWindow.Initialize(picker,
-            WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!));
-        var file = await picker.PickSingleFileAsync();
-        if (file is not null)
+        var picked = await Rune.Services.FilePickerHost.PickOpenAsync(
+            WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!), ".pdf");
+        if (picked.Failed)
+        {
+            PageOpFailed?.Invoke(this, Rune.Services.FilePickerHost.FailureMessage);
+        }
+        else if (picked.File is { } file)
         {
             await InsertPdfFileAsync(file.Path, atIndex);
         }

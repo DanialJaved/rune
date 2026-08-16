@@ -524,6 +524,146 @@ public static class PdfiumNative
 
     public static void DestroyPageObject(IntPtr pageObject) => NativeMethods.FPDFPageObj_Destroy(pageObject);
 
+    /// <summary>An annotation's appearance objects.</summary>
+    public static int GetAnnotObjectCount(IntPtr annot) => NativeMethods.FPDFAnnot_GetObjectCount(annot);
+
+    public static IntPtr GetAnnotObject(IntPtr annot, int index) => NativeMethods.FPDFAnnot_GetObject(annot, index);
+
+    public static bool IsImageObject(IntPtr pageObject)
+        => NativeMethods.FPDFPageObj_GetType(pageObject) == NativeMethods.FPDF_PAGEOBJ_IMAGE;
+
+    public static bool IsTextObject(IntPtr pageObject)
+        => NativeMethods.FPDFPageObj_GetType(pageObject) == NativeMethods.FPDF_PAGEOBJ_TEXT;
+
+    /// <summary>The size a text run was created at, or null when it cannot be read.</summary>
+    public static float? GetTextObjectFontSize(IntPtr textObject)
+        => NativeMethods.FPDFTextObj_GetFontSize(textObject, out float size) != 0 ? size : null;
+
+    /// <summary>
+    /// A text run's /BaseFont name, e.g. "Helvetica-BoldOblique", or null.
+    ///
+    /// The returned font handle is the document's, not a loaned one, so it is
+    /// deliberately never closed here — closing it would free a font the page
+    /// still draws with.
+    /// </summary>
+    public static string? GetTextObjectFontName(IntPtr textObject)
+    {
+        IntPtr font = NativeMethods.FPDFTextObj_GetFont(textObject);
+        if (font == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        uint length = NativeMethods.FPDFFont_GetBaseFontName(font, null, 0);
+        if (length <= 1)
+        {
+            return null; // 0 is failure, 1 is the terminator alone
+        }
+
+        var buffer = new byte[length];
+        if (NativeMethods.FPDFFont_GetBaseFontName(font, buffer, length) != length)
+        {
+            return null;
+        }
+        // ASCII, and the length PDFium reports includes the NUL.
+        return System.Text.Encoding.ASCII.GetString(buffer, 0, (int)length - 1);
+    }
+
+    /// <summary>An object's fill colour, or null when it paints with none.</summary>
+    public static (byte R, byte G, byte B, byte A)? GetObjectFillColor(IntPtr pageObject)
+        => NativeMethods.FPDFPageObj_GetFillColor(pageObject, out uint r, out uint g, out uint b, out uint a) != 0
+            ? ((byte)r, (byte)g, (byte)b, (byte)a)
+            : null;
+
+    /// <summary>
+    /// Reads an image object's pixels back as straight BGRA at its native size.
+    ///
+    /// Tries the rendered bitmap first: a signature's transparency lives in an
+    /// /SMask, and the plain decoded bitmap can come back as opaque BGR with the
+    /// mask dropped, which would stamp a white block. Falls back to the decoded
+    /// bitmap when the rendered one is unavailable.
+    ///
+    /// Returns null when there is nothing readable, which callers must treat as
+    /// "cannot do this to that stamp" rather than as an error.
+    /// </summary>
+    public static (byte[] Bgra, int Width, int Height)? TryReadImagePixels(
+        IntPtr document, IntPtr page, IntPtr imageObject)
+    {
+        IntPtr bitmap = NativeMethods.FPDFImageObj_GetRenderedBitmap(document, page, imageObject);
+        if (bitmap == IntPtr.Zero)
+        {
+            bitmap = NativeMethods.FPDFImageObj_GetBitmap(imageObject);
+        }
+        if (bitmap == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            int width = NativeMethods.FPDFBitmap_GetWidth(bitmap);
+            int height = NativeMethods.FPDFBitmap_GetHeight(bitmap);
+            int stride = NativeMethods.FPDFBitmap_GetStride(bitmap);
+            int format = NativeMethods.FPDFBitmap_GetFormat(bitmap);
+            IntPtr buffer = NativeMethods.FPDFBitmap_GetBuffer(bitmap);
+
+            if (width <= 0 || height <= 0 || buffer == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            var bgra = new byte[width * height * 4];
+            // Copied straight through, NOT un-premultiplied. PDFium's rendered
+            // bitmap already holds straight alpha here: a half-alpha grey placed
+            // as 128/128 reads back as 128 with alpha 128, and dividing by alpha
+            // blew it out to white.
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int dst = (y * width + x) * 4;
+                    switch (format)
+                    {
+                        case 4: // BGRA
+                        {
+                            int src = y * stride + x * 4;
+                            bgra[dst] = Marshal.ReadByte(buffer, src);
+                            bgra[dst + 1] = Marshal.ReadByte(buffer, src + 1);
+                            bgra[dst + 2] = Marshal.ReadByte(buffer, src + 2);
+                            bgra[dst + 3] = Marshal.ReadByte(buffer, src + 3);
+                            break;
+                        }
+                        case 2: // BGR
+                        case 3: // BGRx
+                        {
+                            int pixel = format == 2 ? 3 : 4;
+                            int src = y * stride + x * pixel;
+                            bgra[dst] = Marshal.ReadByte(buffer, src);
+                            bgra[dst + 1] = Marshal.ReadByte(buffer, src + 1);
+                            bgra[dst + 2] = Marshal.ReadByte(buffer, src + 2);
+                            bgra[dst + 3] = 255;
+                            break;
+                        }
+                        case 1: // Gray
+                        {
+                            byte v = Marshal.ReadByte(buffer, y * stride + x);
+                            bgra[dst] = bgra[dst + 1] = bgra[dst + 2] = v;
+                            bgra[dst + 3] = 255;
+                            break;
+                        }
+                        default:
+                            return null;
+                    }
+                }
+            }
+            return (bgra, width, height);
+        }
+        finally
+        {
+            NativeMethods.FPDFBitmap_Destroy(bitmap);
+        }
+    }
+
     public static void TransformPageObject(IntPtr pageObject, double a, double b, double c, double d, double e, double f)
         => NativeMethods.FPDFPageObj_Transform(pageObject, a, b, c, d, e, f);
 
@@ -534,6 +674,38 @@ public static class PdfiumNative
 
     public static bool AppendAnnotObject(IntPtr annot, IntPtr pageObject)
         => NativeMethods.FPDFAnnot_AppendObject(annot, pageObject) != 0;
+
+    // ---- Text objects ----
+
+    /// <summary>
+    /// Loads one of the standard 14 fonts by PostScript name. Returns
+    /// <see cref="IntPtr.Zero"/> if PDFium does not know the name, which is the
+    /// only failure mode worth checking: these fonts are built in, so there is
+    /// no file to be missing.
+    /// </summary>
+    public static IntPtr LoadStandardFont(IntPtr document, string postScriptName)
+        => NativeMethods.FPDFText_LoadStandardFont(document, postScriptName);
+
+    public static void CloseFont(IntPtr font) => NativeMethods.FPDFFont_Close(font);
+
+    public static IntPtr NewTextObject(IntPtr document, IntPtr font, float fontSize)
+        => NativeMethods.FPDFPageObj_CreateTextObj(document, font, fontSize);
+
+    public static bool SetTextObjectText(IntPtr textObject, string text)
+        => NativeMethods.FPDFText_SetText(textObject, text) != 0;
+
+    public static bool SetObjectFillColor(IntPtr pageObject, byte r, byte g, byte b, byte a)
+        => NativeMethods.FPDFPageObj_SetFillColor(pageObject, r, g, b, a) != 0;
+
+    /// <summary>
+    /// The extent PDFium will draw this object at, in page space. Returns null
+    /// when it cannot say, which for a text object means there is nothing to
+    /// measure.
+    /// </summary>
+    public static (float L, float B, float R, float T)? GetObjectBounds(IntPtr pageObject)
+        => NativeMethods.FPDFPageObj_GetBounds(pageObject, out float l, out float b, out float r, out float t) != 0
+            ? (l, b, r, t)
+            : null;
 
     /// <summary>
     /// Points an image object at BGRA pixels.
