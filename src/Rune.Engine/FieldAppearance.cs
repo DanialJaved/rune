@@ -3,11 +3,20 @@ using System.Globalization;
 namespace Rune.Engine;
 
 /// <summary>
-/// The two things about a form field's typed text that Rune lets you change:
-/// how big it is and what colour it is.
+/// What Rune lets you change about a form field's typed text: how big it is,
+/// what colour it is, and — where the file makes it possible — whether it is
+/// bold or italic.
 /// </summary>
 /// <param name="FontSize">In points. Zero is PDF's own "fit the text to the box".</param>
-public readonly record struct FieldAppearance(double FontSize, byte R, byte G, byte B)
+/// <param name="Bold">
+/// Nullable, and null means "leave it alone". A <c>/DA</c> names a font resource
+/// rather than a weight, so whether a field is currently bold is only knowable
+/// for the handful of resource names whose spelling says so — see
+/// <see cref="DefaultAppearance"/>. Null keeps a read honest about not knowing,
+/// and keeps a write from asserting something it was not asked to.
+/// </param>
+public readonly record struct FieldAppearance(
+    double FontSize, byte R, byte G, byte B, bool? Bold = null, bool? Italic = null)
 {
     /// <summary>PDF's meaning for a size of zero: size the text to fill its box.</summary>
     public bool IsAutoSize => FontSize <= 0;
@@ -32,6 +41,61 @@ public readonly record struct FieldAppearance(double FontSize, byte R, byte G, b
 /// </summary>
 public static class DefaultAppearance
 {
+    /// <summary>
+    /// The Acrobat font resource names, in <c>{regular, bold, italic,
+    /// bold-italic}</c> order, for the three families a <c>/DR</c> conventionally
+    /// carries.
+    ///
+    /// These four-letter names are a convention rather than a rule, and the
+    /// entries a given file actually has are whatever its author's tool wrote —
+    /// so naming one of them is a GUESS, and a resource that is not in the
+    /// <c>/DR</c> gives a field that renders in no font at all. PDFium exposes no
+    /// way to read the <c>/DR</c> and check, which is why
+    /// <see cref="PdfDocument.SetFieldAppearance"/> proves the guess by looking
+    /// at the pixels afterwards instead of trusting this table.
+    /// </summary>
+    private static readonly string[][] Families =
+    [
+        ["Helv", "HeBo", "HeOb", "HeBO"],
+        ["TiRo", "TiBo", "TiIt", "TiBI"],
+        ["Cour", "CoBo", "CoOb", "CoBO"],
+    ];
+
+    /// <summary>
+    /// The sibling of <paramref name="resource"/> at a given weight and slope,
+    /// or null when the name is not one this knows — a file naming its font
+    /// <c>/F1</c> says nothing about what <c>/F2</c> would be.
+    /// </summary>
+    internal static string? Sibling(string resource, bool bold, bool italic)
+    {
+        int wanted = (bold ? 1 : 0) | (italic ? 2 : 0);
+        foreach (string[] family in Families)
+        {
+            if (Array.IndexOf(family, resource) >= 0)
+            {
+                return family[wanted];
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// What a resource name says about its own weight and slope, or null when it
+    /// is not a name this knows.
+    /// </summary>
+    internal static (bool Bold, bool Italic)? ReadFace(string resource)
+    {
+        foreach (string[] family in Families)
+        {
+            int i = Array.IndexOf(family, resource);
+            if (i >= 0)
+            {
+                return ((i & 1) != 0, (i & 2) != 0);
+            }
+        }
+        return null;
+    }
+
     /// <summary>How many operands each colour operator takes.</summary>
     private static int ColourOperands(string op) => op switch
     {
@@ -63,16 +127,32 @@ public static class DefaultAppearance
         }
 
         var (r, g, b) = ReadColour(tokens);
-        return new FieldAppearance(size, r, g, b);
+
+        // The resource name sits two tokens before Tf and starts with a slash.
+        // Its spelling is the only evidence there is about weight and slope, and
+        // for a name outside the known families there is none — hence null
+        // rather than false, which would claim the field is not bold.
+        var face = tf >= 2 && tokens[tf - 2].StartsWith('/')
+            ? ReadFace(tokens[tf - 2][1..])
+            : null;
+
+        return new FieldAppearance(size, r, g, b, face?.Bold, face?.Italic);
     }
 
     /// <summary>
-    /// Returns <paramref name="da"/> with the text size and colour replaced, or
-    /// null when it has no <c>Tf</c> to anchor the rewrite to.
+    /// Returns <paramref name="da"/> with the text size, colour and — when asked
+    /// for and possible — face replaced, or null when it has no <c>Tf</c> to
+    /// anchor the rewrite to.
     ///
     /// Any existing colour operator is dropped along with its operands and a
     /// single <c>rg</c> written at the end, which is where a <c>/DA</c>'s colour
     /// conventionally sits and is legal wherever it appears.
+    ///
+    /// The font resource name changes only when <see cref="FieldAppearance.Bold"/>
+    /// or <see cref="FieldAppearance.Italic"/> says to AND the current name is
+    /// one of the conventional ones. Anything else keeps the name the file
+    /// already uses, because inventing one produces a field that renders in no
+    /// font at all.
     /// </summary>
     public static string? TryWrite(string? da, FieldAppearance wanted)
     {
@@ -112,6 +192,16 @@ public static class DefaultAppearance
             return null;
         }
         kept[tf - 1] = Number(wanted.FontSize);
+
+        // Face, when it was asked for and the name is one that can carry it.
+        if ((wanted.Bold is not null || wanted.Italic is not null)
+            && tf >= 2 && kept[tf - 2].StartsWith('/')
+            && ReadFace(kept[tf - 2][1..]) is { } current
+            && Sibling(kept[tf - 2][1..], wanted.Bold ?? current.Bold, wanted.Italic ?? current.Italic)
+               is { } sibling)
+        {
+            kept[tf - 2] = $"/{sibling}";
+        }
 
         kept.Add(Number(wanted.R / 255.0));
         kept.Add(Number(wanted.G / 255.0));

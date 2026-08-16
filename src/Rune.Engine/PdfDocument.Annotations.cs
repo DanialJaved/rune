@@ -556,6 +556,10 @@ public sealed partial class PdfDocument
                     if (spec.Text is { } text)
                     {
                         AttachTextLocked(annot, text, rl, rt);
+                        // Underline, alignment and box width live only in Rune's
+                        // own key, so an undo that skipped it would put the words
+                        // back with their formatting quietly dropped.
+                        WriteTextStyleLocked(annot, text);
                     }
 
                     PdfiumNative.SetAnnotColor(annot, spec.Color.R, spec.Color.G, spec.Color.B, spec.Color.A);

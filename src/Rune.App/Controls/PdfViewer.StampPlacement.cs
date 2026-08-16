@@ -19,6 +19,10 @@ namespace Rune.Controls;
 // several pages) quick, while press-drag-release draws the box explicitly when
 // the space is an odd size. Both keep the aspect ratio — a stretched signature
 // looks wrong immediately, and so does a stretched photograph.
+//
+// Ctrl+wheel resizes what is armed; the plain wheel is left alone to scroll,
+// because you almost always have to scroll to the spot before you can drop
+// anything on it.
 public sealed partial class PdfViewer
 {
     private byte[]? _pendingBgra;
@@ -134,8 +138,9 @@ public sealed partial class PdfViewer
 
     /// <summary>
     /// Scales the pending picture before it is placed. Returns true when the
-    /// wheel was consumed, which is what stops the page scrolling underneath a
-    /// resize gesture.
+    /// wheel was consumed, which is what stops the page ZOOMING underneath a
+    /// resize gesture — the caller only offers this the modifier-held wheel, so
+    /// a plain wheel scrolls the page whether or not a picture is armed.
     /// </summary>
     public bool TryResizePendingStamp(int wheelDelta)
     {
@@ -155,7 +160,13 @@ public sealed partial class PdfViewer
 
     // ---- gesture ----
 
-    private void BeginStampPlacement(Point docPoint, Pointer pointer)
+    /// <summary>
+    /// True while the placement in flight was begun by a finger, which decides
+    /// how far it has to travel before it counts as a drag rather than a tap.
+    /// </summary>
+    private bool _placementFromTouch;
+
+    private void BeginStampPlacement(Point docPoint, Pointer pointer, bool touch)
     {
         if (_layout is null || _document is null || !HasPendingStamp)
         {
@@ -165,7 +176,14 @@ public sealed partial class PdfViewer
         _placementStart = ClampToPage(_placementPage, docPoint);
         _placementEnd = _placementStart;
         _placingStamp = true;
-        Canvas.CapturePointer(pointer);
+        _placementFromTouch = touch;
+        BeginExclusiveGesture(pointer);
+
+        // Draw the ghost from the moment of contact. A mouse has already been
+        // previewing it on hover for as long as it took to choose the spot; a
+        // finger has no hover, so without this the first thing the user sees of
+        // the picture is it landing.
+        Canvas.Invalidate();
     }
 
     private void UpdateStampPlacement(Point docPoint)
@@ -185,8 +203,10 @@ public sealed partial class PdfViewer
         double dragX = Math.Abs(_placementEnd.X - _placementStart.X);
 
         // A click (or a negligible drag) places at the remembered size, anchored
-        // at the press point.
-        if (dragX < 8)
+        // at the press point. A finger never lands as still as a mouse click, so
+        // 8 px of jitter used to read as a deliberate drag and size the picture
+        // at whatever the wobble happened to be.
+        if (dragX < TouchMetrics.PlacementDragThreshold(_placementFromTouch))
         {
             double w = PendingWidthPt * _zoom;
             return new Rect(_placementStart.X, _placementStart.Y, w, w * aspect);

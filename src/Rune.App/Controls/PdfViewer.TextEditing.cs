@@ -146,6 +146,24 @@ public sealed partial class PdfViewer
             : Microsoft.UI.Text.FontWeights.Normal;
         TextEditor.FontStyle = s.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal;
 
+        // Underline is the one part of the style the editor cannot preview.
+        // WinUI's TextBox has no TextDecorations — only RichEditBox does — and
+        // drawing rules underneath by hand would need the per-line metrics the
+        // control does not expose, so they would drift from the words they are
+        // meant to sit under. The format bar's U shows the state instead, and
+        // the rule appears the moment the box commits.
+
+        // A new box has no width, so there is no slack for the alignment to
+        // move the line within — until there are two lines, and then the short
+        // one moves against the long one, exactly as it will on the page.
+        TextEditor.TextAlignment = s.Align switch
+        {
+            TextAlign.Center => TextAlignment.Center,
+            TextAlign.Right => TextAlignment.Right,
+            TextAlign.Justify => TextAlignment.Justify,
+            _ => TextAlignment.Left,
+        };
+
         _editorInk.Color = Color.FromArgb(255, s.R, s.G, s.B);
         TextEditor.Foreground = _editorInk;
     }
@@ -294,10 +312,18 @@ public sealed record TextBoxStyle(
     byte G,
     byte B,
     bool Bold,
-    bool Italic)
+    bool Italic,
+    bool Underline = false,
+    TextAlign Align = TextAlign.Left)
 {
-    public static TextBoxStyle Default => new(PdfStandardFont.Helvetica, 14, 0, 0, 0, false, false);
+    public static TextBoxStyle Default =>
+        new(PdfStandardFont.Helvetica, 14, 0, 0, 0, false, false);
 
+    /// <summary>
+    /// A new box has no width: it grows with what is typed, and only a corner
+    /// drag gives it one. So the style carries no width either — it is a
+    /// property of a box that exists, not of the next one to be made.
+    /// </summary>
     public TextBoxContent ToContent(string text) =>
-        new(text, Font, FontSize, R, G, B, Bold, Italic);
+        new(text, Font, FontSize, R, G, B, Bold, Italic, Underline, Align);
 }

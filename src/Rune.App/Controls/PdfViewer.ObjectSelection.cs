@@ -17,10 +17,15 @@ namespace Rune.Controls;
 //
 // The two kinds select, move and delete identically. They differ in one place
 // only, and it is the interesting one: a picture is resized by scaling its
-// pixels, while text is resized by RE-RENDERING it at a new point size. That is
-// the whole reason for keeping text as text rather than as a picture of text.
-// Both keep the aspect ratio, since Rune does no line wrapping: the words break
-// where the user broke them, so width and height have to move together.
+// pixels, while a text box is resized by RE-FLOWING its words into the new
+// width at the same point size. That is the whole reason for keeping text as
+// text rather than as a picture of text.
+//
+// Which means only a picture is aspect-locked. Stretching a photograph looks
+// wrong immediately, so its corner drag moves width and height together; a text
+// box has no aspect to keep, because its height is not a thing anyone chooses —
+// it is however tall the words come out once they have wrapped. So the drag
+// sets the width and the height is read back from the document afterwards.
 public sealed partial class PdfViewer
 {
     /// <summary>
@@ -33,6 +38,15 @@ public sealed partial class PdfViewer
     private Point _stampDragStart;
     private Point _stampDragOffset;
 
+    /// <summary>
+    /// Where the object sat before a move or a resize started. Both previews
+    /// mutate <c>_selected</c> live, so a gesture the system cancels — which on
+    /// touch is routine — has to have something to put back, or the selection
+    /// frame is left claiming a size and position the document never took.
+    /// </summary>
+    private Rect _dragBefore;
+    private Rect _resizeBefore;
+
     // ---- resize ----
 
     /// <summary>Which corner is being dragged (0 TL, 1 TR, 2 BR, 3 BL), or -1.</summary>
@@ -44,8 +58,12 @@ public sealed partial class PdfViewer
     /// <summary>Width ÷ height at the moment the resize started, so the drag cannot distort it.</summary>
     private double _resizeAspect = 1;
 
-    /// <summary>Handle size in DIPs. Big enough to grab, small enough not to swamp a short signature.</summary>
-    private const double HandleSizeDip = 10;
+    /// <summary>
+    /// Handle size in DIPs, as DRAWN. Big enough to grab with a mouse, small
+    /// enough not to swamp a short signature. What a finger may grab it from is
+    /// a separate and much larger number — see <see cref="TouchMetrics"/>.
+    /// </summary>
+    private const double HandleSizeDip = TouchMetrics.HandleDrawDip;
 
     /// <summary>No dimension below this, in page points — an object dragged to nothing cannot be grabbed again.</summary>
     private const double MinStampPt = 12;
@@ -57,6 +75,39 @@ public sealed partial class PdfViewer
 
     /// <summary>FPDF_ANNOT_SUBTYPE_STAMP.</summary>
     private const int StampSubtype = 13;
+
+    /// <summary>
+    /// Abandons a corner drag and puts the frame back where the document still
+    /// has it. Nothing was written, so there is nothing to undo.
+    /// </summary>
+    private void CancelStampResize()
+    {
+        if (!IsResizingStamp)
+        {
+            return;
+        }
+        _resizeCorner = -1;
+        if (_selected is { } selected)
+        {
+            _selected = (selected.Page, selected.Index, _resizeBefore, selected.Kind);
+            Canvas.Invalidate();
+        }
+    }
+
+    /// <summary>Abandons a move, same as above.</summary>
+    private void CancelStampDrag()
+    {
+        if (!_draggingStamp)
+        {
+            return;
+        }
+        _draggingStamp = false;
+        if (_selected is { } selected)
+        {
+            _selected = (selected.Page, selected.Index, _dragBefore, selected.Kind);
+            Canvas.Invalidate();
+        }
+    }
 
     /// <summary>Drops the selection. Returns true when there was one, so Esc can be consumed.</summary>
     public bool ClearObjectSelection()
@@ -83,7 +134,7 @@ public sealed partial class PdfViewer
     /// a press actually inside an object's rect is taken, so ordinary text
     /// selection everywhere else on the page is untouched.
     /// </summary>
-    private bool TryHandleStampPress(Point docPoint, Pointer pointer)
+    private bool TryHandleStampPress(Point docPoint, Pointer pointer, bool touch)
     {
         if (_layout is null || _document is null)
         {
@@ -100,11 +151,12 @@ public sealed partial class PdfViewer
             // Handles are checked before the body: they overlap the corners, and
             // a press there means resize, not move.
             int corner = page == selected.Page
-                ? HitTestStampHandle(selected.Local, local)
+                ? HitTestStampHandle(selected.Local, local, touch)
                 : -1;
             if (corner >= 0)
             {
                 _resizeCorner = corner;
+                _resizeBefore = selected.Local;
                 _resizeAspect = selected.Local.Width / Math.Max(1e-6, selected.Local.Height);
                 // The corner diagonally opposite is what stays still.
                 _resizeAnchor = corner switch
@@ -114,21 +166,28 @@ public sealed partial class PdfViewer
                     2 => new Point(selected.Local.X, selected.Local.Y),
                     _ => new Point(selected.Local.Right, selected.Local.Y),
                 };
-                Canvas.CapturePointer(pointer);
+                BeginExclusiveGesture(pointer);
                 return true;
             }
 
-            if (page == selected.Page && selected.Local.Contains(new Point(local.X, local.Y)))
+            // The body is widened for a finger the same way the handles are, so
+            // grabbing a thin signature to move it does not need mouse aim.
+            double slop = TouchSlopPt(touch);
+            var body = new Rect(
+                selected.Local.X - slop, selected.Local.Y - slop,
+                selected.Local.Width + (slop * 2), selected.Local.Height + (slop * 2));
+            if (page == selected.Page && body.Contains(new Point(local.X, local.Y)))
             {
                 _draggingStamp = true;
+                _dragBefore = selected.Local;
                 _stampDragStart = docPoint;
                 _stampDragOffset = new Point(local.X - selected.Local.X, local.Y - selected.Local.Y);
-                Canvas.CapturePointer(pointer);
+                BeginExclusiveGesture(pointer);
                 return true;
             }
         }
 
-        SelectStampAt(docPoint);
+        SelectStampAt(docPoint, TouchSlopPt(touch));
 
         // Never consume the press itself. The hit-test is asynchronous, so
         // claiming it here would swallow a click that turns out to have landed
@@ -136,7 +195,7 @@ public sealed partial class PdfViewer
         return false;
     }
 
-    private async void SelectStampAt(Point docPoint)
+    private async void SelectStampAt(Point docPoint, double slop = 0)
     {
         if (_layout is null || _document is not { } document)
         {
@@ -155,8 +214,8 @@ public sealed partial class PdfViewer
             {
                 var hit = document.GetAnnotations(page).LastOrDefault(a =>
                     a.Subtype == StampSubtype &&
-                    local.X >= a.X && local.X <= a.X + a.Width &&
-                    local.Y >= a.Y && local.Y <= a.Y + a.Height);
+                    local.X >= a.X - slop && local.X <= a.X + a.Width + slop &&
+                    local.Y >= a.Y - slop && local.Y <= a.Y + a.Height + slop);
                 return (hit, hit is null ? StampKind.None : document.GetStampKind(page, hit.Index));
             });
         }
@@ -193,9 +252,9 @@ public sealed partial class PdfViewer
     /// signature is often only a few points tall, and missing the handle to
     /// start a move instead is a worse outcome than the reverse.
     /// </summary>
-    private int HitTestStampHandle(Rect local, (double X, double Y) point)
+    private int HitTestStampHandle(Rect local, (double X, double Y) point, bool touch)
     {
-        double reach = (HandleSizeDip / Math.Max(0.05, _zoom)) * 0.9;
+        double reach = TouchMetrics.HandleReachPt(touch, _zoom);
 
         var corners = new[]
         {
@@ -216,9 +275,16 @@ public sealed partial class PdfViewer
     }
 
     /// <summary>
-    /// Live preview of a corner drag. Aspect-locked: the pointer's distance from
-    /// the anchor sets the width and the height follows, so the object keeps its
-    /// proportions however the corner is dragged. Committing happens on release.
+    /// Live preview of a corner drag.
+    ///
+    /// A picture is aspect-locked: the pointer's distance from the anchor sets
+    /// the width and the height follows, so it keeps its proportions however the
+    /// corner is dragged. A text box is not, because it has no proportions to
+    /// keep — the drag sets the width alone and the preview holds the height it
+    /// already had, since what the words will actually wrap to is not known
+    /// until the document has re-laid them out on release.
+    ///
+    /// Committing happens on release either way.
     /// </summary>
     private void UpdateStampResize(Point docPoint)
     {
@@ -229,26 +295,38 @@ public sealed partial class PdfViewer
 
         var local = ToPageLocal(selected.Page, docPoint);
         var size = _pageSizes[selected.Page];
-
-        // Width drives; height follows the original aspect.
-        double width = Math.Abs(local.X - _resizeAnchor.X);
-        double height = width / Math.Max(1e-6, _resizeAspect);
+        bool isText = selected.Kind == StampKind.Text;
 
         // Keep the whole object on the page. The anchor is fixed, so the room
         // available is the distance from it to whichever edge the drag is
         // heading for.
         double roomX = local.X >= _resizeAnchor.X ? size.Width - _resizeAnchor.X : _resizeAnchor.X;
         double roomY = local.Y >= _resizeAnchor.Y ? size.Height - _resizeAnchor.Y : _resizeAnchor.Y;
-        width = Math.Min(width, roomX);
-        height = Math.Min(width / Math.Max(1e-6, _resizeAspect), roomY);
-        width = height * _resizeAspect;
+
+        double width = Math.Min(Math.Abs(local.X - _resizeAnchor.X), roomX);
+        double height;
+        if (isText)
+        {
+            height = Math.Min(selected.Local.Height, roomY);
+        }
+        else
+        {
+            // Width drives; height follows the original aspect, then whichever
+            // of the two runs out of room first pulls the other back.
+            height = Math.Min(width / Math.Max(1e-6, _resizeAspect), roomY);
+            width = height * _resizeAspect;
+        }
 
         width = Math.Max(MinStampPt, width);
         height = Math.Max(MinStampPt, height);
 
-        // The rect grows away from the anchor, in whichever direction the pointer went.
+        // The rect grows away from the anchor, in whichever direction the
+        // pointer went. A text box grows only sideways, so its top edge stays
+        // where it was rather than chasing the pointer up the page.
         double x = local.X >= _resizeAnchor.X ? _resizeAnchor.X : _resizeAnchor.X - width;
-        double y = local.Y >= _resizeAnchor.Y ? _resizeAnchor.Y : _resizeAnchor.Y - height;
+        double y = isText
+            ? selected.Local.Y
+            : local.Y >= _resizeAnchor.Y ? _resizeAnchor.Y : _resizeAnchor.Y - height;
 
         _selected = (selected.Page, selected.Index, new Rect(x, y, width, height), selected.Kind);
         Canvas.Invalidate();
@@ -269,8 +347,9 @@ public sealed partial class PdfViewer
         var kind = selected.Kind;
 
         // A picture is re-created from its pixels; text is re-created from its
-        // words at a size in the ratio the box grew. Both come back as the same
-        // pair — where it now lives, and how to put the original back.
+        // words, re-wrapped to the new width at the size it already had. Both
+        // come back as the same pair — where it now lives, and how to put the
+        // original back. Text passes no height: the wrap decides that.
         (int NewIndex, AnnotationSpec Before)? result;
         try
         {
@@ -294,9 +373,9 @@ public sealed partial class PdfViewer
 
         if (kind == StampKind.Text)
         {
-            // Text lands wherever PDFium measures it, which is close to the
-            // dragged box but not equal to it. Re-read rather than leave the
-            // selection frame sitting off the words it belongs to.
+            // The height is whatever the words wrapped to, which the drag never
+            // knew. Re-read rather than leave the selection frame sitting off
+            // the block it belongs to.
             RefreshSelectedFromDocument(page, resized.NewIndex, kind);
         }
 

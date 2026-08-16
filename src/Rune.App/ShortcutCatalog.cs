@@ -45,9 +45,21 @@ internal static class ShortcutCatalog
             new("Draw with the pen", "Ctrl+E"),
             new("Type on the page", "Ctrl+T"),
             new("Move or resize what you placed", "click it"),
+            new("Resize a picture before dropping it", "Ctrl+wheel"),
             new("Delete what you placed", "Delete"),
             new("Put the tool away", "Esc"),
             new("Copy selected text", "Ctrl+C"),
+        ]),
+        // These take over from the document's own chords while a text box is
+        // open or a form field has the caret, and hand them straight back on
+        // Esc. Both halves matter, so both are listed.
+        new("Formatting text (in a text box or a form field)",
+        [
+            new("Bold / italic / underline", "Ctrl+B / Ctrl+I / Ctrl+U"),
+            new("Bigger / smaller", "Ctrl+Shift+> / Ctrl+Shift+<"),
+            new("Left / centre / right / justify", "Ctrl+L / Ctrl+E / Ctrl+R / Ctrl+J"),
+            new("Finish the box and free the shortcuts", "Esc"),
+            new("Reflow a text box (its type stays the same size)", "drag a corner"),
         ]),
         new("File & window",
         [

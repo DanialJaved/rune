@@ -24,12 +24,15 @@
         <!-- Chrome-style: the tab strip IS the title bar. Tabs carry no
              content (documents render in DocHost below); the footer is the
              window drag region, padded clear of the caption buttons. -->
+        <!-- CloseButtonOverlayMode is Always, not Auto: Auto reveals a background
+             tab's close button on hover, and a finger cannot hover, so closing
+             one meant selecting it first. -->
         <TabView
             x:Name="Tabs"
             Grid.Row="0"
             VerticalAlignment="Top"
             TabWidthMode="Equal"
-            CloseButtonOverlayMode="Auto"
+            CloseButtonOverlayMode="Always"
             SelectionChanged="Tabs_SelectionChanged"
             AddTabButtonClick="Tabs_AddTabButtonClick"
             TabCloseRequested="Tabs_TabCloseRequested">
@@ -37,12 +40,17 @@
                 <!-- The wordmark doubles as a Home button: it shows the recents
                      screen without closing anything, and toggles back to the
                      document you were reading. -->
+                <!-- MinHeight/MinWidth because the caption-sized wordmark alone
+                     gave it a target about 20px tall, and it is the only way
+                     back to the recents screen. -->
                 <Button
                     x:Name="HomeButton"
                     Click="HomeButton_Click"
                     VerticalAlignment="Center"
                     Margin="8,0,4,0"
-                    Padding="6,2"
+                    Padding="10,2"
+                    MinHeight="{StaticResource TouchTargetMin}"
+                    MinWidth="{StaticResource TouchTargetMin}"
                     Background="Transparent"
                     BorderThickness="0"
                     ToolTipService.ToolTip="Home — recent documents">
@@ -213,7 +221,7 @@
                     Style="{StaticResource IconToggleButtonStyle}"
                     Click="ImageToolButton_Click"
                     IsEnabled="False"
-                    ToolTipService.ToolTip="Picture — place an image on the page">
+                    ToolTipService.ToolTip="Picture — place an image on the page (Ctrl+wheel resizes it)">
                     <FontIcon Glyph="&#xEB9F;" FontSize="{StaticResource IconGlyphSize}" />
                 </ToggleButton>
                 <ToggleButton
@@ -292,6 +300,11 @@
                                 <FontIcon Glyph="&#xE749;" />
                             </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="ShareMenuItem" Text="Share…" Click="ShareMenuItem_Click" IsEnabled="False">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE72D;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
                         <MenuFlyoutItem x:Name="FlattenMenuItem" Text="Flatten annotations…" Click="FlattenMenuItem_Click" IsEnabled="False">
                             <MenuFlyoutItem.Icon>
                                 <FontIcon Glyph="&#xE7C4;" />
@@ -301,6 +314,19 @@
                         <MenuFlyoutItem x:Name="PresentMenuItem" Text="Presentation" Click="PresentMenuItem_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="F5">
                             <MenuFlyoutItem.Icon>
                                 <FontIcon Glyph="&#xE7F4;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <!-- Bookmarking and the palette were chords and nothing
+                             else, and the empty bookmarks pane told the user to
+                             press one. A tablet has no chords. -->
+                        <MenuFlyoutItem x:Name="BookmarkMenuItem" Text="Bookmark this page" Click="BookmarkMenuItem_Click" IsEnabled="False" KeyboardAcceleratorTextOverride="Ctrl+B">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE718;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem x:Name="PaletteMenuItem" Text="Find a command…" Click="PaletteMenuItem_Click" KeyboardAcceleratorTextOverride="Ctrl+K">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE721;" />
                             </MenuFlyoutItem.Icon>
                         </MenuFlyoutItem>
                         <MenuFlyoutSeparator />
@@ -470,7 +496,7 @@
                 HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"
                 Margin="0,0,24,24"
-                Height="38"
+                Height="48"
                 Padding="4,0">
                 <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
                     <Button
@@ -485,10 +511,10 @@
                         x:Name="ZoomLabelButton"
                         Background="Transparent"
                         BorderThickness="0"
-                        Height="30"
-                        MinWidth="52"
+                        Height="{StaticResource TouchTargetMin}"
+                        MinWidth="56"
                         Padding="6,0"
-                        CornerRadius="15"
+                        CornerRadius="20"
                         IsEnabled="False"
                         ToolTipService.ToolTip="Zoom level">
                         <TextBlock x:Name="ZoomLabel" Text="100%" Style="{StaticResource CaptionTextBlockStyle}" />
@@ -541,16 +567,23 @@
                         Margin="4,0"
                         Style="{StaticResource CaptionTextBlockStyle}"
                         Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <ToggleButton x:Name="MatchCaseButton" Click="MatchCase_Click" ToolTipService.ToolTip="Match case" Padding="8,4">
+                    <!-- These four were the smallest targets in the app, about
+                         28x26 from padding alone. Squared off to the touch
+                         minimum; the glyphs are unchanged. -->
+                    <ToggleButton x:Name="MatchCaseButton" Click="MatchCase_Click" ToolTipService.ToolTip="Match case"
+                                  Width="{StaticResource TouchTargetMin}" Height="{StaticResource TouchTargetMin}" Padding="0">
                         <TextBlock Text="Aa" FontSize="13" />
                     </ToggleButton>
-                    <Button x:Name="FindPrev" Click="FindPrev_Click" ToolTipService.ToolTip="Previous (Shift+Enter)" Padding="8,4">
+                    <Button x:Name="FindPrev" Click="FindPrev_Click" ToolTipService.ToolTip="Previous (Shift+Enter)"
+                            Width="{StaticResource TouchTargetMin}" Height="{StaticResource TouchTargetMin}" Padding="0">
                         <FontIcon Glyph="&#xE70E;" FontSize="12" />
                     </Button>
-                    <Button x:Name="FindNext" Click="FindNext_Click" ToolTipService.ToolTip="Next (Enter)" Padding="8,4">
+                    <Button x:Name="FindNext" Click="FindNext_Click" ToolTipService.ToolTip="Next (Enter)"
+                            Width="{StaticResource TouchTargetMin}" Height="{StaticResource TouchTargetMin}" Padding="0">
                         <FontIcon Glyph="&#xE70D;" FontSize="12" />
                     </Button>
-                    <Button x:Name="FindClose" Click="FindClose_Click" ToolTipService.ToolTip="Close (Esc)" Padding="8,4">
+                    <Button x:Name="FindClose" Click="FindClose_Click" ToolTipService.ToolTip="Close (Esc)"
+                            Width="{StaticResource TouchTargetMin}" Height="{StaticResource TouchTargetMin}" Padding="0">
                         <FontIcon Glyph="&#xE711;" FontSize="12" />
                     </Button>
                 </StackPanel>

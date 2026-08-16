@@ -265,7 +265,13 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
   setter — with Rune-drawn field borders over the top. Values round-trip through
   save. **Text colour and size** are settable per field (right-click → "Text
   appearance…"), by rewriting the widget's `/DA` — see §7 for why the repaint is
-  the hard half.
+  the hard half. `Ctrl+Shift+</>` steps the size from the keyboard, and
+  `Ctrl+B`/`Ctrl+I` swap the `/DA`'s font resource for its conventional sibling
+  (`Helv`↔`HeBo`, `TiRo`↔`TiBo`/`TiIt`/`TiBI`, `Cour`↔…). That resource has to
+  exist in the AcroForm's `/DR` and PDFium exposes no way to read it, so the
+  change is **verified by rendering** the widget before and after: a field that
+  comes back blank gets its old `/DA` put back and the shell says the file
+  cannot carry that font.
 - **Signing**: draw a signature, **type it** in one of Windows' handwriting faces
   (`SignatureFonts`, nothing bundled), or **import a photo or scan and have the
   paper keyed out automatically** (`SignatureMatte`). Placed as a stamp annotation
@@ -273,25 +279,59 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
   placement, and drag-to-move **or aspect-locked corner-handle resize** after.
   Saved signatures are reusable and stay on the device.
 - **Text on a page** (`Ctrl+T`, v0.7.0): click anywhere, blank or not, and type.
-  A floating bar offers font, size, bold, italic and colour, applied live. Stored
-  as **real text objects** inside a stamp annotation, not a raster, so it is
-  crisp at any zoom and becomes ordinary searchable page text once flattened.
-  The editor is a real XAML `TextBox` over the canvas (IME, selection, clipboard
-  and screen readers for free), anchored to a page point.
+  A floating bar offers font, size, bold, italic, **underline** and **alignment**
+  plus colour, applied live. Stored as **real text objects** inside a stamp
+  annotation, not a raster, so it is crisp at any zoom and becomes ordinary
+  searchable page text once flattened. The editor is a real XAML `TextBox` over
+  the canvas (IME, selection, clipboard and screen readers for free), anchored to
+  a page point.
+  - A box has a **width** once one has been dragged for it, and the words **wrap**
+    to it. Alignment (left / centre / right / justify) positions each line inside
+    that width; justify emits one text object per word, since PDF cannot stretch
+    the gaps inside a single run. An underline is a filled rectangle path per
+    line, placed from the baseline and the font's descent.
+  - Underline, alignment and the box width live in a private `/RuneStyle`
+    annotation key, because PDF has nowhere standard to put any of them on a
+    stamp and inferring them from the objects guesses wrong on a one-line box.
+    Other readers ignore the key; the words in `/Contents` stay interoperable.
+  - **The editor cannot preview the underline.** WinUI's `TextBox` has no
+    `TextDecorations` (only `RichEditBox` does) and hand-drawn rules would need
+    per-line metrics the control does not expose. The bar's `U` shows the state;
+    the rule lands on commit.
 - **Pictures** (v0.7.0): place any PNG/JPEG/BMP/GIF/TIFF through the same
   arm → ghost → click-or-drag → `AddStamp` pipeline signatures use. **No
   matting**: `SignatureMatte` exists to remove paper from a photographed
   signature, and a picture the user chose should land as it is.
+  **`Ctrl`+wheel sizes the ghost; the plain wheel scrolls.** It was the other way
+  round through v0.7.0, which meant you could not scroll to the spot you wanted
+  to drop the picture on without first putting the tool away.
+- **Share** (menu → Share…, or the palette): hands the PDF to another app
+  through the Windows share sheet, via `DataTransferManagerInterop` for the same
+  reason printing uses `PrintManagerInterop` — there is no CoreWindow in a
+  desktop app. Unsaved edits go out as a copy under the document's own name in
+  `%LOCALAPPDATA%\Rune\share`, swept an hour later; the original is never
+  written to. **The only thing in Rune that hands a document to anything else,
+  and only when asked** — see PRIVACY.md.
 - **One selection model** (v0.7.0): anything placed is selectable with a plain
-  click, then movable, resizable by aspect-locked corner handles, and deletable.
-  A picture is resized by rescaling its pixels; **text is resized by re-rendering
-  it at a new point size**, which is the whole reason for storing text as text.
+  click, then movable, resizable by corner handles, and deletable. A picture is
+  resized by rescaling its pixels and is **aspect-locked**. A text box is not:
+  the drag sets its **width** and the words **re-flow at the same point size**,
+  with the height coming back from the wrap. Only the size picker and
+  `Ctrl+Shift+</>`  change how big the type is.
 - **Signature details**: reports what a signed document *claims*, including
   whole-file coverage. Deliberately does **not** verify — see the disclaimer in
   `MainWindow.xaml.cs`, which must never be softened.
 - **Flatten** (`PdfDocument.Flatten`): bakes annotations and form values into
   page content for a fixed, non-editable copy.
-- Session restore; printing with preview + page ranges; document properties
+- Session restore; printing with preview + page ranges
+- **Document properties** (`Ctrl+D`): sectioned rather than a flat list, and
+  blanks are shown as blanks — a missing Author row could not be told apart from
+  an Author nobody had looked for. Metadata with dates parsed out of PDF's
+  `D:YYYYMMDDHHmmSS+HH'mm'` syntax; page count and the current page's size named
+  (`Letter — 216 × 279 mm`) with a note when pages differ; encryption and the
+  permission bits spelled out; tagged / form kind / attachment count; path, size
+  and PDF version. **Fonts fill in after the dialog opens**, at Background
+  priority and capped at 50 pages, because that one section costs a page walk.
 - **Report a problem** (menu): version, Store vs portable, Windows build, and the
   path to `errors.log`, with buttons to the issue tracker and the log folder.
   With no telemetry by design this is the only route a crash reaches anyone.
@@ -313,10 +353,24 @@ WinUI shell (tabs in title bar, slim header + hamburger, floating zoom pill)
 | Highlight / pen / text | `Ctrl+H` / `Ctrl+E` / `Ctrl+T` |
 | Save / save as | `Ctrl+S` / `Ctrl+Shift+S` |
 | Pen, highlighter, note, text, picture, sign, eraser | annotation toolbar (only the pen and text have chords) |
+| Size a picture before dropping it | `Ctrl`+wheel (the plain wheel scrolls) |
 | Move / resize / delete something placed | click it, drag it or a corner, `Delete` |
 | Copy / cut / paste (text or pages) | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
+
+**While a text box is open or a form field has the caret**, these chords belong
+to the text and not to the document — `Ctrl+B` bolds rather than bookmarking,
+`Ctrl+I` italicizes rather than flipping night mode, `Ctrl+E` centres rather than
+arming the pen, `Ctrl+R` aligns right rather than rotating. `Esc` closes the box
+and hands every one of them straight back. `AddAccelerator` takes the document,
+text-box and form-field meanings side by side for exactly this reason.
+
+| Action (text box / form field only) | Keys |
+|---|---|
+| Bold / italic / underline | `Ctrl+B` / `Ctrl+I` / `Ctrl+U` |
+| Bigger / smaller | `Ctrl+Shift+>` / `Ctrl+Shift+<` |
+| Left / centre / right / justify | `Ctrl+L` / `Ctrl+E` / `Ctrl+R` / `Ctrl+J` |
 
 Vim keys (`j k h l`, `gg`/`G`, `p`/`n`) are a Settings toggle. Page
 copy/cut/paste applies when the thumbnail sidebar has focus; otherwise
@@ -567,6 +621,27 @@ session scratchpad (`shot.ps1` / `drive-rune.ps1`).
   must also be in `RuntimeIdentifiers` so restore can resolve them.
 - **Symbol packages need `mspdbcmf.exe`** from the VS C++ workload (not installed
   here) — `AppxSymbolPackageEnabled=false`. They're optional for the Store.
+- **`WindowsAppSDKSelfContained` and `SelfContained` are DIFFERENT PROPERTIES.**
+  The first bundles the Windows App SDK, the second bundles the **.NET runtime**.
+  Having only the first shipped every Store package from v0.4.1 to v0.7.0 with no
+  runtime in it, so first launch showed Windows' "you must install .NET" download
+  dialog. It hid for four releases because the two build paths disagreed and only
+  one of them was ever tested locally: the portable zip is `dotnet publish` with
+  the self-contained flag **on the command line** and worked; the MSIX is
+  `dotnet build`, which passed nothing. Both properties now live in the csproj so
+  neither path can carry it alone, and `tools/check-package.ps1` asserts the
+  runtime is actually inside the built package.
+  **A dev machine cannot reproduce this** — it has the runtime, so the app starts
+  either way. The evidence is the artifact: a self-contained package contains
+  `hostfxr.dll` / `coreclr.dll` / `System.Private.CoreLib.dll`, and its
+  `Rune.runtimeconfig.json` says `includedFrameworks` rather than `framework`.
+- **`--` cannot appear inside an XML comment**, so a csproj comment cannot spell
+  the self-contained flag with its dashes (`MSB4025`, and the message names the
+  line but not the reason).
+- **A `.ps1` with no BOM is read as ANSI by Windows PowerShell 5.1.** A UTF-8 em
+  dash then arrives as three CP1252 characters ending in a smart quote, which
+  opens a string and swallows the rest of the file. The parse error points at a
+  brace forty lines further down. Keep repo scripts ASCII.
 - **PowerShell + `git commit -m "..."`**: quotes/apostrophes inside the message
   break argument parsing and scatter the body across `pathspec` errors. Write the
   message to a file and use `git commit -F <file>`.
@@ -598,6 +673,10 @@ Compress-Archive <publish>\* artifacts/rune-vX.Y.Z-win-x64.zip
 gh release create vX.Y.Z <zip> --title "Rune vX.Y.Z" --notes-file notes.md
 ```
 
+- The `--self-contained` above is now **belt and braces**: `<SelfContained>` is
+  set in the csproj (§7), which is what actually does the work and what the MSIX
+  path depends on. Leaving it on the command line costs nothing and documents
+  the intent at the point someone reads it.
 - **Version bump:** `<Version>` in `Rune.App.csproj` **and** `Version=` in
   `Package.appxmanifest`.
 - The portable zip is **unsigned**, so SAC/SmartScreen apply to it — documented
@@ -650,8 +729,22 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
   -p:AppxBundle=Always -p:AppxBundlePlatforms="x64|arm64" `
   -p:UapAppxPackageBuildMode=StoreUpload `
   -p:AppxPackageDir="..\..\artifacts\store\"
-# → artifacts/store/Rune.App_X.Y.Z.0_x64_arm64_bundle.msixupload  (~106 MB)
+# → artifacts/store/Rune.App_X.Y.Z.0_x64_arm64_bundle.msixupload  (~135 MB)
+
+# REQUIRED before uploading: does the package actually contain a .NET runtime?
+tools\check-package.ps1 artifacts\store\Rune.App_X.Y.Z.0_x64_arm64_bundle.msixupload
 ```
+
+- **Run the check every time.** A package with no runtime builds, uploads and
+  certifies without complaint, and only fails on a machine that isn't yours —
+  which is how v0.4.1 through v0.7.0 shipped that way (§7, §10). The check walks
+  the nested zips and fails unless every package carrying an executable also
+  carries `hostfxr.dll`, `coreclr.dll` and `System.Private.CoreLib.dll`. The
+  `scale-*` resource packages hold images and no code, and are skipped.
+  It was verified in both directions when it was written: `FAIL` against the
+  v0.6.0 bundle that actually shipped, `OK` against v0.8.0. `artifacts/` is
+  gitignored, so any pre-v0.8.0 `.msixupload` you still have locally is the
+  known-bad sample to re-test the check against if you change it.
 
 - **Rune contains no networking code, and must not gain any.** `UpdateService`
   was deleted in v0.5.0. That is what lets the privacy declaration and the
@@ -673,6 +766,52 @@ dotnet build src/Rune.App/Rune.App.csproj -c Release -p:Platform=x64 `
 ---
 
 ## 9. Version history
+
+- **v0.8.0** (2026-08-17) — the Store build finally ships a runtime, and text
+  boxes become text boxes.
+  **Fixed, and the most important thing in the release: every Store install
+  since v0.4.1 asked the user to download .NET on first launch.** The package
+  genuinely had no runtime in it. `WindowsAppSDKSelfContained` was set, which
+  bundles the Windows App SDK; `SelfContained`, which bundles the .NET runtime,
+  never was. The portable zip escaped it because its `dotnet publish` line
+  carries the flag explicitly, and the portable zip is the build anyone tests
+  locally — the MSIX is a plain `dotnet build` that passed nothing. Nothing in
+  the build, the upload or certification notices, and a dev machine cannot
+  reproduce it, because a dev machine has the runtime. The property now lives in
+  the csproj where both paths get it, `tools/check-package.ps1` asserts the
+  runtime is in the artifact, and §8b makes running it a required step before
+  upload. The bundle roughly doubles to ~135 MB, which is where it was at v0.4.1
+  before the ML runtime came out.
+  **Fixed: the text-box chords were reaching the document.** `Ctrl+B` bookmarked
+  the page while you were trying to embolden a word, `Ctrl+I` flipped the whole
+  document to night mode, `Ctrl+E` armed the pen and `Ctrl+R` rotated the page.
+  `AddAccelerator` now takes the document, text-box and form-field meanings of a
+  chord side by side and resolves them in that order, so `Esc` hands every one
+  of them straight back.
+  **Fixed: resizing a text box resized the words.** A box now has a **width**;
+  the corner drag sets it and the words re-flow at the point size you chose,
+  with the height falling out of the wrap. That is also what made alignment mean
+  anything, so `Ctrl+L/E/R/J` and `Ctrl+U` arrived with it — underline as a
+  filled rectangle path per line, justify as one text object per word, and both
+  plus the width stored in a private `/RuneStyle` key because PDF has nowhere
+  standard to put them on a stamp.
+  **Fixed: the wheel was backwards while placing a picture.** Plain wheel
+  resized the ghost and `Ctrl`+wheel zoomed, so you could not scroll to the spot
+  you wanted to drop it on. Now the plain wheel scrolls and `Ctrl`+wheel sizes.
+  **Added: Share**, to any app on the Windows share sheet, through
+  `DataTransferManagerInterop` for the same reason printing uses
+  `PrintManagerInterop`. Unsaved edits go out as a copy under the document's own
+  name; the original is never written to. The first thing in Rune that hands a
+  document to anything else, and PRIVACY.md says so.
+  **Added: document properties worth opening.** Sectioned, with blanks shown as
+  blanks — a missing Author row could not be told apart from one nobody looked
+  for. Dates parsed out of PDF's `D:YYYYMMDDHHmmSS` syntax, page size named,
+  permissions spelled out, and the font list filled in after the dialog opens so
+  `Ctrl+D` never waits on a page walk.
+  Also found on the way: `FPDF_PAGEOBJ_FORM` is **5**, not 6. The wrong constant
+  fails silently — the type check simply never matches and every form XObject on
+  the page is walked past, which is why the font scan reported nothing for
+  flattened text.
 
 - **v0.7.0** (2026-08-10) — put a word, or a picture, anywhere on a page.
   **Added: the text tool.** Arm it (`Ctrl+T`), click any part of any page whether
@@ -1000,9 +1139,21 @@ worth remembering. The three v0.4.1 bugs are listed in
 full; the rest have their post-mortems in §9 — the two zoom/blur bugs and the
 invisible hover ghost (v0.5.x), in v0.6.0 the fourteen rotation guards,
 `Rotate()` discarding the user's find results, and a typed-signature preview
-that inherited the dialog's white foreground onto white paper, and in v0.7.0 the
+that inherited the dialog's white foreground onto white paper, in v0.7.0 the
 dead render thread after a tab switch, erasing a stamp leaving nothing to undo,
-and the eraser's redo removing the wrong annotation.
+and the eraser's redo removing the wrong annotation, and in v0.8.0 the Store
+package shipping with no .NET runtime in it, the text-box chords reaching the
+document past the caret, and a text-box resize rescaling the type.
+
+**The one worth learning from is the .NET runtime, fixed in v0.8.0.** Every Store
+install from v0.4.1 to v0.7.0 opened Windows' "you must install .NET" dialog on
+first launch, because the package contained no runtime. It survived four
+releases, a Store certification each time, and every local test — because the
+build that gets tested locally is the portable zip, and the portable zip is the
+one whose command line happened to carry `--self-contained`. The MSIX never did.
+**When two build paths produce the same app, assume they disagree until
+something checks.** The check is `tools/check-package.ps1`, and it looks inside
+the artifact rather than at the source, because the source looked fine.
 
 **Worth repeating, because it hid a real bug for three releases:** the
 tab-switch one was invisible for as long as nothing invalidated a cache. The
@@ -1112,10 +1263,10 @@ thread's *lifetime* before suspecting the render.
 
 ---
 
-## 13. Current state (2026-08-10)
+## 13. Current state (2026-08-17)
 
-- Working branch **`feat/text-and-image`**. §9 has the release notes for both
-  versions on it.
+- Working branch **`feat/text-and-image`**. §9 has the release notes for all
+  three versions on it.
 - **`origin/main` is at `f600288` (PR #10, the README refresh), which predates
   v0.6.0 entirely.** Everything since — rotation, page extract, typed signatures,
   signature resize, PDFium 153, the package trim, the picker rework, and all of
@@ -1125,16 +1276,21 @@ thread's *lifetime* before suspecting the render.
 - **Nothing has been published.** No tag, no GitHub release, no Store
   submission, for either version. Tags and GitHub Releases both stop at
   **v0.4.0**; the Store is on **0.5.0**. Per §12 that all waits for the user.
-  When it does go out it goes as **one v0.7.0 release covering both versions**,
+  When it does go out it goes as **one v0.8.0 release covering all of them**,
   with the notes saying plainly that the intervening ones went out through the
   Store or not at all.
-- **366 tests passing** (326 at v0.6.0); x64 and ARM64 Release both build clean,
-  and the Release test run is green, which is what CI checks on a PR.
+- **A Store submission now matters more than it did.** Every install from the
+  listing today prompts for .NET on first launch (§9, §10). Nothing in the repo
+  can fix that for existing users — only a new submission can.
+- **414 tests passing** (366 at v0.7.0, 326 at v0.6.0); x64 Release and the
+  x64+ARM64 Store bundle both build clean.
 - **PDFium 153.0.7988**, unchanged this release.
-- **Version bumped to 0.7.0** in both `Rune.App.csproj` and
+- **Version bumped to 0.8.0** in both `Rune.App.csproj` and
   `Package.appxmanifest`.
-- **Release artifacts have NOT been rebuilt** for 0.7.0. The v0.6.0 zip and
-  bundle in `artifacts/` are stale by a version; §8 has the commands.
+- **The Store bundle HAS been rebuilt** for 0.8.0 and checked:
+  `artifacts/store/Rune.App_0.8.0.0_x64_arm64_bundle.msixupload`, 135 MB,
+  `tools/check-package.ps1` green. The **portable zip has not** — §8 has the
+  command, and it needs one before a GitHub release.
 - **Store screenshots are still the v0.6.0 set**, 10 of 10 at 1920×1080. The
   text tool and a placed picture deserve one, and the set is full, so it would
   have to replace one.

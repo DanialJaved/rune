@@ -122,33 +122,49 @@ public class TextBoxEditTests
     // ---- resizing ----
 
     [Fact]
-    public void ResizeTextBox_ScalesTheFontRatherThanStretchingTheGlyphs()
+    public void ResizeTextBox_ReflowsTheWordsAndLeavesTheSizeAlone()
     {
         using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
-        doc.AddTextBox(0, 60, 200, Text("Grow me", size: 20));
+        doc.AddTextBox(0, 60, 200, Text("Reflow me into several lines when the box gets narrow", size: 12));
 
         var before = doc.GetAnnotations(0)[0];
-        var resized = doc.ResizeTextBox(0, 0, 60, 200, before.Width * 2);
+        var resized = doc.ResizeTextBox(0, 0, 60, 200, 120);
 
         Assert.NotNull(resized);
         var after = doc.GetAnnotations(0)[resized!.Value.NewIndex];
 
-        // The size doubled, so the box did, in both axes: a stretch would have
-        // taken the width alone.
-        Assert.Equal(40, doc.TryReadTextBox(0, resized.Value.NewIndex)!.FontSize, 1);
-        Assert.InRange(after.Width, before.Width * 2 - 2, before.Width * 2 + 2);
-        Assert.InRange(after.Height, before.Height * 2 - 2, before.Height * 2 + 2);
+        // The point size is the one thing a corner drag must not touch: that is
+        // what the size picker and Ctrl+Shift+</> are for.
+        Assert.Equal(12, doc.TryReadTextBox(0, resized.Value.NewIndex)!.FontSize, 1);
+
+        // Narrower box, and the words that no longer fit went onto new lines,
+        // so the block is taller than the single line it started as.
+        Assert.InRange(after.Width, 119, 121);
+        Assert.True(after.Width < before.Width, "the box did not get narrower");
+        Assert.True(after.Height > before.Height, "the words did not reflow onto more lines");
+    }
+
+    [Fact]
+    public void ResizeTextBox_RemembersTheWidthForTheNextRead()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+        doc.AddTextBox(0, 60, 200, Text("Wide enough to wrap somewhere in here", size: 12));
+
+        Assert.NotNull(doc.ResizeTextBox(0, 0, 60, 200, 150));
+
+        // Auto-width before the drag, an explicit box after it — otherwise the
+        // second drag would start from scratch and re-wrap from nothing.
+        Assert.Equal(150, doc.TryReadTextBox(0, 0)!.WidthPt, 1);
     }
 
     [Fact]
     public void ResizeTextBox_UndoesBackToThePixelsItStartedWith()
     {
         using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
-        doc.AddTextBox(0, 60, 200, Text("Undo me", size: 18));
+        doc.AddTextBox(0, 60, 200, Text("Undo me after a reflow onto two lines", size: 18));
         int original = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
 
-        var before = doc.GetAnnotations(0)[0];
-        var resized = doc.ResizeTextBox(0, 0, 60, 200, before.Width * 1.5);
+        var resized = doc.ResizeTextBox(0, 0, 60, 200, 140);
         Assert.NotNull(resized);
         Assert.NotEqual(original, PixelAssert.CountDark(doc.RenderPage(0, 1.0f)));
 
@@ -162,16 +178,18 @@ public class TextBoxEditTests
     }
 
     [Fact]
-    public void ResizeTextBox_ClampsRatherThanProducingAnUnreadableSize()
+    public void ResizeTextBox_WillNotSqueezeTheBoxNarrowerThanTheType()
     {
         using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
         doc.AddTextBox(0, 60, 200, Text("Tiny", size: 24));
 
-        var before = doc.GetAnnotations(0)[0];
-        var resized = doc.ResizeTextBox(0, 0, 60, 200, before.Width / 1000);
+        var resized = doc.ResizeTextBox(0, 0, 60, 200, 1);
 
+        // A box a point wide wraps to one character a line and cannot be picked
+        // up again, so the floor is the type size itself.
         Assert.NotNull(resized);
-        Assert.Equal(4, doc.TryReadTextBox(0, resized!.Value.NewIndex)!.FontSize, 1);
+        Assert.Equal(24, doc.TryReadTextBox(0, resized!.Value.NewIndex)!.WidthPt, 1);
+        Assert.Equal(24, doc.TryReadTextBox(0, resized.Value.NewIndex)!.FontSize, 1);
     }
 
     [Fact]

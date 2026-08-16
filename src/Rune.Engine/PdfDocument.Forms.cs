@@ -441,6 +441,53 @@ public sealed partial class PdfDocument
         // page underneath it would strand that. Commit first, as saving does.
         FormKillFocus();
 
+        string? original = WithFieldAnnot(pageIndex, name,
+            annot => PdfiumNative.GetAnnotString(annot, DefaultAppearanceKey));
+
+        // A face change is the only kind that can name a font resource the file
+        // does not have, so it is the only kind worth paying a render to check.
+        bool risky = appearance.Bold is not null || appearance.Italic is not null;
+        int inkBefore = risky ? FieldInk(pageIndex, name) : 0;
+
+        if (!WriteFieldAppearance(pageIndex, name, appearance))
+        {
+            return false;
+        }
+
+        // The guess did not pay off: the resource was not in the AcroForm's /DR
+        // and the field now renders in no font at all. Put the string that was
+        // there back, and report that nothing happened rather than leaving the
+        // user with a field that has silently lost its text.
+        if (risky && inkBefore > 0 && FieldInk(pageIndex, name) == 0
+            && !string.IsNullOrEmpty(original))
+        {
+            WithFieldAnnot(pageIndex, name,
+                annot => PdfiumNative.SetAnnotString(annot, DefaultAppearanceKey, original));
+            lock (PdfiumLibrary.Lock)
+            {
+                ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
+                EvictPageLocked(pageIndex);
+            }
+            return false;
+        }
+
+        IsDirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Rewrites the <c>/DA</c> and forces the widget's appearance to be rebuilt
+    /// from it.
+    ///
+    /// The rebuild is the half that matters. PDFium builds a widget's appearance
+    /// stream when the page is set up for forms and caches it, so an edit made
+    /// straight into the dictionary is invisible until that happens again — the
+    /// value reads back perfectly while the page keeps drawing the old one.
+    /// Dropping the page handle is what makes the next acquire re-run
+    /// <c>FORM_OnAfterLoadPage</c>.
+    /// </summary>
+    private bool WriteFieldAppearance(int pageIndex, string name, FieldAppearance appearance)
+    {
         bool written = WithFieldAnnot(pageIndex, name, annot =>
         {
             string? updated = DefaultAppearance.TryWrite(
@@ -459,8 +506,66 @@ public sealed partial class PdfDocument
             ObjectDisposedException.ThrowIf(_handle == IntPtr.Zero, this);
             EvictPageLocked(pageIndex);
         }
-        IsDirty = true;
         return true;
+    }
+
+    /// <summary>
+    /// How many pixels a field's widget actually paints, by rendering it.
+    ///
+    /// The point of asking is that PDFium reports success for a <c>/DA</c> that
+    /// names a font it cannot resolve — the string round-trips perfectly and the
+    /// field draws nothing. Pixels are the only witness. Rendered at one pixel
+    /// per point over the field's own rect, which for a form field is a few
+    /// thousand pixels and costs well under a millisecond.
+    /// </summary>
+    private int FieldInk(int pageIndex, string name)
+    {
+        if (GetFormFields(pageIndex).FirstOrDefault(f => f.Name == name) is not { } field
+            || field.Width <= 0 || field.Height <= 0)
+        {
+            return 0;
+        }
+
+        PageBitmap bitmap;
+        try
+        {
+            bitmap = RenderRegion(
+                pageIndex, 1f, 0,
+                (int)Math.Floor(field.X), (int)Math.Floor(field.Y),
+                Math.Max(1, (int)Math.Ceiling(field.Width)),
+                Math.Max(1, (int)Math.Ceiling(field.Height)));
+        }
+        catch (PdfiumException)
+        {
+            // No render, no evidence. Reporting "blank" here would revert a
+            // change that may well have worked, so report "do not know" as the
+            // same thing the caller treats as "leave it alone".
+            return 0;
+        }
+
+        try
+        {
+            int ink = 0;
+            for (int y = 0; y < bitmap.Height; y++)
+            {
+                for (int x = 0; x < bitmap.Width; x++)
+                {
+                    int i = (y * bitmap.Stride) + (x * 4);
+                    // Near-black only. A field sits inside a highlight wash and
+                    // often a border, so "not white" is saturated before the
+                    // glyphs are even counted.
+                    if (bitmap.Pixels[i] < 120 && bitmap.Pixels[i + 1] < 120 && bitmap.Pixels[i + 2] < 120)
+                    {
+                        ink++;
+                    }
+                }
+            }
+            return ink;
+        }
+        finally
+        {
+            bitmap.Return();
+        }
     }
 
     /// <summary>PDF's key for the default appearance string.</summary>

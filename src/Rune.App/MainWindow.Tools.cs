@@ -116,7 +116,8 @@ public sealed partial class MainWindow
 
             root.Children.Add(new TextBlock
             {
-                Text = "Click to place at the last size, or drag to draw the box.",
+                Text = "Click to place at the last size, or drag to draw the box. "
+                     + "Ctrl+wheel resizes it before you drop it.",
                 Style = secondary,
                 TextWrapping = TextWrapping.Wrap,
             });

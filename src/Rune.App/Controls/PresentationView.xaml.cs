@@ -104,8 +104,16 @@ public sealed partial class PresentationView : UserControl
 
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        var point = e.GetCurrentPoint(this).Properties;
-        if (point.IsRightButtonPressed)
+        var current = e.GetCurrentPoint(this);
+
+        // A finger has no second button, so going back was unreachable by touch:
+        // the show only ever advanced. The left edge is the back button instead,
+        // which is what a phone gallery or an e-reader does. Kept to a sixth of
+        // the width so it cannot swallow an ordinary tap-to-advance.
+        bool tappedBack = e.Pointer.PointerDeviceType != Microsoft.UI.Input.PointerDeviceType.Mouse &&
+            ActualWidth > 0 && current.Position.X < ActualWidth / 6;
+
+        if (current.Properties.IsRightButtonPressed || tappedBack)
         {
             Prev();
         }

@@ -136,6 +136,10 @@ public sealed class TextBoxSettings
     public byte B { get; set; }
     public bool Bold { get; set; }
     public bool Italic { get; set; }
+    public bool Underline { get; set; }
+
+    /// <summary>Name of a <c>TextAlign</c>; anything unrecognised falls back to Left.</summary>
+    public string Align { get; set; } = nameof(Engine.TextAlign.Left);
 }
 
 public sealed class ToolStyle

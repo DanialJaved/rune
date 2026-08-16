@@ -708,6 +708,94 @@ public static class PdfiumNative
             : null;
 
     /// <summary>
+    /// How far the font hangs below the baseline at this size, as a positive
+    /// number of points. Falls back to a twelfth of the size when PDFium will
+    /// not say — the standard 14 all sit near that, and an underline slightly
+    /// off is better than none.
+    /// </summary>
+    public static float GetFontDescent(IntPtr font, float fontSize)
+        => NativeMethods.FPDFFont_GetDescent(font, fontSize, out float descent) != 0
+            ? Math.Abs(descent)
+            : fontSize / 12f;
+
+    /// <summary>
+    /// A filled rectangle, ready to append. <paramref name="y"/> is its BOTTOM
+    /// edge, PDF's way up. Returns <see cref="IntPtr.Zero"/> when PDFium refuses
+    /// it, which callers treat as "no rule under this line" rather than as an
+    /// error worth taking the whole text box down for.
+    /// </summary>
+    public static IntPtr NewFilledRect(float x, float y, float width, float height, byte r, byte g, byte b)
+    {
+        IntPtr path = NativeMethods.FPDFPageObj_CreateNewRect(x, y, width, height);
+        if (path == IntPtr.Zero)
+        {
+            return IntPtr.Zero;
+        }
+        // Fill, no stroke. Without a draw mode the path carries no paint
+        // operator at all and serializes to something that draws nothing.
+        if (NativeMethods.FPDFPath_SetDrawMode(path, NativeMethods.FPDF_FILLMODE_WINDING, 0) == 0
+            || !SetObjectFillColor(path, r, g, b, 255))
+        {
+            DestroyPageObject(path);
+            return IntPtr.Zero;
+        }
+        return path;
+    }
+
+    // ---- Document properties ----
+
+    public static uint GetDocPermissions(IntPtr document) => NativeMethods.FPDF_GetDocPermissions(document);
+
+    /// <summary>The security handler revision, or -1 when the file is not encrypted.</summary>
+    public static int GetSecurityRevision(IntPtr document) => NativeMethods.FPDF_GetSecurityHandlerRevision(document);
+
+    public static bool IsTagged(IntPtr document) => NativeMethods.FPDFCatalog_IsTagged(document) != 0;
+
+    public static int GetAttachmentCount(IntPtr document) => NativeMethods.FPDFDoc_GetAttachmentCount(document);
+
+    public static int CountPageObjects(IntPtr page) => NativeMethods.FPDFPage_CountObjects(page);
+
+    public static IntPtr GetPageObject(IntPtr page, int index) => NativeMethods.FPDFPage_GetObject(page, index);
+
+    public static bool IsFormObject(IntPtr pageObject)
+        => NativeMethods.FPDFPageObj_GetType(pageObject) == NativeMethods.FPDF_PAGEOBJ_FORM;
+
+    public static int CountFormObjects(IntPtr formObject) => NativeMethods.FPDFFormObj_CountObjects(formObject);
+
+    public static IntPtr GetFormObject(IntPtr formObject, int index)
+        => NativeMethods.FPDFFormObj_GetObject(formObject, (uint)index);
+
+    /// <summary>
+    /// A text run's font as its name, whether it is embedded, and its descriptor
+    /// flags. One hop rather than three, because the font handle is borrowed
+    /// from the document and must not outlive the call that fetched it.
+    /// </summary>
+    public static (string Name, bool Embedded, int Flags)? DescribeTextObjectFont(IntPtr textObject)
+    {
+        IntPtr font = NativeMethods.FPDFTextObj_GetFont(textObject);
+        if (font == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        uint length = NativeMethods.FPDFFont_GetBaseFontName(font, null, 0);
+        if (length <= 1)
+        {
+            return null; // 0 is failure, 1 is the terminator alone
+        }
+
+        var buffer = new byte[length];
+        if (NativeMethods.FPDFFont_GetBaseFontName(font, buffer, length) != length)
+        {
+            return null;
+        }
+
+        return (System.Text.Encoding.ASCII.GetString(buffer, 0, (int)length - 1),
+                NativeMethods.FPDFFont_GetIsEmbedded(font) != 0,
+                NativeMethods.FPDFFont_GetFlags(font));
+    }
+
+    /// <summary>
     /// Points an image object at BGRA pixels.
     ///
     /// The buffer must stay pinned for the duration of the call — PDFium copies

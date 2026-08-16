@@ -1,6 +1,6 @@
 # Privacy Policy — Rune PDF Reader
 
-_Last updated: 8 August 2026_
+_Last updated: 12 August 2026_
 
 **Rune does not collect, transmit, or share any personal data.**
 
@@ -19,7 +19,11 @@ All of it lives in `%LOCALAPPDATA%\Rune` on your own machine:
 | Bookmarks you create | To restore them next time you open that document |
 | Your preferences (theme, sidebar, keyboard options) | To remember your settings |
 | Signatures you draw or import, in `signatures\` | So you can reuse one instead of redrawing it |
+| A copy of a document you shared with unsaved edits, in `share\` | So the app you sent it to receives what you were looking at |
 | An error log, if something goes wrong | To help diagnose a crash |
+
+Copies in `share\` are deleted an hour after they are written, on the next
+share. You can delete the folder at any time.
 
 **Your signature never leaves the device.** It is stored as an ordinary image
 file in `%LOCALAPPDATA%\Rune\signatures`, is never uploaded or transmitted, and
@@ -42,6 +46,10 @@ in the application. Earlier versions of the portable build could ask GitHub
 whether a newer release existed; that check was removed, and updates now come
 from the Microsoft Store.
 
+Share is not an exception. It hands the file to Windows, which hands it to the
+app you chose; Rune opens no connection of its own. Whether the file then goes
+anywhere is up to that app.
+
 ## Your documents
 
 Rune opens PDF files from your device and renders them locally. Documents are
@@ -53,6 +61,14 @@ your own device.
 submits them anywhere. A PDF's own Submit button is not wired up: Rune does not
 execute form actions or form JavaScript, so nothing you type into a form can be
 sent over the network by the document itself.
+
+**Sharing is the one thing that hands a document to something else, and only
+when you ask.** Share opens the Windows share sheet and gives the PDF to the app
+you pick from it. Rune does not choose the destination, does not upload
+anything itself, and has no say in what the receiving app does next — if you
+pick a mail or cloud app, the file goes wherever that app sends it. If the
+document has edits you have not saved, Rune shares a copy that includes them
+rather than the older file on disk; your original is left untouched.
 
 ## Children
 
