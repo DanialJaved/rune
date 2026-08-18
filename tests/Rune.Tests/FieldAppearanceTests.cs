@@ -222,6 +222,96 @@ public class FieldAppearanceTests
         Assert.False(doc.SetFieldAppearance(0, "no-such-field", FieldAppearance.Default));
     }
 
+    // ---- bold and italic, where the file carries the font for it ----
+
+    [Theory]
+    [InlineData("Helv", false, false, "Helv")]
+    [InlineData("Helv", true, false, "HeBo")]
+    [InlineData("Helv", false, true, "HeOb")]
+    [InlineData("Helv", true, true, "HeBO")]
+    [InlineData("TiRo", true, false, "TiBo")]
+    [InlineData("TiRo", false, true, "TiIt")]
+    [InlineData("TiBI", false, false, "TiRo")]
+    [InlineData("Cour", true, true, "CoBO")]
+    public void TryWrite_SwapsTheResourceNameForItsSibling(
+        string from, bool bold, bool italic, string expected)
+    {
+        string? written = DefaultAppearance.TryWrite(
+            $"/{from} 12 Tf 0 g", new FieldAppearance(12, 0, 0, 0, bold, italic));
+
+        Assert.NotNull(written);
+        Assert.StartsWith($"/{expected} ", written);
+    }
+
+    [Fact]
+    public void TryWrite_LeavesANameItDoesNotRecogniseAlone()
+    {
+        // A file that calls its font /F1 says nothing about what /F2 would be,
+        // and naming a resource the /DR does not have gives a field that renders
+        // in no font at all. Better to change nothing.
+        string? written = DefaultAppearance.TryWrite(
+            "/F1 10 Tf 0 g", new FieldAppearance(14, 0, 0, 0, Bold: true));
+
+        Assert.NotNull(written);
+        Assert.StartsWith("/F1 ", written);
+        Assert.Contains("14", written); // the size still went through
+    }
+
+    [Fact]
+    public void TryWrite_LeavesTheFaceAloneWhenNeitherWasAskedFor()
+    {
+        // Null means "not asked", which is what the size-and-colour dialog
+        // sends. A bold field must not quietly un-bold itself when someone
+        // changes its colour.
+        string? written = DefaultAppearance.TryWrite("/HeBo 12 Tf 0 g", new FieldAppearance(18, 0, 0, 0));
+
+        Assert.NotNull(written);
+        Assert.StartsWith("/HeBo ", written);
+    }
+
+    [Fact]
+    public void TryRead_ReportsTheFaceOnlyForANameThatCanCarryIt()
+    {
+        Assert.Equal((true, false), Face(DefaultAppearance.TryRead("/HeBo 12 Tf 0 g")));
+        Assert.Equal((false, true), Face(DefaultAppearance.TryRead("/TiIt 12 Tf 0 g")));
+        Assert.Equal((false, false), Face(DefaultAppearance.TryRead("/Cour 12 Tf 0 g")));
+
+        // Not "regular" — unknown. Claiming a /F1 field is not bold would let a
+        // Ctrl+B toggle turn a bold field bolder and call it a change.
+        var unknown = DefaultAppearance.TryRead("/F1 12 Tf 0 g");
+        Assert.NotNull(unknown);
+        Assert.Null(unknown!.Value.Bold);
+        Assert.Null(unknown.Value.Italic);
+
+        static (bool?, bool?) Face(FieldAppearance? a) => (a!.Value.Bold, a.Value.Italic);
+    }
+
+    [Fact]
+    public void SetFieldAppearance_RefusesRatherThanBlankingAFieldTheFontIsMissingFor()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("form.pdf"));
+
+        doc.FormClick(0, NameX, NameY);
+        foreach (char c in "Wwwwwwww")
+        {
+            doc.FormChar(0, c);
+        }
+        doc.FormKillFocus();
+
+        int before = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
+        Assert.True(before > 0, "the field drew nothing to begin with, so this proves nothing");
+
+        // Whether form.pdf's /DR carries a bold face is not this test's business.
+        // Either the swap works and the text is still there, or it does not and
+        // the engine puts the old /DA back — what must NOT happen is a field
+        // that reports success and renders blank.
+        bool applied = doc.SetFieldAppearance(0, "name", new FieldAppearance(12, 0, 0, 0, Bold: true));
+        int after = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
+
+        Assert.True(after > 0,
+            $"the field went blank: {before} dark pixels before, {after} after, applied={applied}");
+    }
+
     /// <summary>
     /// Strongly red pixels. The field sits under a blue highlight wash, so
     /// "not white" is saturated before the test starts and cannot see the text.

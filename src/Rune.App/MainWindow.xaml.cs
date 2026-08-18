@@ -28,6 +28,7 @@ public sealed partial class MainWindow : Window
     private int _activeHitIndex = -1;
 
     private PrintService? _printService;
+    private ShareService? _shareService;
     private DateTime _lastGPress = DateTime.MinValue; // vim "gg" sequence
 
     public MainWindow()
@@ -625,8 +626,8 @@ public sealed partial class MainWindow : Window
         }
         foreach (var item in new MenuFlyoutItemBase[]
                  {
-                     SaveMenuItem, SaveAsMenuItem, PrintMenuItem,
-                     PropertiesMenuItem, PresentMenuItem,
+                     SaveMenuItem, SaveAsMenuItem, PrintMenuItem, ShareMenuItem,
+                     PropertiesMenuItem, PresentMenuItem, BookmarkMenuItem,
                  })
         {
             item.IsEnabled = ready;
@@ -696,13 +697,22 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// A tool button arms its tool and shows its options. Clicking the armed
-    /// tool again just re-opens the panel rather than disarming — matching the
-    /// old pen button, where accidentally turning drawing off mid-session was
-    /// the more annoying failure. Esc disarms.
+    /// A tool button arms its tool and shows its options, and pressing the armed
+    /// tool again puts it away.
+    ///
+    /// It used to re-open the panel instead, on the grounds that turning drawing
+    /// off by accident mid-session was the more annoying failure and Esc was
+    /// there to disarm. That reasoning assumed a keyboard. Note, Image and
+    /// Eraser carry no options panel and so have no Done button either, which on
+    /// a tablet left the eraser armed with no way at all to put it down.
     /// </summary>
     private void ToolButton_Click(AnnotationTool tool)
     {
+        if (_activeViewer?.ActiveTool == tool)
+        {
+            SetActiveTool(AnnotationTool.None);
+            return;
+        }
         SetActiveTool(tool);
         ShowToolOptions(tool);
     }
@@ -782,6 +792,8 @@ public sealed partial class MainWindow : Window
     private void PropertiesButton_Click(object sender, RoutedEventArgs e) => _ = ShowPropertiesAsync();
     private void FindButton_Click(object sender, RoutedEventArgs e) => ShowFindBar();
     private void PresentMenuItem_Click(object sender, RoutedEventArgs e) => TogglePresentation();
+    private void BookmarkMenuItem_Click(object sender, RoutedEventArgs e) => ToggleBookmark();
+    private void PaletteMenuItem_Click(object sender, RoutedEventArgs e) => ShowPalette();
     private void UndoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.UndoAsync();
     private void RedoMenuItem_Click(object sender, RoutedEventArgs e) => _ = CurrentView?.RedoAsync();
 
@@ -1208,6 +1220,56 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private void ShareMenuItem_Click(object sender, RoutedEventArgs e) => _ = ShareAsync();
+
+    /// <summary>
+    /// Hands the document to another app through the Windows share sheet.
+    ///
+    /// Unsaved annotations go with it: the service writes a copy under the
+    /// document's own name and shares that, so what the other app receives is
+    /// what is on screen. The file on disk is not touched, and nothing is saved
+    /// that the user did not ask to save.
+    /// </summary>
+    private async Task ShareAsync()
+    {
+        if (CurrentView is not { IsDocumentLoaded: true, LoadError: null } view
+            || view.Viewer.Document is not { } document)
+        {
+            return;
+        }
+
+        // A field being typed into holds its value in the widget until focus
+        // leaves it, so without this the copy goes out a keystroke behind —
+        // the same reason SaveAs kills focus before serializing.
+        view.Viewer.KillFormFocus();
+
+        try
+        {
+            _shareService ??= new ShareService(WinRT.Interop.WindowNative.GetWindowHandle(this));
+            await _shareService.ShowAsync(
+                view.FilePath,
+                view.DisplayName,
+                view.IsDirty ? document : null,
+                view.Viewer.WorkQueue);
+        }
+        catch (Exception ex)
+        {
+            ErrorLog.Default.Write(nameof(MainWindow), ex);
+            ShowError($"Sharing failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>How many pages the font scan walks before it calls it a day.</summary>
+    private const int FontScanPageCap = 50;
+
+    /// <summary>
+    /// Ctrl+D. Everything the file says about itself, in sections.
+    ///
+    /// The fonts arrive after the dialog does. Everything else is a dictionary
+    /// lookup, but a font list means walking page objects, and making Ctrl+D sit
+    /// there for a second on a long document to answer a question most people
+    /// are not asking would be the wrong trade.
+    /// </summary>
     private async Task ShowPropertiesAsync()
     {
         if (CurrentView is not { IsDocumentLoaded: true, LoadError: null } view || view.Viewer.Document is not { } document)
@@ -1215,23 +1277,117 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var properties = await view.Viewer.RunOnRenderThreadAsync(PdfWorkPriority.Interactive, document.GetProperties);
+        int page = view.Viewer.CurrentPage;
+        var sections = await view.Viewer.RunOnRenderThreadAsync(
+            PdfWorkPriority.Interactive, () => document.GetDocumentProperties(page));
 
-        var panel = new StackPanel { Spacing = 6, MinWidth = 360 };
-        foreach (var (name, value) in properties)
+        var panel = new StackPanel { Spacing = 14, MinWidth = 420 };
+        foreach (var section in sections)
         {
-            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            row.Children.Add(new TextBlock { Text = name, Opacity = 0.6, MinWidth = 110 });
-            row.Children.Add(new TextBlock { Text = value, TextWrapping = TextWrapping.Wrap, MaxWidth = 340, IsTextSelectionEnabled = true });
-            panel.Children.Add(row);
+            panel.Children.Add(BuildPropertySection(section.Title, section.Rows));
         }
 
-        await ShowDialogAsync(new ContentDialog
+        // A placeholder that fills itself in, rather than a section that pops
+        // into existence and shoves the rest of the dialog down.
+        var fonts = new StackPanel { Spacing = 4 };
+        panel.Children.Add(BuildPropertySection("Fonts", [("", "Looking…")], fonts));
+
+        var dialog = new ContentDialog
         {
             Title = view.DisplayName,
-            Content = new ScrollViewer { Content = panel, MaxHeight = 420 },
+            Content = new ScrollViewer { Content = panel, MaxHeight = 460 },
             CloseButtonText = "Close",
+        };
+
+        _ = FillFontsAsync(view, document, fonts);
+        await ShowDialogAsync(dialog);
+    }
+
+    /// <summary>One headed group of rows, in the same shape the report dialog uses.</summary>
+    private static StackPanel BuildPropertySection(
+        string title, IReadOnlyList<(string Name, string Value)> rows, StackPanel? body = null)
+    {
+        var section = new StackPanel { Spacing = 4 };
+        section.Children.Add(new TextBlock
+        {
+            Text = title,
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+            Opacity = 0.6,
         });
+
+        body ??= new StackPanel { Spacing = 4 };
+        foreach (var (name, value) in rows)
+        {
+            body.Children.Add(PropertyRow(name, value));
+        }
+        section.Children.Add(body);
+        return section;
+    }
+
+    private static Grid PropertyRow(string name, string value)
+    {
+        var row = new Grid { ColumnSpacing = 12 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        row.Children.Add(new TextBlock
+        {
+            Text = name,
+            Opacity = 0.6,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        // Selectable throughout: people open this dialog to copy a title, a
+        // producer string or a path out of it.
+        var text = new TextBlock
+        {
+            Text = value,
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+        };
+        Grid.SetColumn(text, 1);
+        row.Children.Add(text);
+        return row;
+    }
+
+    /// <summary>
+    /// Walks the pages for fonts at Background priority, so visible tiles keep
+    /// outranking it, and replaces the placeholder when it lands.
+    /// </summary>
+    private async Task FillFontsAsync(DocumentView view, PdfDocument document, StackPanel body)
+    {
+        IReadOnlyList<FontUsage> fonts;
+        try
+        {
+            fonts = await view.Viewer.RunOnRenderThreadAsync(
+                PdfWorkPriority.Background, () => document.GetFontsUsed(FontScanPageCap));
+        }
+        catch
+        {
+            // Closed, swapped, or the scan threw. The dialog is still useful.
+            body.Children.Clear();
+            body.Children.Add(PropertyRow("", "Could not be read."));
+            return;
+        }
+
+        body.Children.Clear();
+        if (fonts.Count == 0)
+        {
+            body.Children.Add(PropertyRow("", "This document draws no text."));
+            return;
+        }
+
+        foreach (var font in fonts)
+        {
+            string kind = font.Kind == "—" ? "" : $", {font.Kind}";
+            body.Children.Add(PropertyRow(
+                font.Name, $"{(font.Embedded ? "Embedded" : "Not embedded")}{kind}"));
+        }
+
+        if (document.PageCount > FontScanPageCap)
+        {
+            body.Children.Add(PropertyRow("", $"Found in the first {FontScanPageCap} pages."));
+        }
     }
 
     private void ReportProblemMenuItem_Click(object sender, RoutedEventArgs e) => _ = ShowReportProblemAsync();
@@ -1489,6 +1645,7 @@ public sealed partial class MainWindow : Window
                 new("Save As…", "Ctrl+Shift+S", () => _ = SaveAsActiveAsync()),
                 new("Extract selected pages to a new file…", "", () => _ = ExtractSelectedPagesFromPaletteAsync()),
                 new("Print", "Ctrl+P", () => _ = PrintAsync()),
+                new("Share…", "", () => _ = ShareAsync()),
                 new("Document properties", "Ctrl+D", () => _ = ShowPropertiesAsync()),
                 new("Toggle night mode", "Ctrl+I", ToggleNightMode),
                 new("Toggle sidebar", "F9", () => SidebarButton_Click(this, null!)),
@@ -1691,11 +1848,9 @@ public sealed partial class MainWindow : Window
         AddAccelerator(VirtualKey.F, VirtualKeyModifiers.Control, ShowFindBar);
         AddAccelerator(VirtualKey.F3, VirtualKeyModifiers.None, () => StepHit(+1));
         AddAccelerator(VirtualKey.F3, VirtualKeyModifiers.Shift, () => StepHit(-1));
-        AddAccelerator(VirtualKey.I, VirtualKeyModifiers.Control, ToggleNightMode);
         AddAccelerator(VirtualKey.P, VirtualKeyModifiers.Control, () => _ = PrintAsync());
         AddAccelerator(VirtualKey.D, VirtualKeyModifiers.Control, () => _ = ShowPropertiesAsync());
         AddAccelerator(VirtualKey.H, VirtualKeyModifiers.Control, () => _activeViewer?.MarkupSelection(MarkupKind.Highlight));
-        AddAccelerator(VirtualKey.E, VirtualKeyModifiers.Control, TogglePenTool);
         AddAccelerator(VirtualKey.T, VirtualKeyModifiers.Control,
             () => TextToolButton_Click(this, null!), skipWhenTextInputFocused: true);
         AddAccelerator(VirtualKey.S, VirtualKeyModifiers.Control, () => _ = SaveActiveAsync());
@@ -1703,12 +1858,12 @@ public sealed partial class MainWindow : Window
 
         // Moved off the old CommandBar buttons when the header was slimmed down.
         AddAccelerator(VirtualKey.F9, VirtualKeyModifiers.None, () => SidebarButton_Click(this, null!));
-        AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control, () => _activeViewer?.RotateClockwise());
         AddAccelerator(VirtualKey.R, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift,
             () => _activeViewer?.RotateCounterClockwise());
-        AddAccelerator(VirtualKey.B, VirtualKeyModifiers.Control, ToggleBookmark);
         AddAccelerator(VirtualKey.Z, VirtualKeyModifiers.Control, () => _ = CurrentView?.UndoAsync());
         AddAccelerator(VirtualKey.Y, VirtualKeyModifiers.Control, () => _ = CurrentView?.RedoAsync());
+
+        AddTextFormattingAccelerators();
 
         // Available even with no document open.
         AddAccelerator(VirtualKey.O, VirtualKeyModifiers.Control, () => OpenButton_Click(this, null!), requiresDocument: false);
@@ -1770,18 +1925,53 @@ public sealed partial class MainWindow : Window
             () => CurrentView?.TryPastePages(), skipWhenTextInputFocused: true);
     }
 
+    /// <summary>
+    /// Registers one chord, with up to three meanings depending on where the
+    /// caret is.
+    /// </summary>
+    /// <param name="action">
+    /// What the chord does to the document. Null for a chord that only ever
+    /// means something to a caret, like Ctrl+U.
+    /// </param>
+    /// <param name="textBoxAction">
+    /// What it does while a text box is open. Ctrl+B has to bold the words
+    /// rather than bookmark the page, and Ctrl+R align them right rather than
+    /// rotate the document.
+    /// </param>
+    /// <param name="formFieldAction">
+    /// What it does while a PDF form field has focus. Same reasoning: filling in
+    /// a form and reaching for Ctrl+B must not flip night mode.
+    /// </param>
     private void AddAccelerator(
-        VirtualKey key, VirtualKeyModifiers modifiers, Action action,
-        bool requiresDocument = true, bool skipWhenTextInputFocused = false)
+        VirtualKey key, VirtualKeyModifiers modifiers, Action? action,
+        bool requiresDocument = true, bool skipWhenTextInputFocused = false,
+        Action? textBoxAction = null, Action? formFieldAction = null)
     {
+        // A chord that means something to a caret must never fall through to the
+        // document when a caret has it — including the find box's, which owns no
+        // formatting but must not lose the keystroke either.
+        bool caretAware = skipWhenTextInputFocused || textBoxAction is not null || formFieldAction is not null;
+
         var accelerator = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
         accelerator.Invoked += (_, args) =>
         {
-            if (skipWhenTextInputFocused && IsTextInputFocused())
+            if (textBoxAction is not null && _activeViewer?.IsEditingText == true)
+            {
+                textBoxAction();
+                args.Handled = true;
+                return;
+            }
+            if (formFieldAction is not null && _activeViewer?.IsFormFieldFocused == true)
+            {
+                formFieldAction();
+                args.Handled = true;
+                return;
+            }
+            if (caretAware && IsTextInputFocused())
             {
                 return; // leave args.Handled false so the text box gets the key
             }
-            if (!requiresDocument || _activeViewer is not null)
+            if (action is not null && (!requiresDocument || _activeViewer is not null))
             {
                 action();
                 args.Handled = true;

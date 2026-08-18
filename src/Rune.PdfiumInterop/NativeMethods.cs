@@ -664,6 +664,80 @@ internal static partial class NativeMethods
         IntPtr pageObject, out uint r, out uint g, out uint b, out uint a);
 
     /// <summary>
+    /// The font's descent at a given size, in page points and NEGATIVE — it
+    /// measures downwards from the baseline. This is what puts an underline
+    /// under the descenders rather than through them.
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFFont_GetDescent(IntPtr font, float fontSize, out float descent);
+
+    // ---- Paths (fpdf_edit.h) ----
+    //
+    // Rune draws exactly one path: the rule under underlined text. A filled
+    // rectangle rather than a stroked line, because a fill needs no line-width
+    // state and lands identically in every renderer.
+
+    /// <summary>Origin is the BOTTOM-left, PDF's way up, not the top-left.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFPageObj_CreateNewRect(float x, float y, float w, float h);
+
+    /// <summary>Without this a path carries no paint operator and draws nothing.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPath_SetDrawMode(IntPtr path, int fillMode, int stroke);
+
+    /// <summary>FPDF_FILLMODE_WINDING.</summary>
+    internal const int FPDF_FILLMODE_WINDING = 1;
+
+    // ---- Document properties (fpdfview.h, fpdf_catalog.h, fpdf_attachment.h) ----
+
+    /// <summary>
+    /// The /P entry of the encryption dictionary as a bit field, or 0xFFFFFFFF
+    /// when the document is not encrypted (every permission granted).
+    /// </summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern uint FPDF_GetDocPermissions(IntPtr document);
+
+    /// <summary>The /R of the security handler, or -1 when there is none.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDF_GetSecurityHandlerRevision(IntPtr document);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFCatalog_IsTagged(IntPtr document);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFDoc_GetAttachmentCount(IntPtr document);
+
+    /// <summary>Objects in the page's own content stream, not in its annotations.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFPage_CountObjects(IntPtr page);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFPage_GetObject(IntPtr page, int index);
+
+    /// <summary>A form XObject's children — where a lot of real text hides.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFFormObj_CountObjects(IntPtr formObject);
+
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern IntPtr FPDFFormObj_GetObject(IntPtr formObject, uint index);
+
+    /// <summary>
+    /// FPDF_PAGEOBJ_FORM. Five, not six — fpdf_edit.h numbers them UNKNOWN 0,
+    /// TEXT 1, PATH 2, IMAGE 3, SHADING 4, FORM 5, and getting this wrong fails
+    /// silently: the type check simply never matches and every form XObject on
+    /// the page is walked straight past.
+    /// </summary>
+    internal const int FPDF_PAGEOBJ_FORM = 5;
+
+    /// <summary>True when the font program travels with the file.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFFont_GetIsEmbedded(IntPtr font);
+
+    /// <summary>The /Flags of the font descriptor, or -1. See PDF 32000-1 table 123.</summary>
+    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int FPDFFont_GetFlags(IntPtr font);
+
+    /// <summary>
     /// The image's own decoded bitmap, at its native pixel size and ignoring the
     /// object's matrix. Caller destroys it with FPDFBitmap_Destroy.
     /// </summary>

@@ -8,7 +8,7 @@
     <AssemblyName>Rune</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\rune.ico</ApplicationIcon>
-    <Version>0.7.0</Version>
+    <Version>0.8.0</Version>
     <Platforms>x64;ARM64</Platforms>
     <!-- The RID must follow Platform, or a multi-arch Store bundle builds the
          ARM64 leg with win-x64 and fails (NETSDK1032). -->
@@ -24,7 +24,22 @@
     <!-- Default: unpackaged self-contained exe (dev + portable zip).
          Release MSIX overrides on the command line: -p:WindowsPackageType=MSIX -->
     <WindowsPackageType Condition="'$(WindowsPackageType)' == ''">None</WindowsPackageType>
+    <!-- TWO SEPARATE PROPERTIES, and they sound like one. The first bundles the
+         Windows App SDK; the second bundles the .NET RUNTIME. Having only the
+         first is what shipped every Store package through v0.7.0 with no
+         runtime inside it: the portable zip passes the self-contained flag on
+         its `dotnet publish` command line and worked, while the MSIX is
+         packaged from a plain `dotnet build` that passed nothing and did not.
+         First launch from the Store then put up Windows' "you must install
+         .NET" download dialog, which never reproduces on a dev machine because
+         a dev machine has the runtime.
+
+         So it lives HERE, unconditionally, rather than on either command line —
+         neither path can carry it alone, and Debug builds what Release ships.
+         `tools/check-package.ps1` asserts the runtime actually made it into the
+         package, because this failure is otherwise completely silent. -->
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
     <!-- Rune's UI is English only, so per-culture satellite assemblies are dead
          weight in a self-contained build. -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

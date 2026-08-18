@@ -98,7 +98,7 @@ public sealed partial class PdfViewer
     /// Handles a press that landed on a form field. Returns true when the
     /// click was consumed, so links and text selection stay out of the way.
     /// </summary>
-    private bool TryHandleFormPress(Point docPoint)
+    private bool TryHandleFormPress(Point docPoint, bool touch)
     {
         if (_layout is null || _document is not { HasFillableForm: true } document)
         {
@@ -112,10 +112,14 @@ public sealed partial class PdfViewer
             return false; // geometry not in yet; this click falls through to selection
         }
 
+        // Form fields are often a few points tall, which a mouse hits exactly
+        // and a fingertip does not. The slop is zero for a mouse, so nothing
+        // about the existing behaviour moves.
+        double slop = TouchSlopPt(touch);
         var local = ToPageLocal(page, docPoint);
         var hit = fields.FirstOrDefault(f =>
-            local.X >= f.X && local.X <= f.X + f.Width &&
-            local.Y >= f.Y && local.Y <= f.Y + f.Height);
+            local.X >= f.X - slop && local.X <= f.X + f.Width + slop &&
+            local.Y >= f.Y - slop && local.Y <= f.Y + f.Height + slop);
 
         if (hit is null)
         {
@@ -145,12 +149,23 @@ public sealed partial class PdfViewer
         _formFocusField = hit;
         Focus(FocusState.Pointer);
 
+        // A PDF form field is drawn by PDFium onto the Win2D canvas, so as far
+        // as Windows is concerned nothing that accepts text just took focus and
+        // the touch keyboard never appears on its own. On a tablet that made
+        // form filling impossible: the field takes the caret and there is no way
+        // to put a character in it. Asking for the pane explicitly is the fix.
+        if (touch)
+        {
+            ShowTouchKeyboard();
+        }
+
         // Press only. The release comes from Canvas_PointerReleased and anything
         // in between is a drag, which is the only way PDFium's edit control will
         // select text: it starts the selection on the button-down and extends it
         // on each move. Sending a down and an up at one point, as this used to,
         // places the caret and can never select anything.
         _formPointerDown = true;
+        _lastFormDragPoint = docPoint;
         DispatchFormPointer(document, page, local.X, local.Y, FormPointer.Down);
         return true;
     }
@@ -162,6 +177,12 @@ public sealed partial class PdfViewer
 
     private enum FormPointer { Down, Move, Up }
 
+    /// <summary>
+    /// Where the drag last was, so a gesture the system cancels can still send
+    /// PDFium the button-up it is waiting for. A cancel carries no position.
+    /// </summary>
+    private Point _lastFormDragPoint;
+
     /// <summary>Extends the selection while the button is held inside a field.</summary>
     private void UpdateFormDrag(Point docPoint)
     {
@@ -169,6 +190,7 @@ public sealed partial class PdfViewer
         {
             return;
         }
+        _lastFormDragPoint = docPoint;
         var local = ToPageLocal(_formFocusPage, docPoint);
         DispatchFormPointer(document, _formFocusPage, local.X, local.Y, FormPointer.Move);
     }
@@ -188,6 +210,95 @@ public sealed partial class PdfViewer
         }
         var local = ToPageLocal(_formFocusPage, docPoint);
         DispatchFormPointer(document, _formFocusPage, local.X, local.Y, FormPointer.Up);
+    }
+
+    // ---- touch keyboard ----
+    //
+    // A PDF form field is not a XAML control. It is pixels PDFium drew onto the
+    // Win2D canvas, and the caret inside it is PDFium's too, so Windows sees no
+    // text input take focus and never raises the soft keyboard. With a hardware
+    // keyboard that costs nothing. On a tablet it meant a field could be focused
+    // and then never typed into, which is the whole feature gone.
+
+    private Windows.UI.ViewManagement.InputPane? _inputPane;
+
+    /// <summary>
+    /// The soft keyboard for this window. A desktop app has no CoreWindow, so
+    /// the WinRT type has to be asked for by HWND — the same reason printing
+    /// goes through PrintManagerInterop and sharing through
+    /// DataTransferManagerInterop.
+    /// </summary>
+    private Windows.UI.ViewManagement.InputPane? TouchKeyboard()
+    {
+        if (_inputPane is not null)
+        {
+            return _inputPane;
+        }
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow!);
+            _inputPane = Windows.UI.ViewManagement.InputPaneInterop.GetForWindow(hwnd);
+        }
+        catch
+        {
+            _inputPane = null; // no pane here; a hardware keyboard still works
+        }
+        return _inputPane;
+    }
+
+    private void ShowTouchKeyboard()
+    {
+        if (TouchKeyboard() is not { } pane)
+        {
+            return;
+        }
+        // GetForWindow hands every tab's viewer the same instance, so the pair
+        // keeps this one subscribed exactly once however often a field is tapped.
+        pane.Showing -= InputPane_Showing;
+        pane.Showing += InputPane_Showing;
+        // Returns true when Windows accepts the request. Whether the pane is
+        // then actually painted is the system's call, not ours: with a hardware
+        // keyboard attached and the device not in tablet posture it accepts and
+        // stays hidden, which is correct and is what happens on a desktop.
+        pane.TryShow();
+    }
+
+    private void HideTouchKeyboard()
+    {
+        if (_inputPane is not { } pane)
+        {
+            return;
+        }
+        pane.Showing -= InputPane_Showing;
+        pane.TryHide();
+    }
+
+    /// <summary>
+    /// The keyboard covers the bottom of a tablet screen, and a field underneath
+    /// it is a field being typed into blind. Scroll it clear.
+    /// </summary>
+    private void InputPane_Showing(
+        Windows.UI.ViewManagement.InputPane sender,
+        Windows.UI.ViewManagement.InputPaneVisibilityEventArgs args)
+    {
+        if (_formFocusField is not { } field || _layout is null || _pageSizes.Length == 0)
+        {
+            return;
+        }
+
+        // The field's own corners, through the view rotation, into the viewport.
+        var a = ToDocumentPoint(_formFocusPage, field.X, field.Y);
+        var b = ToDocumentPoint(_formFocusPage, field.X + field.Width, field.Y + field.Height);
+        double bottom = Math.Max(a.Y, b.Y) - Scroller.VerticalOffset;
+
+        double clear = args.OccludedRect.Y - 16;
+        if (clear <= 0 || bottom <= clear)
+        {
+            return;
+        }
+
+        Scroller.ChangeView(null, Scroller.VerticalOffset + (bottom - clear), null, false);
+        args.EnsuredFocusedElementInView = true;
     }
 
     /// <summary>Whether a field is the one that currently has focus.</summary>
@@ -244,6 +355,74 @@ public sealed partial class PdfViewer
 
         FormAppearanceRequested?.Invoke(this,
             new FormAppearanceRequest(page, name, current ?? FieldAppearance.Default));
+    }
+
+    /// <summary>
+    /// Restyles whatever field has focus right now. Returns false when there is
+    /// none, when it has no <c>/DA</c> to rewrite, or when the change was
+    /// rejected — the three cases the caller treats identically, because the
+    /// user pressed a key and nothing happened.
+    ///
+    /// This is the keyboard's way in: Ctrl+B and Ctrl+Shift+&gt; act on the field
+    /// under the caret, where the restyle dialog acts on one picked by name.
+    /// </summary>
+    public async Task<bool> RestyleFocusedFieldAsync(Func<FieldAppearance, FieldAppearance> change)
+    {
+        if (_formFocusField is not { } field || _document is not { } document)
+        {
+            return false;
+        }
+
+        int page = _formFocusPage;
+        string name = field.Name;
+
+        FieldAppearance? current;
+        try
+        {
+            current = await _scheduler.RunAsync(
+                PdfWorkPriority.Interactive, () => document.GetFieldAppearance(page, name));
+        }
+        catch
+        {
+            return false;
+        }
+        if (_document != document || current is not { } appearance)
+        {
+            return false;
+        }
+
+        bool applied = await ApplyFieldAppearanceAsync(page, name, change(appearance));
+
+        // Rewriting a /DA rebuilds the page's form state, which means committing
+        // and dropping the focused widget first — so a restyle from the keyboard
+        // would otherwise throw the caret out of the field the user is still
+        // filling in. Put it back, whether or not the change took: they pressed
+        // a formatting key, not Tab.
+        RefocusField(page, field);
+        return applied;
+    }
+
+    /// <summary>
+    /// Re-establishes the caret in a field by replaying a click at its centre,
+    /// which is the only way PDFium's form layer takes focus. Silent if the
+    /// field is no longer there.
+    /// </summary>
+    private void RefocusField(int page, FormFieldInfo field)
+    {
+        if (_document is not { HasFillableForm: true } document)
+        {
+            return;
+        }
+
+        double centreX = field.X + (field.Width / 2);
+        double centreY = field.Y + (field.Height / 2);
+
+        _formFocusPage = page;
+        _formFocusField = field;
+        Focus(FocusState.Programmatic);
+
+        DispatchFormPointer(document, page, centreX, centreY, FormPointer.Down);
+        DispatchFormPointer(document, page, centreX, centreY, FormPointer.Up);
     }
 
     /// <summary>
@@ -472,6 +651,10 @@ public sealed partial class PdfViewer
         int page = _formFocusPage;
         _formFocusPage = -1;
         _formFocusField = null;
+
+        // Nothing is taking typed characters any more, so the soft keyboard has
+        // no business covering a third of the page.
+        HideTouchKeyboard();
 
         if (page < 0 || _document is not { HasFillableForm: true } document)
         {

@@ -173,6 +173,172 @@ public class TextBoxTests
         }
     }
 
+    // ---- the box's width, and what the words do inside it ----
+
+    private const string Paragraph =
+        "The quick brown fox jumps over the lazy dog and keeps on running well past it";
+
+    [Fact]
+    public void NoWidth_MeansNoWrapping()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+
+        var rect = doc.AddTextBox(0, 40, 100, Text(Paragraph, size: 12))!.Rect;
+
+        // One line, however long: an auto-width box is as wide as its words and
+        // runs off the page rather than wrapping. This is what a box is until
+        // someone drags a corner, and it is deliberate.
+        Assert.InRange(rect.T - rect.B, 1, 12 * TextBoxContent.LineHeight);
+    }
+
+    [Fact]
+    public void Width_WrapsTheWordsAndKeepsThePointSize()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+
+        var loose = doc.AddTextBox(0, 40, 100, Text(Paragraph, size: 12) with { WidthPt = 300 })!;
+        var tight = doc.AddTextBox(0, 40, 300, Text(Paragraph, size: 12) with { WidthPt = 120 })!;
+
+        // Narrower box, more lines, same size — that is the whole contract.
+        Assert.True((tight.Rect.T - tight.Rect.B) > (loose.Rect.T - loose.Rect.B),
+            "a narrower box did not produce a taller block");
+        Assert.Equal(12, doc.TryReadTextBox(0, 0)!.FontSize, 1);
+        Assert.Equal(12, doc.TryReadTextBox(0, 1)!.FontSize, 1);
+    }
+
+    [Fact]
+    public void Width_IsTheBoxRect_NotTheInk()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+
+        // Two words in a wide box: the ink is nowhere near 400pt, but the rect
+        // has to be, or a re-read would shrink the box the user dragged.
+        var rect = doc.AddTextBox(0, 40, 100, Text("Ay", size: 12) with { WidthPt = 400 })!.Rect;
+
+        Assert.InRange(rect.R - rect.L, 399, 401);
+        Assert.InRange(rect.L, 39, 41);
+    }
+
+    [Fact]
+    public void Alignment_PutsTheWordsWhereItSays()
+    {
+        // The rect is the box whichever way the line is aligned, so only the
+        // pixels can tell these apart. One short line in a wide box, measured in
+        // its own band of the page so nothing hello.pdf already draws can be
+        // mistaken for it.
+        const int BoxTop = 500;
+        const int BandTop = BoxTop - 5, BandBottom = BoxTop + 45;
+
+        int Leftmost(TextAlign align)
+        {
+            using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+
+            Assert.Null(LeftmostDarkColumn(doc.RenderPage(0, 1.0f), BandTop, BandBottom));
+
+            doc.AddTextBox(0, 40, BoxTop, Text("Ay", size: 24) with { WidthPt = 400, Align = align });
+            return LeftmostDarkColumn(doc.RenderPage(0, 1.0f), BandTop, BandBottom)
+                ?? throw new Xunit.Sdk.XunitException($"{align} drew nothing in the band");
+        }
+
+        int left = Leftmost(TextAlign.Left);
+        int centre = Leftmost(TextAlign.Center);
+        int right = Leftmost(TextAlign.Right);
+
+        // Left starts at the box's own edge; the other two are pushed into it by
+        // the slack, which for two characters in a 400pt box is most of it.
+        Assert.InRange(left, 39, 42);
+        Assert.True(centre > left + 100, $"centred text started at {centre}, left-aligned at {left}");
+        Assert.True(right > centre + 100, $"right-aligned text started at {right}, centred at {centre}");
+    }
+
+    [Fact]
+    public void Justify_StretchesEveryLineButTheLast()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+
+        var ragged = doc.AddTextBox(0, 40, 100,
+            Text(Paragraph, size: 12) with { WidthPt = 200, Align = TextAlign.Left })!;
+        var flush = doc.AddTextBox(0, 40, 400,
+            Text(Paragraph, size: 12) with { WidthPt = 200, Align = TextAlign.Justify })!;
+
+        // Same words, same box, same wrap points, so the same number of lines:
+        // justification changes the gaps, never the breaks.
+        Assert.InRange(flush.Rect.T - flush.Rect.B, (ragged.Rect.T - ragged.Rect.B) - 1,
+            (ragged.Rect.T - ragged.Rect.B) + 1);
+
+        // A single line is its own paragraph's last, so it is never stretched —
+        // proved by its box being the same height and its ink not reaching the
+        // right edge.
+        Assert.NotNull(doc.AddTextBox(0, 40, 700,
+            Text("Ay", size: 12) with { WidthPt = 400, Align = TextAlign.Justify }));
+    }
+
+    [Fact]
+    public void Style_SurvivesSaveAndReopen()
+    {
+        string saved = TempPdf();
+        try
+        {
+            using (var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf")))
+            {
+                doc.AddTextBox(0, 40, 100,
+                    Text("Round trip me", size: 14) with
+                    {
+                        Underline = true,
+                        Align = TextAlign.Right,
+                        WidthPt = 250.5,
+                    });
+                doc.SaveAs(saved);
+            }
+
+            using var reopened = PdfDocument.Open(saved);
+            var read = reopened.TryReadTextBox(0, 0)!;
+
+            Assert.True(read.Underline);
+            Assert.Equal(TextAlign.Right, read.Align);
+            Assert.Equal(250.5, read.WidthPt, 2);
+        }
+        finally
+        {
+            if (File.Exists(saved)) { File.Delete(saved); }
+        }
+    }
+
+    [Fact]
+    public void OlderBoxes_ReadBackAsLeftAlignedAndAutoWidth()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+
+        // A box with no style key is what every build before this one wrote.
+        doc.AddTextBox(0, 40, 100, Text("Plain"));
+        var read = doc.TryReadTextBox(0, 0)!;
+
+        Assert.False(read.Underline);
+        Assert.Equal(TextAlign.Left, read.Align);
+        Assert.Equal(0, read.WidthPt);
+    }
+
+    /// <summary>
+    /// The x of the leftmost near-black pixel between two rows, or null when
+    /// that band of the page is blank. At scale 1.0 a row is a point, so the
+    /// band can be given in the same coordinates the text box was placed in.
+    /// </summary>
+    private static int? LeftmostDarkColumn(PageBitmap bmp, int top, int bottom)
+    {
+        for (int x = 0; x < bmp.Width; x++)
+        {
+            for (int y = Math.Max(0, top); y < Math.Min(bmp.Height, bottom); y++)
+            {
+                var (b, g, r) = PixelAssert.Pixel(bmp, x, y);
+                if (b < 120 && g < 120 && r < 120)
+                {
+                    return x;
+                }
+            }
+        }
+        return null;
+    }
+
     private static int CountRed(PageBitmap bmp)
     {
         int red = 0;

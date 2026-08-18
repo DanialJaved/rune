@@ -44,4 +44,36 @@ internal static class TextBoxFonts
 
     /// <summary>Sizes offered, in points. Matches the set the form-field dialog uses.</summary>
     internal static readonly double[] Sizes = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48];
+
+    /// <summary>
+    /// One step up or down <see cref="Sizes"/> from wherever the text currently
+    /// is, clamped at both ends.
+    ///
+    /// A size that is not in the list — read back from a box some other tool
+    /// wrote — steps to the nearest one that is, in the direction asked for,
+    /// rather than snapping to the closest and appearing not to move.
+    /// </summary>
+    internal static double StepSize(double from, int direction)
+    {
+        if (direction > 0)
+        {
+            foreach (double size in Sizes)
+            {
+                if (size > from + 0.01)
+                {
+                    return size;
+                }
+            }
+            return Sizes[^1];
+        }
+
+        for (int i = Sizes.Length - 1; i >= 0; i--)
+        {
+            if (Sizes[i] < from - 0.01)
+            {
+                return Sizes[i];
+            }
+        }
+        return Sizes[0];
+    }
 }

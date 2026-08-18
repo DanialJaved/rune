@@ -160,7 +160,7 @@
                         Style="{StaticResource SidebarTabStyle}"
                         IsChecked="True"
                         Click="ThumbsTab_Click"
-                        ToolTipService.ToolTip="Thumbnails">
+                        AutomationProperties.Name="Page thumbnails" ToolTipService.ToolTip="Thumbnails">
                         <FontIcon Glyph="&#xE8A9;" FontSize="14" />
                     </ToggleButton>
                     <ToggleButton
@@ -168,7 +168,7 @@
                         Grid.Column="1"
                         Style="{StaticResource SidebarTabStyle}"
                         Click="OutlineTab_Click"
-                        ToolTipService.ToolTip="Chapters">
+                        AutomationProperties.Name="Chapters" ToolTipService.ToolTip="Chapters">
                         <FontIcon Glyph="&#xE8FD;" FontSize="14" />
                     </ToggleButton>
                     <ToggleButton
@@ -176,7 +176,7 @@
                         Grid.Column="2"
                         Style="{StaticResource SidebarTabStyle}"
                         Click="BookmarksTab_Click"
-                        ToolTipService.ToolTip="Bookmarks">
+                        AutomationProperties.Name="Bookmarks" ToolTipService.ToolTip="Bookmarks">
                         <FontIcon Glyph="&#xE8A4;" FontSize="14" />
                     </ToggleButton>
                 </Grid>

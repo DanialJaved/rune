@@ -12,7 +12,7 @@
   <Identity
     Name="Danimite.RunePDFReader"
     Publisher="CN=513DE1BC-C862-44F8-AEAD-F60E359F4BBF"
-    Version="0.7.0.0" />
+    Version="0.8.0.0" />
 
   <Properties>
     <DisplayName>Rune PDF Reader</DisplayName>

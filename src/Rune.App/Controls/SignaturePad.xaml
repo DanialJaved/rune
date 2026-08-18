@@ -83,7 +83,7 @@
                 Grid.Column="1"
                 MinWidth="132"
                 SelectionChanged="TypedStyleBox_SelectionChanged"
-                ToolTipService.ToolTip="Handwriting style" />
+                AutomationProperties.Name="Handwriting style" ToolTipService.ToolTip="Handwriting style" />
         </Grid>
 
         <!-- Always present, never collapsed. Showing or hiding a row re-centres
@@ -102,7 +102,7 @@
             IsEnabled="False"
             IsChecked="True"
             Click="RemoveBackground_Click"
-            ToolTipService.ToolTip="Make the paper transparent so only the ink lands on the page" />
+            AutomationProperties.Name="Remove the paper background" ToolTipService.ToolTip="Make the paper transparent so only the ink lands on the page" />
 
         <Grid ColumnSpacing="8">
             <Grid.ColumnDefinitions>
@@ -117,12 +117,12 @@
                     x:Name="BlackButton"
                     Style="{StaticResource InkSwatchButtonStyle}"
                     Click="BlackButton_Click"
-                    ToolTipService.ToolTip="Black" />
+                    AutomationProperties.Name="Black ink" ToolTipService.ToolTip="Black" />
                 <Button
                     x:Name="BlueButton"
                     Style="{StaticResource InkSwatchButtonStyle}"
                     Click="BlueButton_Click"
-                    ToolTipService.ToolTip="Blue" />
+                    AutomationProperties.Name="Blue ink" ToolTipService.ToolTip="Blue" />
             </StackPanel>
 
             <Button

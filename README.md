@@ -57,17 +57,18 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 
 ### Typing and pictures
 
-- **Type anywhere on a page** (`Ctrl+T`), whether or not there is anything there already: click, and a caret appears with a bar offering font, size, bold, italic and colour. Every change lands on the words as you make it
+- **Type anywhere on a page** (`Ctrl+T`), whether or not there is anything there already: click, and a caret appears with a bar offering font, size, bold, italic, underline, alignment and colour. Every change lands on the words as you make it
+- The usual chords work while you are typing, and **only** while you are typing: `Ctrl+B`, `Ctrl+I` and `Ctrl+U` for bold, italic and underline, `Ctrl+L` `Ctrl+E` `Ctrl+R` `Ctrl+J` to align, `Ctrl+Shift+>` and `Ctrl+Shift+<` to change the size. Press `Esc` and every one of them goes back to meaning what it means to the document. They work the same way in a form field
 - What you type is **real PDF text**, not a picture of text. It stays crisp at any zoom, it is a few hundred bytes rather than a bitmap, and once flattened it is ordinary page text that search and copy find like any other
-- **Place a picture** on a page from any PNG, JPEG, BMP, GIF or TIFF. Transparency is kept, and nothing is keyed out: a picture you chose deliberately lands exactly as it is
-- Anything you place can be picked up again. Click it to select, drag to move, pull a corner to resize, `Delete` to remove. Resizing text **re-renders it at the new size** rather than stretching the letters, which is the point of keeping it as text
+- **Place a picture** on a page from any PNG, JPEG, BMP, GIF or TIFF. Transparency is kept, and nothing is keyed out: a picture you chose deliberately lands exactly as it is. `Ctrl`+wheel sizes it before you drop it, and the plain wheel still scrolls so you can get to the right spot first
+- Anything you place can be picked up again. Click it to select, drag to move, pull a corner to resize, `Delete` to remove. Pulling a text box's corner changes **the box**, not the type: the words re-flow to the new width at the size you chose
 
 ### Signing
 
 - Draw a signature with the mouse or a pen, type it in a handwriting face, or photograph one on paper and import it. **Rune removes the paper for you**, so only the ink lands on the page instead of a white rectangle over your document
 - Typed signatures use the handwriting fonts Windows already has, so nothing extra is downloaded and the app stays small
 - The matting runs entirely on your machine. Nothing is uploaded and no online service is involved
-- A semi-transparent preview follows the cursor so you can see exactly where it will land. Scroll to size it, click to place it, then drag it or pull a corner handle if it isn't quite right. Resizing keeps the proportions, so your handwriting never comes out stretched
+- A semi-transparent preview follows the cursor so you can see exactly where it will land. `Ctrl`+scroll to size it, click to place it, then drag it or pull a corner handle if it isn't quite right. Resizing keeps the proportions, so your handwriting never comes out stretched
 - Saved signatures are reusable and stay on your machine
 - This is a *visible* signature, ink on the page like signing a printout, not a cryptographic one
 - **Signature details** reads back what a digitally signed PDF claims: the signer's stated reason, time and format, and whether the signature covers the whole file. Rune does **not** verify signatures. It ships no cryptography and never calls a signature valid
@@ -75,7 +76,8 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 ### Forms
 
 - Click a field and type. Text boxes, dropdowns, checkboxes and radio buttons all save back into the PDF
-- Right-click a field for **Text appearance** to set the size and colour it fills in with, so your answers can stand apart from the printed form
+- Right-click a field for **Text appearance** to set the size and colour it fills in with, so your answers can stand apart from the printed form. `Ctrl+Shift+>` and `Ctrl+Shift+<` do the same from the keyboard
+- `Ctrl+B` and `Ctrl+I` bold and italicize a field where the PDF carries that face. Where it doesn't, Rune says so rather than leaving you with a field that has quietly gone blank
 - Standard AcroForm documents only. XFA forms, which some tax and government PDFs use, say so plainly instead of silently swallowing your typing
 - Form JavaScript doesn't run, so auto-calculating fields keep what you type but won't recalculate
 
@@ -88,8 +90,21 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 - Bookmarks (`Ctrl+B`): name a page, jump back to it later, saved per document
 - Vim-style keys (`j k h l`, `gg` / `G`, `p` / `n`) can be switched on in Settings
 - Printing with live preview and page ranges
+- **Share** the open document to another app through the Windows share sheet. Annotations you haven't saved yet go with it, as a copy, so your original file stays exactly as it was
+- **Document properties** (`Ctrl+D`) that answer the questions people actually open it for: page size and paper name, which fonts the file uses and whether they travel with it, what the security settings permit, and where the file lives
 
 The interface follows GNOME Papers' proportions, one compact header row with the rest tucked into a single menu, but every control is a native Windows 11 one.
+
+### Touch
+
+Rune works on a 2-in-1 held as a tablet, not just on a desk.
+
+- **Drag to scroll, pinch to zoom.** A plain finger drag always moves the page, never a selection you didn't ask for
+- **Press and hold to select a word**, then lift for the menu: highlight, underline, strikeout, copy. Press on the selection and drag to widen it across a sentence or a paragraph. A double-tap picks out a word too
+- **Tap a form field and the keyboard comes up**, so a form can be filled in with no keyboard attached
+- **Tap a tool's button again to put it away**, and press and hold anything you've placed to delete it
+- Corner handles, links and form fields are all forgiving of a fingertip, without a mouse losing any of its precision
+- Resting a palm while you draw with a pen won't leave a second stroke behind
 
 ## Keyboard shortcuts
 
@@ -112,6 +127,9 @@ Press `F1` in the app for the full list. The essentials:
 | Copy / cut / paste (text or pages) | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` |
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` |
 | Print / properties | `Ctrl+P` / `Ctrl+D` |
+| Bold / italic / underline (while typing) | `Ctrl+B` / `Ctrl+I` / `Ctrl+U` |
+| Align left / centre / right / justify (while typing) | `Ctrl+L` / `Ctrl+E` / `Ctrl+R` / `Ctrl+J` |
+| Bigger / smaller text (while typing) | `Ctrl+Shift+>` / `Ctrl+Shift+<` |
 
 Right-click a selection for underline and strikeout, or right-click anywhere to add a note. Click a signature, picture or text box you have placed to select it, then drag it, pull a corner to resize it, or press `Delete`. In the thumbnail sidebar, `Ctrl+C`, `Ctrl+X` and `Ctrl+V` act on **pages**; everywhere else they act on selected text.
 
@@ -168,7 +186,7 @@ The debug build is an unpackaged self-contained exe, so you can just run it.
 
 **Next:** more formats (ePub, CBZ), code signing for the portable build, smaller packages still.
 
-**Known limits:** form JavaScript needs a V8-enabled PDFium build; signature *validation* would need a cryptography stack Rune doesn't ship; a text box keeps the line breaks you type rather than wrapping to a width, and a placed picture is stored at up to 1024 pixels along its longest edge.
+**Known limits:** form JavaScript needs a V8-enabled PDFium build; signature *validation* would need a cryptography stack Rune doesn't ship; bold and italic in a *form field* only work where the PDF already carries that face; the editor cannot show you an underline while you type it (it appears the moment the box closes); and a placed picture is stored at up to 1024 pixels along its longest edge.
 
 ## License
 

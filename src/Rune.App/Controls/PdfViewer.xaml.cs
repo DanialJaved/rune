@@ -320,6 +320,21 @@ public sealed partial class PdfViewer : UserControl
         Canvas.RightTapped += Canvas_RightTapped;
         Canvas.PointerExited += (_, _) => SetLinkCursor(false);
 
+        // A gesture the system takes away never raises PointerReleased. Touch
+        // makes that routine — the ScrollViewer's pan wins the contact and the
+        // canvas is told the pointer was cancelled instead — and without these
+        // two the viewer stayed stuck mid-drag: still drawing ink, still
+        // resizing, with the scroll modes it had switched off never switched
+        // back on. SignaturePad has always handled both; the viewer did not.
+        Canvas.PointerCanceled += Canvas_PointerCanceled;
+        Canvas.PointerCaptureLost += Canvas_PointerCanceled;
+
+        // Touch has no hover and no second button, so the two reading gestures a
+        // mouse gets for free need one of their own: hold to start selecting
+        // text, double-tap to take the word under the finger. The hold is timed
+        // here rather than taken from the Holding event — see ArmHoldSelect.
+        Canvas.DoubleTapped += Canvas_DoubleTapped;
+
         // On the Canvas, not the ScrollViewer. PointerWheelChanged bubbles from
         // the hit-test target upward, so handling it on the child runs BEFORE
         // the ScrollViewer's own Ctrl+wheel zoom and marking it handled stops
@@ -956,18 +971,25 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        // Plain wheel resizes the signature waiting to be placed. Only while one
-        // is actually pending, so the wheel keeps scrolling the rest of the time.
-        if (!ctrl && TryResizePendingStamp(point.Properties.MouseWheelDelta))
+        if (!ctrl || _layout is null)
+        {
+            return; // plain wheel: let it bubble to the ScrollViewer and scroll
+        }
+
+        // Ctrl+wheel resizes the picture waiting to be placed, and only while
+        // one actually is. It reads as an override of the zoom because that is
+        // what it is: the modifier means "not the page", and while something is
+        // pending the thing that is not the page is the picture.
+        //
+        // This used to be the other way round — plain wheel resized — which made
+        // it impossible to scroll to the place you wanted to drop the picture
+        // without first putting the tool away.
+        if (TryResizePendingStamp(point.Properties.MouseWheelDelta))
         {
             e.Handled = true;
             return;
         }
 
-        if (!ctrl || _layout is null)
-        {
-            return; // plain wheel: let it bubble to the ScrollViewer and scroll
-        }
         DebugLog($"WHEEL delta={point.Properties.MouseWheelDelta} pos=({point.Position.X:0},{point.Position.Y:0}) zoom={_zoom:0.###}");
 
         // One notch is 120. Multiplicative so each step feels the same at any
@@ -1206,6 +1228,22 @@ public sealed partial class PdfViewer : UserControl
             AddMenuItem(menu, "Copy", Symbol.Copy, CopySelectionToClipboard);
         }
 
+        // Deleting something placed was bound to the Delete key alone, which a
+        // tablet with no keyboard attached does not have. Press-and-hold raises
+        // this menu from a finger, so the object's own action belongs in it.
+        if (_selected is { } selectedObject)
+        {
+            if (menu.Items.Count > 0)
+            {
+                menu.Items.Add(new MenuFlyoutSeparator());
+            }
+            AddMenuItem(
+                menu,
+                selectedObject.Kind == StampKind.Text ? "Delete text box" : "Delete picture",
+                Symbol.Delete,
+                DeleteSelectedObject);
+        }
+
         if (menu.Items.Count > 0)
         {
             menu.Items.Add(new MenuFlyoutSeparator());
@@ -1306,14 +1344,292 @@ public sealed partial class PdfViewer : UserControl
         }
     }
 
+    // ---------------------------------------------------------------- touch
+    //
+    // Rune's input layer was written for a mouse: a pointer that hovers, has
+    // buttons, and never competes with the ScrollViewer for a drag. A finger
+    // does none of those things, so the handful of places where the difference
+    // actually changes what should happen ask this.
+    //
+    // The rule everything below serves: ON TOUCH THE PAGE PANS BY DEFAULT. A
+    // drag means something else only when a tool is armed, or when the user is
+    // dragging an object they have already selected. Mouse and pen behaviour is
+    // untouched.
+
+    /// <summary>True when the event came from a finger rather than a mouse or pen.</summary>
+    private static bool IsTouch(PointerRoutedEventArgs e)
+        => e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch;
+
+    /// <summary>True while the canvas owns a drag the ScrollViewer must not pan with.</summary>
+    private bool _gestureOwned;
+
+    /// <summary>
+    /// The contact currently down on the canvas.
+    ///
+    /// HoldingRoutedEventArgs carries no Pointer, and a hold that cannot capture
+    /// is a hold whose drag never arrives: the anchor lands on the character
+    /// under the finger and every move after it goes somewhere else, so the
+    /// selection stays one character wide. Verified on screen before this was
+    /// kept.
+    /// </summary>
+    private Pointer? _activePointer;
+
+    /// <summary>
+    /// How far off a target a press may land and still hit it, in page points.
+    /// Zero for a mouse. The arithmetic lives in <see cref="TouchMetrics"/> so
+    /// it can be pinned by test without a XAML control to host it.
+    /// </summary>
+    private double TouchSlopPt(bool touch) => TouchMetrics.SlopPt(touch, _zoom);
+
+    /// <summary>
+    /// Takes a drag for the canvas: captures the pointer AND stops the
+    /// ScrollViewer panning for as long as it lasts.
+    ///
+    /// The capture is not what does the work. A ScrollViewer pans through
+    /// direct manipulation, which the input system drives on its own thread and
+    /// independently of routed events, so neither capturing the pointer nor
+    /// marking the event handled reliably keeps a touch contact away from it.
+    /// Turning the scroll modes off is what actually decides the question.
+    ///
+    /// ZoomMode has to go off with them, which is NOT obvious and was got wrong
+    /// first: with only the scroll modes disabled the page correctly refused to
+    /// pan, but direct manipulation was still watching the contact in case it
+    /// became a pinch, and it took the capture away the moment the finger moved.
+    /// That fired PointerCaptureLost, which cancels the gesture, so a hold-drag
+    /// selected exactly one character and an ink stroke would have been a dot.
+    /// Nobody pinches mid-stroke, so the trade costs nothing.
+    /// </summary>
+    private void BeginExclusiveGesture(Pointer? pointer)
+    {
+        // Null only if a hold somehow arrives with no press behind it. The
+        // capture is what keeps the moves coming once the finger travels.
+        if (pointer is not null)
+        {
+            Canvas.CapturePointer(pointer);
+        }
+        if (_gestureOwned)
+        {
+            return;
+        }
+        _gestureOwned = true;
+
+        // ManipulationMode is the documented lever: while a child's mode is
+        // anything other than System, the parent ScrollViewer's direct
+        // manipulation does not claim gestures that begin on it. Disabling the
+        // scroll modes alone stops the PAN but leaves DManip holding the
+        // contact, and it takes the capture back the moment the finger travels.
+        Canvas.ManipulationMode = ManipulationModes.All;
+        Scroller.HorizontalScrollMode = ScrollMode.Disabled;
+        Scroller.VerticalScrollMode = ScrollMode.Disabled;
+        Scroller.ZoomMode = ZoomMode.Disabled;
+    }
+
+    /// <summary>Hands panning back. Safe to call when no gesture was owned.</summary>
+    private void EndExclusiveGesture(Pointer? pointer)
+    {
+        if (pointer is not null)
+        {
+            Canvas.ReleasePointerCapture(pointer);
+        }
+        if (!_gestureOwned)
+        {
+            return;
+        }
+        _gestureOwned = false;
+        Canvas.ManipulationMode = ManipulationModes.System;
+        Scroller.HorizontalScrollMode = ScrollMode.Enabled;
+        Scroller.VerticalScrollMode = ScrollMode.Enabled;
+        Scroller.ZoomMode = ZoomMode.Enabled;
+    }
+
+    // ---- hold to select ----
+    //
+    // Press-and-hold starts selecting text, because a plain finger drag has to
+    // stay available for scrolling or the document cannot be read at all. Same
+    // gesture as the browsers and Word.
+    //
+    // Timed here rather than taken from UIElement.Holding, which looks like
+    // exactly the right event and is not. Holding fires its Started state while
+    // the finger is still, and the system's gesture recognizer then treats the
+    // first real movement as the end of the hold: it abandons the gesture and
+    // CANCELS the pointer, capture and all. The trace was unambiguous — anchor
+    // set, eight moves at the press point, then one move of three pixels
+    // followed by PointerCaptureLost — and the visible result was a selection
+    // exactly one character wide. Doing our own timing keeps the contact ours
+    // from press to release and never hands it to the recognizer.
+
+    /// <summary>How long a finger must stay put before the hold counts, in ms.</summary>
+    private const int HoldToSelectMs = 500;
+
+    /// <summary>How far it may drift in that time and still count as still, in DIPs.</summary>
+    private const double HoldSlopDip = 12;
+
+    private DispatcherQueueTimer? _holdTimer;
+    private Point _holdOrigin;
+    private bool _holdArmed;
+
+    /// <summary>
+    /// Starts the clock on a touch press that nothing else claimed. If the
+    /// finger is still here when it runs out, the press becomes a selection; if
+    /// it travels first, it was a scroll and the timer is dropped.
+    /// </summary>
+    private void ArmHoldSelect(Point docPoint)
+    {
+        _holdOrigin = docPoint;
+        _holdArmed = true;
+
+        if (_holdTimer is null)
+        {
+            _holdTimer = _dispatcher.CreateTimer();
+            _holdTimer.Interval = TimeSpan.FromMilliseconds(HoldToSelectMs);
+            _holdTimer.IsRepeating = false;
+            _holdTimer.Tick += (_, _) => HoldElapsed();
+        }
+        _holdTimer.Start();
+    }
+
+    private void CancelHoldSelect()
+    {
+        _holdArmed = false;
+        _holdTimer?.Stop();
+    }
+
+    /// <summary>
+    /// The finger stayed put, so the press was a reach for the text rather than
+    /// a scroll. Takes the word under it, which the press-and-hold menu can then
+    /// copy or mark up, and which a second press can drag wider.
+    /// </summary>
+    private void HoldElapsed()
+    {
+        if (!_holdArmed || _activeTool != AnnotationTool.None || _gestureOwned)
+        {
+            return;
+        }
+        _holdArmed = false;
+        SelectWordAt(_holdOrigin);
+    }
+
+    /// <summary>Double-tap (or double-click) takes the word under the point.</summary>
+    private void Canvas_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        if (_activeTool == AnnotationTool.None && SelectWordAt(e.GetPosition(Canvas)))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// Selects the whole word under a document point. Returns false when there
+    /// is no word there, so the caller can leave the gesture alone.
+    /// </summary>
+    private bool SelectWordAt(Point docPoint)
+    {
+        if (_layout is null)
+        {
+            return false;
+        }
+
+        int page = _layout.PageAt(docPoint.Y);
+        if (!_pageTexts.TryGetValue(page, out var pageText) || pageText is null)
+        {
+            EnsurePageText(page); // racing the first press on this page; the next one hits
+            return false;
+        }
+
+        var (localX, localY) = ToPageLocal(page, docPoint);
+        int index = pageText.CharIndexAt(localX, localY, 6 + TouchSlopPt(true));
+        var text = pageText.Text;
+        if (index < 0 || index >= text.Length || char.IsWhiteSpace(text[index]))
+        {
+            return false;
+        }
+
+        int start = index;
+        while (start > 0 && !char.IsWhiteSpace(text[start - 1]))
+        {
+            start--;
+        }
+        int end = index;
+        while (end + 1 < text.Length && !char.IsWhiteSpace(text[end + 1]))
+        {
+            end++;
+        }
+
+        _selectionPage = page;
+        _selectionAnchorChar = start;
+        _selection = pageText.GetSelection(start, end);
+        _isSelecting = false;
+        Canvas.Invalidate();
+        return true;
+    }
+
+    /// <summary>
+    /// A touch press that lands on text already selected grabs the selection's
+    /// nearer end and drags it, so a word picked out by a hold can be widened
+    /// into a sentence or a paragraph.
+    ///
+    /// This is the only way a finger can extend a selection, and the reason is
+    /// worth writing down: a contact cannot be taken back from the ScrollViewer
+    /// once it has started. Deciding to own a gesture 500 ms in does not work —
+    /// direct manipulation has the contact by then and revokes the capture the
+    /// instant the finger travels, which is exactly what a trace showed
+    /// (anchor set, ten stationary moves, then one move of three pixels
+    /// followed by PointerCaptureLost). Ownership has to be decided on the press
+    /// itself, and "the press landed on the existing selection" is something
+    /// that CAN be decided there. It is the same mechanism as the selection
+    /// handles a phone draws, without the handles.
+    /// </summary>
+    private bool TryExtendSelectionByTouch(Point docPoint, Pointer pointer)
+    {
+        if (_selection is not { Count: > 0 } sel || _layout is null)
+        {
+            return false;
+        }
+
+        int page = _layout.PageAt(docPoint.Y);
+        if (page != sel.PageIndex)
+        {
+            return false;
+        }
+
+        var (localX, localY) = ToPageLocal(page, docPoint);
+        double slop = TouchSlopPt(true);
+        bool onSelection = sel.Rects.Any(r =>
+            localX >= r.X - slop && localX <= r.X + r.Width + slop &&
+            localY >= r.Y - slop && localY <= r.Y + r.Height + slop);
+        if (!onSelection)
+        {
+            return false;
+        }
+
+        // Whichever end is further from the finger stays put, so the drag moves
+        // the end the user reached for.
+        int first = sel.Start;
+        int last = sel.Start + sel.Count - 1;
+        int hit = _pageTexts.TryGetValue(page, out var pageText) && pageText is not null
+            ? pageText.CharIndexAt(localX, localY, 6 + slop)
+            : -1;
+        _selectionAnchorChar = hit >= 0 && Math.Abs(hit - first) < Math.Abs(hit - last) ? last : first;
+        _selectionPage = page;
+        _isSelecting = true;
+        BeginExclusiveGesture(pointer);
+        return true;
+    }
+
     private void Canvas_PointerMoved(object sender, PointerRoutedEventArgs e)
     {
         var doc = DocumentPointFromPointer(e);
 
         if (_isDrawingInk)
         {
-            AppendInkPoint(doc);
-            e.Handled = true;
+            // Only the contact that started the stroke draws it. A palm resting
+            // on the glass moves too, and following it would drag the line off
+            // across the page.
+            if (_inkPointerId is not { } inkId || e.Pointer.PointerId == inkId)
+            {
+                AppendInkPoint(doc);
+                e.Handled = true;
+            }
             return;
         }
 
@@ -1354,6 +1670,13 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
+        // Travelled before the hold matured, so the press was a scroll.
+        if (_holdArmed &&
+            Math.Abs(doc.X - _holdOrigin.X) + Math.Abs(doc.Y - _holdOrigin.Y) > HoldSlopDip)
+        {
+            CancelHoldSelect();
+        }
+
         // Preview the pending picture under the cursor before it is placed.
         if (UpdateStampHover(doc))
         {
@@ -1388,12 +1711,13 @@ public sealed partial class PdfViewer : UserControl
         // interaction that never restyled anything would leave the box unable to
         // close itself.
         SuspendTextCommit = false;
+        _activePointer = e.Pointer;
 
         var docPoint = DocumentPointFromPointer(e);
 
         if (IsInkMode)
         {
-            BeginInkStroke(docPoint, e.Pointer);
+            BeginInkStroke(docPoint, e);
             e.Handled = true;
             return;
         }
@@ -1404,8 +1728,9 @@ public sealed partial class PdfViewer : UserControl
             case AnnotationTool.Highlighter:
                 // Reuses the ordinary selection machinery; the mark is applied
                 // on release (see Canvas_PointerReleased), so dragging over text
-                // highlights it in one gesture.
-                BeginSelection(docPoint, e.Pointer);
+                // highlights it in one gesture. Exclusive whatever the device:
+                // the user armed the highlighter, so this drag is not a scroll.
+                BeginSelection(docPoint, e.Pointer, exclusive: true, touch: IsTouch(e));
                 e.Handled = true;
                 return;
 
@@ -1425,14 +1750,14 @@ public sealed partial class PdfViewer : UserControl
                 return;
 
             case AnnotationTool.Signature or AnnotationTool.Image when HasPendingStamp:
-                BeginStampPlacement(docPoint, e.Pointer);
+                BeginStampPlacement(docPoint, e.Pointer, IsTouch(e));
                 e.Handled = true;
                 return;
         }
 
         // A placed signature is grabbed before anything else claims the press,
         // so dragging one never turns into a text selection through it.
-        if (TryHandleStampPress(docPoint, e.Pointer))
+        if (TryHandleStampPress(docPoint, e.Pointer, IsTouch(e)))
         {
             e.Handled = true;
             return;
@@ -1440,17 +1765,19 @@ public sealed partial class PdfViewer : UserControl
 
         // Form fields come before links and selection: a widget sitting on top
         // of page text must take the click, not start a drag-select inside it.
-        if (TryHandleFormPress(docPoint))
+        if (TryHandleFormPress(docPoint, IsTouch(e)))
         {
-            // Captured so the moves that select the field's text keep arriving
-            // even when the pointer wanders outside the widget mid-drag.
-            Canvas.CapturePointer(e.Pointer);
+            // The gesture is taken so the moves that select the field's text
+            // keep arriving even when the pointer wanders outside the widget,
+            // and so a finger dragging inside a field does not pan the page out
+            // from under it.
+            BeginExclusiveGesture(e.Pointer);
             e.Handled = true;
             return;
         }
 
         // Links take precedence over starting a selection.
-        var link = HitTestLink(docPoint);
+        var link = HitTestLink(docPoint, TouchSlopPt(IsTouch(e)));
         if (link is not null)
         {
             if (link.IsInternal)
@@ -1465,7 +1792,26 @@ public sealed partial class PdfViewer : UserControl
             return;
         }
 
-        BeginSelection(docPoint, e.Pointer);
+        // A finger landing on text that is already selected drags that selection
+        // wider. Decided here, on the press, because it is the only moment
+        // ownership of a touch gesture can be decided at all.
+        if (IsTouch(e) && TryExtendSelectionByTouch(docPoint, e.Pointer))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        // Nothing else claimed the press. A mouse starts selecting immediately;
+        // a finger only clears the old selection and leaves the drag to the
+        // ScrollViewer, because on touch a plain drag is how the page scrolls.
+        BeginSelection(docPoint, e.Pointer, exclusive: !IsTouch(e), touch: IsTouch(e));
+
+        // ...and starts the clock, so a finger that stays put picks out the word
+        // it is resting on instead.
+        if (IsTouch(e))
+        {
+            ArmHoldSelect(docPoint);
+        }
     }
 
     private void PdfViewer_CharacterReceived(UIElement sender, CharacterReceivedRoutedEventArgs e)
@@ -1486,57 +1832,109 @@ public sealed partial class PdfViewer : UserControl
 
     private void Canvas_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
+        if (EndPointerGesture(e.Pointer, DocumentPointFromPointer(e), cancelled: false))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// The system took the pointer away: the ScrollViewer's pan won the contact,
+    /// a pen left range, or the window lost activation. No PointerReleased will
+    /// follow, so the same unwinding has to happen here or the viewer is left
+    /// mid-gesture with panning still switched off.
+    /// </summary>
+    private void Canvas_PointerCanceled(object sender, PointerRoutedEventArgs e)
+        => EndPointerGesture(e.Pointer, docPoint: null, cancelled: true);
+
+    /// <summary>
+    /// Unwinds whichever drag was in flight and hands panning back. Returns true
+    /// when there was one to unwind.
+    ///
+    /// A cancelled gesture abandons what it was building, with one exception: an
+    /// ink stroke commits anyway. It is already drawn on the screen, and making
+    /// it vanish because the system reassigned the pointer would read as the app
+    /// eating the user's work.
+    /// </summary>
+    private bool EndPointerGesture(Pointer? pointer, Point? docPoint, bool cancelled)
+    {
+        // A second contact lifting is not the end of the stroke the first one is
+        // still drawing.
+        if (_isDrawingInk && _inkPointerId is { } inkId &&
+            pointer is not null && pointer.PointerId != inkId)
+        {
+            return false;
+        }
+
+        bool had = true;
+
         if (_isDrawingInk)
         {
+            _inkPointerId = null;
             CommitInkStroke();
-            Canvas.ReleasePointerCapture(e.Pointer);
-            e.Handled = true;
-            return;
         }
-        if (_placingStamp)
+        else if (_placingStamp)
         {
-            CommitStampPlacement();
-            Canvas.ReleasePointerCapture(e.Pointer);
-            e.Handled = true;
-            return;
+            if (cancelled)
+            {
+                CancelStampPlacement();
+            }
+            else
+            {
+                CommitStampPlacement();
+            }
         }
-        if (IsResizingStamp)
+        else if (IsResizingStamp)
         {
-            CommitStampResize();
-            Canvas.ReleasePointerCapture(e.Pointer);
-            e.Handled = true;
-            return;
+            if (cancelled)
+            {
+                CancelStampResize();
+            }
+            else
+            {
+                CommitStampResize();
+            }
         }
-        if (_draggingStamp)
+        else if (_draggingStamp)
         {
-            CommitStampDrag();
-            Canvas.ReleasePointerCapture(e.Pointer);
-            e.Handled = true;
-            return;
+            if (cancelled)
+            {
+                CancelStampDrag();
+            }
+            else
+            {
+                CommitStampDrag();
+            }
         }
-        if (IsDraggingInFormField)
+        else if (IsDraggingInFormField)
         {
-            CommitFormDrag(DocumentPointFromPointer(e));
-            Canvas.ReleasePointerCapture(e.Pointer);
-            e.Handled = true;
-            return;
+            // A cancel has no position to finish the field's drag-select with,
+            // so it ends where the last move left it.
+            CommitFormDrag(docPoint ?? _lastFormDragPoint);
         }
-        if (_isSelecting)
+        else if (_isSelecting)
         {
             _isSelecting = false;
-            Canvas.ReleasePointerCapture(e.Pointer);
-            e.Handled = true;
 
             // The highlighter turns the drag into a mark and clears the
             // selection, so the whole thing reads as one gesture rather than
             // leaving text selected behind it.
-            if (_activeTool == AnnotationTool.Highlighter && HasSelection)
+            if (!cancelled && _activeTool == AnnotationTool.Highlighter && HasSelection)
             {
                 MarkupSelection(_markupKind, _markupColor, _markupAlpha);
                 ClearSelectionState();
                 Canvas.Invalidate();
             }
         }
+        else
+        {
+            had = false;
+        }
+
+        EndExclusiveGesture(pointer);
+        CancelHoldSelect();
+        _activePointer = null;
+        return had;
     }
 
     // ------------------------------------------------------- tool gestures
@@ -1639,8 +2037,23 @@ public sealed partial class PdfViewer : UserControl
 
     // ---------------------------------------------------------------- ink capture
 
-    private void BeginInkStroke(Point docPoint, Pointer pointer)
+    /// <summary>
+    /// The contact that owns the stroke in progress. A stroke used to belong to
+    /// whichever pointer pressed last, so on a 2-in-1 a resting palm or a second
+    /// finger restarted it halfway through and the first half was lost. Only the
+    /// pointer that began a stroke may extend or end it.
+    /// </summary>
+    private uint? _inkPointerId;
+
+    private void BeginInkStroke(Point docPoint, PointerRoutedEventArgs e)
     {
+        // A pen and a hand arrive together: the pen writes, the hand rests on
+        // the glass. While a pen is drawing, touch is not a second stroke.
+        if (_isDrawingInk && IsTouch(e))
+        {
+            return;
+        }
+
         // Raised first: the user pressed to draw, so the pen panel should get
         // out of the way even if there is nothing to draw on.
         InkStrokeStarted?.Invoke(this, EventArgs.Empty);
@@ -1653,7 +2066,8 @@ public sealed partial class PdfViewer : UserControl
         _inkPoints.Clear();
         _inkPoints.Add(ClampToPage(_inkPage, docPoint));
         _isDrawingInk = true;
-        Canvas.CapturePointer(pointer);
+        _inkPointerId = e.Pointer.PointerId;
+        BeginExclusiveGesture(e.Pointer);
     }
 
     private void AppendInkPoint(Point docPoint)
@@ -1746,7 +2160,19 @@ public sealed partial class PdfViewer : UserControl
 
     // ---------------------------------------------------------------- selection
 
-    private void BeginSelection(Point docPoint, Pointer pointer)
+    /// <summary>
+    /// Starts a drag-selection, or — when <paramref name="exclusive"/> is false —
+    /// only clears whatever was selected.
+    ///
+    /// That distinction is what lets a finger read the document. A press that
+    /// lands on a glyph used to capture the pointer unconditionally, and
+    /// capturing a touch contact stops the ScrollViewer panning with it. On a
+    /// page of prose nearly every pixel is a glyph, so dragging a finger
+    /// selected text instead of scrolling and the document could not be moved
+    /// at all. Touch now selects by holding first (see Canvas_Holding); a plain
+    /// touch drag falls through to the pan it always should have been.
+    /// </summary>
+    private void BeginSelection(Point docPoint, Pointer? pointer, bool exclusive, bool touch = false)
     {
         if (_layout is null || _document is null)
         {
@@ -1763,7 +2189,7 @@ public sealed partial class PdfViewer : UserControl
         {
             EnsurePageText(page);
         }
-        int charIndex = pageText?.CharIndexAt(localX, localY) ?? -1;
+        int charIndex = pageText?.CharIndexAt(localX, localY, 6 + TouchSlopPt(touch)) ?? -1;
 
         // Clear any previous selection regardless of whether we hit a glyph.
         bool hadSelection = HasSelection;
@@ -1771,10 +2197,10 @@ public sealed partial class PdfViewer : UserControl
         _selectionPage = page;
         _selectionAnchorChar = charIndex;
 
-        if (charIndex >= 0)
+        if (charIndex >= 0 && exclusive)
         {
             _isSelecting = true;
-            Canvas.CapturePointer(pointer);
+            BeginExclusiveGesture(pointer);
         }
         if (hadSelection)
         {
@@ -1895,7 +2321,12 @@ public sealed partial class PdfViewer : UserControl
         return new Point(p.X, p.Y);
     }
 
-    private PdfLink? HitTestLink(Point documentPoint)
+    /// <summary>
+    /// The link under a document point, or null. <paramref name="slop"/> widens
+    /// every link rect by that many page points, which is how a fingertip hits a
+    /// line of link text a mouse pointer lands on exactly. Zero for a mouse.
+    /// </summary>
+    private PdfLink? HitTestLink(Point documentPoint, double slop = 0)
     {
         if (_layout is null || _document is null)
         {
@@ -1912,8 +2343,8 @@ public sealed partial class PdfViewer : UserControl
         var (localX, localY) = ToPageLocal(page, documentPoint);
         foreach (var link in links)
         {
-            if (localX >= link.X && localX <= link.X + link.Width &&
-                localY >= link.Y && localY <= link.Y + link.Height)
+            if (localX >= link.X - slop && localX <= link.X + link.Width + slop &&
+                localY >= link.Y - slop && localY <= link.Y + link.Height + slop)
             {
                 return link;
             }

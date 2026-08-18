@@ -27,17 +27,19 @@
         <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 
-    <!-- Small icon button for inside the zoom pill / find bar. -->
+    <!-- Small icon button for inside the zoom pill / find bar. Sized to the
+         touch minimum: these float over the page, so a near miss used to land on
+         the document and scroll it instead of pressing the button. -->
     <Style x:Key="PillButtonStyle" TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
-        <Setter Property="Width" Value="30" />
-        <Setter Property="Height" Value="30" />
-        <Setter Property="CornerRadius" Value="15" />
+        <Setter Property="Width" Value="{StaticResource TouchTargetMin}" />
+        <Setter Property="Height" Value="{StaticResource TouchTargetMin}" />
+        <Setter Property="CornerRadius" Value="20" />
     </Style>
 
     <!-- Sidebar switcher segment: equal-width flat toggle. -->
     <Style x:Key="SidebarTabStyle" TargetType="ToggleButton">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="Height" Value="32" />
+        <Setter Property="Height" Value="{StaticResource TouchTargetMin}" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />

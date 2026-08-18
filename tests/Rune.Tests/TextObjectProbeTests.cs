@@ -147,6 +147,67 @@ public class TextObjectProbeTests
         }
     }
 
+    // ---- the underline rule ----
+    //
+    // Underline is drawn as a filled rectangle PATH hung on the same stamp
+    // annotation as the words. FPDFAnnot_AppendObject gates on the annotation's
+    // subtype rather than on the object's type, so reading the source says a
+    // path is admissible — but that gate is exactly what cost a regression when
+    // the rect was set after the objects instead of before, and "reads back
+    // perfectly while drawing nothing" is this API's signature failure. So it is
+    // measured, in pixels, before anything is built on it.
+
+    [Fact]
+    public void Underline_PutsAPathOnThePage()
+    {
+        using var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf"));
+
+        // hello.pdf has words of its own, so each box is measured as the change
+        // it makes rather than as a total.
+        int bare = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
+
+        doc.AddTextBox(0, 60, 300, Sample("Hamburgefonstiv"));
+        int withWords = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
+
+        doc.AddTextBox(0, 60, 400, Sample("Hamburgefonstiv") with { Underline = true });
+        int withBoth = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
+
+        int words = withWords - bare;
+        int wordsAndRule = withBoth - withWords;
+
+        // The same words twice, so the second box has to cost MORE than the
+        // first by the area of the rule.
+        Assert.True(wordsAndRule > words,
+            $"the rule never reached the page: {words} dark pixels for the words, {wordsAndRule} for words + rule");
+    }
+
+    [Fact]
+    public void Underline_SurvivesSaveAndReopen()
+    {
+        string saved = TempPdf();
+        try
+        {
+            int expected;
+            using (var doc = PdfDocument.Open(PixelAssert.CorpusPath("hello.pdf")))
+            {
+                doc.AddTextBox(0, 60, 300, Sample() with { Underline = true });
+                expected = PixelAssert.CountDark(doc.RenderPage(0, 1.0f));
+                doc.SaveAs(saved);
+            }
+
+            using var reopened = PdfDocument.Open(saved);
+
+            // A path that serializes wrong is the failure this catches: it draws
+            // in the session that built it and vanishes on the way back in.
+            Assert.Equal(expected, PixelAssert.CountDark(reopened.RenderPage(0, 1.0f)));
+            Assert.True(reopened.TryReadTextBox(0, 0)!.Underline);
+        }
+        finally
+        {
+            if (File.Exists(saved)) { File.Delete(saved); }
+        }
+    }
+
     // ---- route B: text in the page's own content ----
 
     [Fact]
