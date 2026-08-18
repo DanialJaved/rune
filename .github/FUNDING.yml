@@ -1,0 +1,7 @@
+# GitHub reads this to put a Sponsor button at the top of the repository.
+#
+# The account has to be enrolled at https://github.com/sponsors before the
+# button goes anywhere: without a live profile it renders and then 404s. The
+# website links to the same URL (site/index.html, the support section and the
+# footer on all three pages), so this handle and those links go stale together.
+github: DanialJaved

@@ -15,6 +15,7 @@
 
 [![CI](https://github.com/DanialJaved/rune/actions/workflows/ci.yml/badge.svg)](https://github.com/DanialJaved/rune/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Sponsor](https://img.shields.io/badge/Sponsor-bf3989?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/DanialJaved)
 
 <img src="docs/store-screenshots/01-reading-light.png" alt="Rune reading a 297-page document, with page thumbnails in the sidebar and the annotation toolbar in the header">
 
