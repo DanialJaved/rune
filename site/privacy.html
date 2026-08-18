@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy - Rune PDF Reader</title>
+<meta name="description" content="Rune does not collect, transmit or share any personal data. It makes no network requests at all.">
+<link rel="icon" href="img/rune.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <img src="img/rune.svg" alt="">
+      Rune
+    </a>
+    <nav>
+      <a href="features.html">Features</a>
+      <a href="index.html#download">Download</a>
+      <a class="hide-sm" href="https://github.com/DanialJaved/rune">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section>
+  <div class="wrap" style="max-width:760px">
+
+    <h2>Privacy Policy</h2>
+    <p style="color:var(--fg-soft)"><em>Last updated: 12 August 2026</em></p>
+
+    <p><strong>Rune does not collect, transmit, or share any personal data.</strong></p>
+
+    <p>
+      There is no account, no telemetry, no analytics, no advertising, and no
+      crash reporting service. Nothing you open in Rune leaves your computer.
+    </p>
+
+    <h3 style="margin-top:36px">What Rune stores, and where</h3>
+    <p>
+      Rune saves a small amount of state locally so it can pick up where you
+      left off. All of it lives in <code>%LOCALAPPDATA%\Rune</code> on your own
+      machine:
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>What</th><th style="white-space:normal">Why</th></tr></thead>
+        <tbody>
+          <tr><td>Paths of recently-opened files, and their page-1 thumbnails</td><td style="white-space:normal">To show the recent-documents list</td></tr>
+          <tr><td>Per-document reading position, zoom and rotation</td><td style="white-space:normal">To reopen a document where you stopped</td></tr>
+          <tr><td>Bookmarks you create</td><td style="white-space:normal">To restore them next time you open that document</td></tr>
+          <tr><td>Your preferences (theme, sidebar, keyboard options)</td><td style="white-space:normal">To remember your settings</td></tr>
+          <tr><td>Signatures you draw or import, in <code>signatures\</code></td><td style="white-space:normal">So you can reuse one instead of redrawing it</td></tr>
+          <tr><td>A copy of a document you shared with unsaved edits, in <code>share\</code></td><td style="white-space:normal">So the app you sent it to receives what you were looking at</td></tr>
+          <tr><td>An error log, if something goes wrong</td><td style="white-space:normal">To help diagnose a crash</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:20px">
+      Copies in <code>share\</code> are deleted an hour after they are written,
+      on the next share. You can delete the folder at any time.
+    </p>
+
+    <p>
+      <strong>Your signature never leaves the device.</strong> It is stored as an
+      ordinary image file in <code>%LOCALAPPDATA%\Rune\signatures</code>, is
+      never uploaded or transmitted, and is only written into a PDF when you
+      place it on a page yourself. You can delete any saved signature from the
+      Sign tool, or by deleting that folder.
+    </p>
+
+    <p>
+      When you import a photo of your signature, Rune removes the paper
+      background itself, on your machine. No online service, no AI model and no
+      upload is involved: the photo is read, processed and saved without ever
+      leaving Rune.
+    </p>
+
+    <p>
+      You can delete all of it at any time by deleting the
+      <code>%LOCALAPPDATA%\Rune</code> folder. Uninstalling Rune from the
+      Microsoft Store removes it automatically.
+    </p>
+
+    <h3 style="margin-top:36px">Network access</h3>
+    <p><strong>Rune makes no network requests at all.</strong></p>
+    <p>
+      Not on startup, not while you read, not ever. There is no networking code
+      left in the application. Earlier versions of the portable build could ask
+      GitHub whether a newer release existed; that check was removed, and updates
+      now come from the Microsoft Store.
+    </p>
+    <p>
+      Share is not an exception. It hands the file to Windows, which hands it to
+      the app you chose; Rune opens no connection of its own. Whether the file
+      then goes anywhere is up to that app.
+    </p>
+
+    <h3 style="margin-top:36px">Your documents</h3>
+    <p>
+      Rune opens PDF files from your device and renders them locally. Documents
+      are never uploaded, indexed, or transmitted anywhere. Annotations, filled
+      form fields and page edits are written back only to the file you choose to
+      save, on your own device.
+    </p>
+    <p>
+      <strong>Form data stays in the document.</strong> Rune fills PDF forms
+      locally and never submits them anywhere. A PDF's own Submit button is not
+      wired up: Rune does not execute form actions or form JavaScript, so nothing
+      you type into a form can be sent over the network by the document itself.
+    </p>
+    <p>
+      <strong>Sharing is the one thing that hands a document to something else,
+      and only when you ask.</strong> Share opens the Windows share sheet and
+      gives the PDF to the app you pick from it. Rune does not choose the
+      destination, does not upload anything itself, and has no say in what the
+      receiving app does next: if you pick a mail or cloud app, the file goes
+      wherever that app sends it. If the document has edits you have not saved,
+      Rune shares a copy that includes them rather than the older file on disk;
+      your original is left untouched.
+    </p>
+
+    <h3 style="margin-top:36px">Children</h3>
+    <p>
+      Rune is a document viewer suitable for all ages and does not knowingly
+      collect information from anyone, including children.
+    </p>
+
+    <h3 style="margin-top:36px">Changes</h3>
+    <p>
+      Any change to this policy will be committed to
+      <a href="https://github.com/DanialJaved/rune/blob/main/PRIVACY.md">the repository</a>,
+      so the history is public and auditable.
+    </p>
+
+    <h3 style="margin-top:36px">Contact</h3>
+    <p>
+      Questions or concerns:
+      <a href="https://github.com/DanialJaved/rune/issues">github.com/DanialJaved/rune/issues</a>
+    </p>
+
+  </div>
+</section>
+</main>
+
+<footer class="site">
+  <div class="wrap cols">
+    <div>
+      <a class="brand" href="./"><img src="img/rune.svg" alt="">Rune</a>
+      <p style="margin-top:12px">
+        Free and open source under the GPLv3.<br>
+        Built with WinUI 3 and PDFium.
+      </p>
+    </div>
+    <div>
+      <h4>Project</h4>
+      <ul>
+        <li><a href="https://github.com/DanialJaved/rune">Source on GitHub</a></li>
+        <li><a href="https://github.com/DanialJaved/rune/issues">Report a problem</a></li>
+        <li><a href="https://github.com/DanialJaved/rune/releases">Releases</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Reading</h4>
+      <ul>
+        <li><a href="features.html">Features and shortcuts</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="https://github.com/DanialJaved/rune/blob/main/SECURITY.md">Security</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

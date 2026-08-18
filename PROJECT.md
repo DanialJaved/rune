@@ -1336,13 +1336,6 @@ thread's *lifetime* before suspecting the render.
   fields accept typed values but never recalculate.
 - **Signature validation** — out of reach without a crypto stack. Rune reports
   only what the file claims plus byte-range coverage, and must never say "valid".
-- **Text that wraps.** A text box keeps the breaks the user typed; it has no
-  width to wrap to. Giving it one means writing a line-breaker in the app whose
-  breaks match what PDFium draws, and the engine deliberately carries no font
-  metrics (it measures PDFium's own output instead). Doing it properly probably
-  means measuring candidate lines through the engine rather than guessing in the
-  shell. Until then, resizing text is aspect-locked, because with fixed breaks
-  the two axes have to move together.
 - **Sharper placed pictures.** An imported image is capped at 1024 px on its
   longest edge, which is `TileMath.MaxSingleTilePx` — the ceiling the on-page
   hover ghost lives under (§7). Raising it for the *file* while keeping a

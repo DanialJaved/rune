@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
@@ -128,6 +129,7 @@ public sealed partial class MainWindow
                 Restyle(s => s with { Font = TextBoxFonts.Families[family.SelectedIndex] });
             }
         };
+        AutomationProperties.SetName(family, "Font");
         ToolTipService.SetToolTip(family, "Font");
 
         var size = new ComboBox { MinWidth = 72, VerticalAlignment = VerticalAlignment.Center };
@@ -142,10 +144,12 @@ public sealed partial class MainWindow
                 Restyle(s => s with { FontSize = TextBoxFonts.Sizes[size.SelectedIndex] });
             }
         };
+        AutomationProperties.SetName(size, "Font size");
         ToolTipService.SetToolTip(size, "Size");
 
         var bold = new ToggleButton { Content = "B", MinWidth = 36, FontWeight = Microsoft.UI.Text.FontWeights.Bold };
         bold.Click += (_, _) => Restyle(s => s with { Bold = bold.IsChecked == true });
+        AutomationProperties.SetName(bold, "Bold");
         ToolTipService.SetToolTip(bold, "Bold");
 
         var italic = new ToggleButton
@@ -155,6 +159,7 @@ public sealed partial class MainWindow
             FontStyle = Windows.UI.Text.FontStyle.Italic,
         };
         italic.Click += (_, _) => Restyle(s => s with { Italic = italic.IsChecked == true });
+        AutomationProperties.SetName(italic, "Italic");
         ToolTipService.SetToolTip(italic, "Italic (Ctrl+I)");
 
         // The decoration goes on a TextBlock inside the button, not on the
@@ -170,6 +175,7 @@ public sealed partial class MainWindow
             MinWidth = 36,
         };
         underline.Click += (_, _) => Restyle(s => s with { Underline = underline.IsChecked == true });
+        AutomationProperties.SetName(underline, "Underline");
         ToolTipService.SetToolTip(underline, "Underline (Ctrl+U)");
 
         // Mutually exclusive, so they are re-synced from the style rather than
@@ -187,6 +193,7 @@ public sealed partial class MainWindow
             var value = align;
             var button = new ToggleButton { Content = AlignmentIcon(value), MinWidth = 36 };
             button.Click += (_, _) => Restyle(s => s with { Align = value });
+            AutomationProperties.SetName(button, label);
             ToolTipService.SetToolTip(button, label);
             alignment.Children.Add(button);
             _textAlignButtons[value] = button;
@@ -209,6 +216,7 @@ public sealed partial class MainWindow
                 Content = dot,
             };
             swatch.Click += (_, _) => Restyle(s => s with { R = cr, G = cg, B = cb });
+            AutomationProperties.SetName(swatch, label);
             ToolTipService.SetToolTip(swatch, label);
             swatches.Children.Add(swatch);
         }

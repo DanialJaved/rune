@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Features and shortcuts - Rune</title>
+<meta name="description" content="Everything Rune does, and every keyboard shortcut it ships: reading, markup, typing on a page, signing, forms, page editing and touch.">
+<link rel="icon" href="img/rune.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <img src="img/rune.svg" alt="">
+      Rune
+    </a>
+    <nav>
+      <a href="features.html">Features</a>
+      <a href="index.html#download">Download</a>
+      <a class="hide-sm" href="https://github.com/DanialJaved/rune">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section>
+  <div class="wrap">
+
+    <div class="section-head" style="text-align:left;max-width:none">
+      <h2>Features and shortcuts</h2>
+      <p>Everything Rune does today. Nothing here is planned or partial.</p>
+    </div>
+
+    <nav class="toc" aria-label="On this page">
+      <ul>
+        <li><a href="#reading">Reading</a></li>
+        <li><a href="#markup">Markup</a></li>
+        <li><a href="#typing">Typing and pictures</a></li>
+        <li><a href="#signing">Signing</a></li>
+        <li><a href="#forms">Forms</a></li>
+        <li><a href="#pages">Pages</a></li>
+        <li><a href="#touch">Touch</a></li>
+        <li><a href="#shortcuts">Keyboard shortcuts</a></li>
+      </ul>
+    </nav>
+
+    <!-- ---------------------------------------------------------- reading -->
+    <div class="feature-block" id="reading">
+      <h2>Reading</h2>
+      <ul>
+        <li><strong>Tabs in the title bar</strong>, Chrome-style and lazy-loaded, so background tabs cost nothing until you show them</li>
+        <li><strong>Continuous virtualized scrolling</strong> with tile-based progressive rendering: a fast blurry pass first, then a crisp one. It stays steady even while you search and scroll a 1,000-page document at once</li>
+        <li><strong>Zoom 10 to 640%</strong> at the cursor from a floating pill, plus fit-width, fit-page and rotation. Pinch to zoom on touch and touchpad, <kbd>Ctrl</kbd> + scroll everywhere else</li>
+        <li><strong>Sidebar</strong> (<kbd>F9</kbd>, open by default) that switches between thumbnails, chapters and bookmarks</li>
+        <li><strong>Internal and web links</strong>, with back and forward history</li>
+        <li><strong>Text selection and copy</strong>, plus find-in-document with highlight-all and hit stepping</li>
+        <li><strong>Night mode</strong> for reading in the dark, and <strong>presentation mode</strong> for showing a document fullscreen</li>
+        <li>A <strong>recent-documents homepage</strong> laid out as first-page thumbnails, and session restore that reopens your tabs at the exact scroll position</li>
+        <li>Opens damaged PDFs gracefully, and streams 4 GB files without loading them into memory</li>
+      </ul>
+    </div>
+
+    <!-- ---------------------------------------------------------- markup -->
+    <div class="feature-block" id="markup">
+      <h2>Markup</h2>
+      <ul>
+        <li><strong>Highlight, underline, strikeout, sticky notes and freehand pen</strong>, all written as standard PDF annotations that any reader can open</li>
+        <li>Pen, highlighter, note, text, picture, sign and eraser sit together in the middle of the header. Pick one and its colours, size and opacity open right beneath it</li>
+        <li>The highlighter works in a <strong>single gesture</strong>: drag across the text. It still writes real markup, so highlights stay attached to the words rather than floating over them</li>
+        <li><strong>Undo and redo</strong> across annotations and page edits alike</li>
+        <li><strong>Flatten</strong> bakes annotations and filled fields into the page so they cannot be edited back out</li>
+      </ul>
+    </div>
+
+    <!-- ---------------------------------------------------------- typing -->
+    <div class="feature-block" id="typing">
+      <h2>Typing and pictures</h2>
+      <ul>
+        <li><strong>Type anywhere on a page</strong>, whether or not there is anything there already: click, and a caret appears with a bar offering font, size, bold, italic, underline, alignment and colour. Every change lands on the words as you make it</li>
+        <li>What you type is <strong>real PDF text</strong>, not a picture of text. It stays crisp at any zoom, it is a few hundred bytes rather than a bitmap, and once flattened it is ordinary page text that search and copy find like any other</li>
+        <li>Pulling a text box's corner changes <strong>the box</strong>, not the type: the words re-flow to the new width at the size you chose</li>
+        <li><strong>Place a picture</strong> from any PNG, JPEG, BMP, GIF or TIFF. Transparency is kept and nothing is keyed out, so a picture you chose deliberately lands exactly as it is</li>
+        <li>Anything you place can be picked up again: click to select, drag to move, pull a corner to resize, <kbd>Delete</kbd> to remove</li>
+      </ul>
+    </div>
+
+    <!-- ---------------------------------------------------------- signing -->
+    <div class="feature-block" id="signing">
+      <h2>Signing</h2>
+      <ul>
+        <li>Draw a signature, type it in a handwriting face, or <strong>photograph one on paper and import it</strong>. Rune removes the paper for you, so only the ink lands on the page instead of a white rectangle over your document</li>
+        <li>Typed signatures use the handwriting fonts Windows already has, so nothing extra is downloaded and the app stays small</li>
+        <li>The matting runs <strong>entirely on your machine</strong>. Nothing is uploaded and no online service is involved</li>
+        <li>A semi-transparent preview follows the cursor so you can see exactly where it will land. Resizing keeps the proportions, so your handwriting never comes out stretched</li>
+        <li>Saved signatures are reusable and stay on your machine</li>
+        <li>This is a <strong>visible</strong> signature, ink on the page like signing a printout, not a cryptographic one</li>
+        <li><strong>Signature details</strong> reads back what a digitally signed PDF claims: the signer's stated reason, time and format, and whether the signature covers the whole file. Rune does <strong>not</strong> verify signatures. It ships no cryptography and never calls a signature valid</li>
+      </ul>
+    </div>
+
+    <!-- ---------------------------------------------------------- forms -->
+    <div class="feature-block" id="forms">
+      <h2>Forms</h2>
+      <ul>
+        <li>Click a field and type. <strong>Text boxes, dropdowns, checkboxes and radio buttons</strong> all save back into the PDF</li>
+        <li>Right-click a field for <strong>Text appearance</strong> to set the size and colour it fills in with, so your answers can stand apart from the printed form</li>
+        <li><kbd>Ctrl</kbd> + <kbd>B</kbd> and <kbd>Ctrl</kbd> + <kbd>I</kbd> bold and italicize a field where the PDF carries that face. Where it does not, Rune says so rather than leaving you with a field that has quietly gone blank</li>
+        <li>Standard AcroForm documents only. <strong>XFA forms</strong>, which some tax and government PDFs use, say so plainly instead of silently swallowing your typing</li>
+        <li>Form JavaScript does not run, so auto-calculating fields keep what you type but will not recalculate</li>
+      </ul>
+    </div>
+
+    <!-- ---------------------------------------------------------- pages -->
+    <div class="feature-block" id="pages">
+      <h2>Pages, and the rest</h2>
+      <ul>
+        <li><strong>Page editing</strong> in the thumbnail sidebar: multi-select, drag to reorder, delete, and copy, cut and paste pages across open tabs. Drop a PDF onto the sidebar to insert its pages</li>
+        <li><strong>Extract</strong> the pages you have selected to a new file, leaving the document you are reading untouched</li>
+        <li><strong>Command palette</strong> with fuzzy filtering and go-to-page, and a shortcuts overlay listing every binding</li>
+        <li><strong>Bookmarks</strong>: name a page, jump back to it later, saved per document</li>
+        <li><strong>Vim-style keys</strong> can be switched on in Settings</li>
+        <li><strong>Printing</strong> with live preview and page ranges</li>
+        <li><strong>Share</strong> the open document to another app through the Windows share sheet. Annotations you have not saved yet go with it as a copy, so your original file stays exactly as it was</li>
+        <li><strong>Document properties</strong> that answer the questions people actually open them for: page size and paper name, which fonts the file uses and whether they travel with it, what the security settings permit, and where the file lives</li>
+      </ul>
+    </div>
+
+    <!-- ---------------------------------------------------------- touch -->
+    <div class="feature-block" id="touch">
+      <h2>Touch</h2>
+      <p style="color:var(--fg-soft)">
+        Rune works on a 2-in-1 held as a tablet, not just on a desk. A finger has
+        no hover, no second button and no wheel, so these gestures fill the gaps.
+        A mouse behaves exactly as it always did.
+      </p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Action</th><th>Gesture</th></tr></thead>
+          <tbody>
+            <tr><td>Scroll and zoom</td><td>Drag and pinch. A plain drag is always a scroll</td></tr>
+            <tr><td>Select a word</td><td>Press and hold, or double-tap</td></tr>
+            <tr><td>Widen a selection</td><td>Press on it and drag</td></tr>
+            <tr><td>Highlight, underline, strikeout, copy, delete</td><td>Press and hold, then pick from the menu</td></tr>
+            <tr><td>Type in a form field</td><td>Tap it. The keyboard comes up on its own</td></tr>
+            <tr><td>Put a tool away</td><td>Tap its toolbar button again</td></tr>
+            <tr><td>Previous page in presentation</td><td>Tap the left third of the screen</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--fg-soft);margin-top:16px">
+        Resting a palm while you draw with a pen will not leave a second stroke
+        behind. Two things still want a keyboard: selecting several pages at once
+        in the thumbnail sidebar, and reading the tooltip on an icon-only button.
+      </p>
+    </div>
+
+    <!-- ---------------------------------------------------------- shortcuts -->
+    <div class="feature-block" id="shortcuts">
+      <h2>Keyboard shortcuts</h2>
+      <p style="color:var(--fg-soft)">
+        Press <kbd>F1</kbd> in the app for the same list. This table is generated
+        from the application's own shortcut catalogue, so it cannot drift out of
+        step with the build.
+      </p>
+
+      <!-- BEGIN GENERATED SHORTCUTS: do not edit by hand.
+           Regenerate with tools/gen-site-shortcuts.ps1 -->
+      <h3>Navigation</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Action</th><th>Keys</th></tr></thead>
+          <tbody>
+            <tr><td>Scroll</td><td><kbd>↑</kbd> / <kbd>↓</kbd></td></tr>
+            <tr><td>Previous / next page</td><td><kbd>←</kbd> / <kbd>→</kbd></td></tr>
+            <tr><td>Screen up / down</td><td><kbd>PgUp</kbd> / <kbd>PgDn</kbd></td></tr>
+            <tr><td>Screen down / up</td><td><kbd>Space</kbd> / <kbd>Shift+Space</kbd></td></tr>
+            <tr><td>First / last page</td><td><kbd>Home</kbd> / <kbd>End</kbd></td></tr>
+            <tr><td>Back / forward</td><td><kbd>Alt+←</kbd> / <kbd>Alt+→</kbd></td></tr>
+            <tr><td>Go to page</td><td>Ctrl+K, type a number</td></tr>
+            <tr><td>Bookmark current page</td><td><kbd>Ctrl+B</kbd></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>View</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Action</th><th>Keys</th></tr></thead>
+          <tbody>
+            <tr><td>Zoom in / out</td><td><kbd>Ctrl++</kbd> / <kbd>Ctrl+-</kbd></td></tr>
+            <tr><td>Actual size</td><td><kbd>Ctrl+1</kbd></td></tr>
+            <tr><td>Fit width / fit page</td><td><kbd>Ctrl+2</kbd> / <kbd>Ctrl+0</kbd></td></tr>
+            <tr><td>Rotate right / left</td><td><kbd>Ctrl+R</kbd> / <kbd>Ctrl+Shift+R</kbd></td></tr>
+            <tr><td>Night mode</td><td><kbd>Ctrl+I</kbd></td></tr>
+            <tr><td>Sidebar</td><td><kbd>F9</kbd></td></tr>
+            <tr><td>Presentation</td><td><kbd>F5</kbd></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Find</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Action</th><th>Keys</th></tr></thead>
+          <tbody>
+            <tr><td>Find in document</td><td><kbd>Ctrl+F</kbd></td></tr>
+            <tr><td>Next / previous match</td><td><kbd>F3</kbd> / <kbd>Shift+F3</kbd></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Annotate</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Action</th><th>Keys</th></tr></thead>
+          <tbody>
+            <tr><td>Pen, highlighter, note, text, picture, sign, eraser</td><td>toolbar</td></tr>
+            <tr><td>Highlight selection</td><td><kbd>Ctrl+H</kbd></td></tr>
+            <tr><td>Draw with the pen</td><td><kbd>Ctrl+E</kbd></td></tr>
+            <tr><td>Type on the page</td><td><kbd>Ctrl+T</kbd></td></tr>
+            <tr><td>Move or resize what you placed</td><td>click it</td></tr>
+            <tr><td>Resize a picture before dropping it</td><td><kbd>Ctrl+wheel</kbd></td></tr>
+            <tr><td>Delete what you placed</td><td><kbd>Delete</kbd></td></tr>
+            <tr><td>Put the tool away</td><td><kbd>Esc</kbd></td></tr>
+            <tr><td>Copy selected text</td><td><kbd>Ctrl+C</kbd></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Formatting text (in a text box or a form field)</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Action</th><th>Keys</th></tr></thead>
+          <tbody>
+            <tr><td>Bold / italic / underline</td><td><kbd>Ctrl+B</kbd> / <kbd>Ctrl+I</kbd> / <kbd>Ctrl+U</kbd></td></tr>
+            <tr><td>Bigger / smaller</td><td><kbd>Ctrl+Shift+&gt;</kbd> / <kbd>Ctrl+Shift+&lt;</kbd></td></tr>
+            <tr><td>Left / centre / right / justify</td><td><kbd>Ctrl+L</kbd> / <kbd>Ctrl+E</kbd> / <kbd>Ctrl+R</kbd> / <kbd>Ctrl+J</kbd></td></tr>
+            <tr><td>Finish the box and free the shortcuts</td><td><kbd>Esc</kbd></td></tr>
+            <tr><td>Reflow a text box (its type stays the same size)</td><td>drag a corner</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>File &amp; window</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Action</th><th>Keys</th></tr></thead>
+          <tbody>
+            <tr><td>Open</td><td><kbd>Ctrl+O</kbd></td></tr>
+            <tr><td>Save / save as</td><td><kbd>Ctrl+S</kbd> / <kbd>Ctrl+Shift+S</kbd></td></tr>
+            <tr><td>Print</td><td><kbd>Ctrl+P</kbd></td></tr>
+            <tr><td>Document properties</td><td><kbd>Ctrl+D</kbd></td></tr>
+            <tr><td>Close tab</td><td><kbd>Ctrl+W</kbd></td></tr>
+            <tr><td>Command palette</td><td><kbd>Ctrl+K</kbd></td></tr>
+            <tr><td>Keyboard shortcuts</td><td><kbd>F1</kbd></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Pages (thumbnail sidebar)</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Action</th><th>Keys</th></tr></thead>
+          <tbody>
+            <tr><td>Select pages</td><td><kbd>Click</kbd> / <kbd>Ctrl</kbd> / <kbd>Shift</kbd></td></tr>
+            <tr><td>Reorder pages</td><td><kbd>Drag</kbd></td></tr>
+            <tr><td>Copy / cut pages</td><td><kbd>Ctrl+C</kbd> / <kbd>Ctrl+X</kbd></td></tr>
+            <tr><td>Paste pages (works across tabs)</td><td><kbd>Ctrl+V</kbd></td></tr>
+            <tr><td>Delete pages</td><td><kbd>Delete</kbd></td></tr>
+            <tr><td>Undo / redo</td><td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Vim keys (Settings toggle)</h3>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Action</th><th>Keys</th></tr></thead>
+          <tbody>
+            <tr><td>Scroll</td><td>j / k / h / l</td></tr>
+            <tr><td>First / last page</td><td>gg / <kbd>G</kbd></td></tr>
+            <tr><td>Next match or page / previous page</td><td>n / p</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- END GENERATED SHORTCUTS -->
+
+    </div>
+
+  </div>
+</section>
+</main>
+
+<footer class="site">
+  <div class="wrap cols">
+    <div>
+      <a class="brand" href="./"><img src="img/rune.svg" alt="">Rune</a>
+      <p style="margin-top:12px">
+        Free and open source under the GPLv3.<br>
+        Built with WinUI 3 and PDFium.
+      </p>
+    </div>
+    <div>
+      <h4>Project</h4>
+      <ul>
+        <li><a href="https://github.com/DanialJaved/rune">Source on GitHub</a></li>
+        <li><a href="https://github.com/DanialJaved/rune/issues">Report a problem</a></li>
+        <li><a href="https://github.com/DanialJaved/rune/releases">Releases</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Reading</h4>
+      <ul>
+        <li><a href="features.html">Features and shortcuts</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+        <li><a href="https://github.com/DanialJaved/rune/blob/main/SECURITY.md">Security</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

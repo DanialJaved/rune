@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Rune.Controls;
@@ -141,6 +142,7 @@ public sealed partial class MainWindow
                 Content = "Import image…",
                 HorizontalAlignment = HorizontalAlignment.Stretch,
             };
+            AutomationProperties.SetName(import, "Import a signature image");
             ToolTipService.SetToolTip(import, "Use a photo or scan of your signature; the paper is removed for you");
             import.Click += async (_, _) =>
             {
@@ -298,6 +300,7 @@ public sealed partial class MainWindow
             Content = "Done",
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
+        AutomationProperties.SetName(stop, "Put the tool away");
         ToolTipService.SetToolTip(stop, "Esc");
         stop.Click += (_, _) =>
         {
@@ -487,6 +490,7 @@ public sealed partial class MainWindow
                 HorizontalContentAlignment = HorizontalAlignment.Left,
                 Padding = new Thickness(8, 4, 8, 4),
             };
+            AutomationProperties.SetName(pick, "Use this signature");
             ToolTipService.SetToolTip(pick, "Use this signature");
             pick.Click += (_, _) =>
             {
@@ -495,6 +499,7 @@ public sealed partial class MainWindow
             };
 
             var remove = new Button { Content = new FontIcon { Glyph = "", FontSize = 14 } };
+            AutomationProperties.SetName(remove, "Delete this signature");
             ToolTipService.SetToolTip(remove, "Delete this signature");
             remove.Click += async (_, _) =>
             {
