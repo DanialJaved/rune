@@ -95,6 +95,17 @@ No account, no subscription, no telemetry, no ads. Rune contains no networking c
 
 The interface follows GNOME Papers' proportions, one compact header row with the rest tucked into a single menu, but every control is a native Windows 11 one.
 
+### Touch
+
+Rune works on a 2-in-1 held as a tablet, not just on a desk.
+
+- **Drag to scroll, pinch to zoom.** A plain finger drag always moves the page, never a selection you didn't ask for
+- **Press and hold to select a word**, then lift for the menu: highlight, underline, strikeout, copy. Press on the selection and drag to widen it across a sentence or a paragraph. A double-tap picks out a word too
+- **Tap a form field and the keyboard comes up**, so a form can be filled in with no keyboard attached
+- **Tap a tool's button again to put it away**, and press and hold anything you've placed to delete it
+- Corner handles, links and form fields are all forgiving of a fingertip, without a mouse losing any of its precision
+- Resting a palm while you draw with a pen won't leave a second stroke behind
+
 ## Keyboard shortcuts
 
 Press `F1` in the app for the full list. The essentials:
