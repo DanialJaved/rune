@@ -14,7 +14,15 @@ namespace Rune;
 
 public sealed partial class MainWindow : Window
 {
-    private readonly AppStateStore _store = new();
+    // tools/capture-demo.ps1 points this at a throwaway directory through
+    // RUNE_STATE_DIR, so a recording cannot pick up the user's own recents,
+    // theme or session and paint their filenames into every frame. Unset in
+    // normal use, and AppStateStore already treats null as %LOCALAPPDATA%\Rune,
+    // so nothing changes for anyone not running the harness.
+    private static readonly string? StateDirOverride =
+        Environment.GetEnvironmentVariable("RUNE_STATE_DIR") is { Length: > 0 } dir ? dir : null;
+
+    private readonly AppStateStore _store = new(StateDirOverride);
     private readonly AppState _state;
     private readonly Dictionary<DocumentView, RecentFile?> _pendingRestore = [];
 
