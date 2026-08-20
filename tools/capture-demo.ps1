@@ -80,8 +80,21 @@ param(
 
     [string]$Exe,
 
+    # --page and --zoom are passed through, but do not rely on them: the app
+    # parses both (App.xaml.cs) and applies them inside LoadDocumentAsync, then
+    # the viewer's own first layout runs afterwards and puts fit-width and the
+    # top of page 1 back. Use -ScrollScreens to move instead.
     [int]$Page = 1,
     [double]$Zoom = 1.0,
+
+    # Pages to advance through before the clock starts, off camera, after
+    # fitting the page. Night mode is a claim about paper ("a white paper stops
+    # being a torch at midnight"), so it wants a plain text page: this document's
+    # cover is a dark photograph, which inverts to nothing interesting and is
+    # also the worst case for JPEG (it put the strip at twice the byte budget),
+    # and its front matter has big cyan banners that invert to alarming red.
+    # Right arrow is "next page" and moves exactly one page, unlike PgDn.
+    [int]$AdvancePages = 0,
 
     # Capture size. 1920x1080 matches the ten existing store screenshots, so the
     # demos and the stills around them look like the same application.
@@ -299,6 +312,9 @@ $SM_CYSCREEN           = 1
 $VK_SHIFT   = 0x10
 $VK_CONTROL = 0x11
 $VK_DOWN    = 0x28
+$VK_NEXT    = 0x22
+$VK_RIGHT   = 0x27
+$VK_0       = 0x30
 $VK_I       = 0x49
 $VK_F9      = 0x78
 
@@ -369,6 +385,56 @@ function Send-Chord([int]$modVk, [int]$vk, [switch]$Extended) {
     [RuneCap]::keybd_event([byte]$modVk, $modScan, [uint32]$KEYEVENTF_KEYUP, [UIntPtr]::Zero)
 }
 
+function Send-KeyDown([int]$vk, [switch]$Extended) {
+    $scan = [byte]([RuneCap]::MapVirtualKey([uint32]$vk, 0))
+    $flags = 0
+    if ($Extended) { $flags = $KEYEVENTF_EXTENDEDKEY }
+    [RuneCap]::keybd_event([byte]$vk, $scan, [uint32]$flags, [UIntPtr]::Zero)
+}
+
+function Send-KeyUp([int]$vk, [switch]$Extended) {
+    $scan = [byte]([RuneCap]::MapVirtualKey([uint32]$vk, 0))
+    $flags = $KEYEVENTF_KEYUP
+    if ($Extended) { $flags = $flags -bor $KEYEVENTF_EXTENDEDKEY }
+    [RuneCap]::keybd_event([byte]$vk, $scan, [uint32]$flags, [UIntPtr]::Zero)
+}
+
+# Emits a short burst of moves ending at one point. A tick that owns a move cue
+# sends two or three of these 8 ms apart, which gives WinUI's drag-over logic the
+# stream it wants at roughly 40-60 moves a second, while blocking for well under
+# half a frame.
+function Send-MoveBurst($points) {
+    foreach ($pt in $points) {
+        $sp = Get-ScreenPoint $pt[0] $pt[1]
+        Send-MouseTo $sp[0] $sp[1]
+        Wait-Ms 8
+    }
+}
+
+function Invoke-Cue($cue) {
+    switch ($cue.Kind) {
+        'mousedown' { Send-MouseButton $MOUSEEVENTF_LEFTDOWN }
+        'mouseup'   { Send-MouseButton $MOUSEEVENTF_LEFTUP }
+        'moveburst' { Send-MoveBurst $cue.Arg }
+        'keydown'   { Send-KeyDown $cue.Arg }
+        'keyup'     { Send-KeyUp $cue.Arg }
+        default     { throw "unknown cue kind '$($cue.Kind)'" }
+    }
+}
+
+# Eased path from one point to another, as a list of client-space points, so the
+# drag reads as a hand rather than a linear sweep.
+function Get-EasedPath([int]$fromX, [int]$fromY, [int]$toX, [int]$toY, [int]$Steps) {
+    $out = @()
+    for ($i = 1; $i -le $Steps; $i++) {
+        $t = $i / [double]$Steps
+        if ($t -lt 0.5) { $e = 2 * $t * $t } else { $e = 1 - [Math]::Pow((-2 * $t + 2), 2) / 2 }
+        $out += ,@([int][Math]::Round($fromX + ($toX - $fromX) * $e),
+                   [int][Math]::Round($fromY + ($toY - $fromY) * $e))
+    }
+    return $out
+}
+
 # A real mouse sends about 125 moves a second and WinUI's drag-over logic wants a
 # stream, not a teleport. Eased so the drag reads as a hand rather than a linear
 # sweep.
@@ -430,7 +496,10 @@ function Invoke-Take([int]$TakeNumber) {
     # A clean state directory per take, so nothing carries over between takes
     # and nothing of the user's is ever on screen. Only Settings that matter for
     # framing are set; System.Text.Json fills the rest from the C# defaults.
-    $sidebarOpen = ($Clip -eq 'reorder')
+    # Both clips launch with the sidebar open, because readiness is judged on
+    # its thumbnails. The nightmode clip closes it off camera before its clock
+    # starts, so it can be the thing that opens on screen.
+    $sidebarOpen = $true
     if (Test-Path $stateDir) { Remove-Item $stateDir -Recurse -Force }
     New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
 
@@ -451,7 +520,11 @@ function Invoke-Take([int]$TakeNumber) {
 
     $env:RUNE_STATE_DIR = $stateDir
 
-    $exeArgs = @($pdfPath, '--page', $Page, '--zoom', $Zoom)
+    # Quoted, because Start-Process joins ArgumentList with spaces and quotes
+    # nothing, and this repo's own path contains one ("...\code\pdf reader").
+    # Unquoted, App.xaml.cs receives a truncated path, File.Exists fails and it
+    # silently opens the start page instead of the document.
+    $exeArgs = @(('"' + $pdfPath + '"'), '--page', $Page, '--zoom', $Zoom)
     $proc = Start-Process -FilePath $Exe -ArgumentList $exeArgs -PassThru
 
     try {
@@ -502,11 +575,27 @@ function Invoke-Take([int]$TakeNumber) {
             throw "Client origin sits $offX,$offY inside the window rect, which is outside the expected range. Every computed coordinate would be wrong. Check the window is restored and unmaximized."
         }
 
+        # SetForegroundWindow called from a process that is not already in the
+        # foreground fails silently more often than not, and then window-level
+        # accelerators never arrive: F9 and Ctrl+I do nothing and the clip records
+        # an application that appears to ignore the keyboard. The reorder clip hid
+        # this because its first act is a real click, which activates the window
+        # as a side effect. Assert it instead, and if it is not foreground, click
+        # the active tab, which is inert but activates the window the way a person
+        # would.
+        if ([RuneCap]::GetForegroundWindow() -ne $hwnd) {
+            Send-Click 200 30
+            Wait-Ms 400
+        }
+        if ([RuneCap]::GetForegroundWindow() -ne $hwnd) {
+            throw "Rune is not the foreground window, so synthetic keys would land in whatever is. Close anything that steals focus and try again."
+        }
+
         $dpi = [RuneCap]::GetDpiForWindow($hwnd)
         if ($dpi -le 0) { $dpi = 96 }
         $scale = $dpi / 96.0
 
-        "take $TakeNumber : dpi $dpi (scale $([Math]::Round($scale, 3))), client offset $offX,$offY in the window rect"
+        Write-Host "take $TakeNumber : dpi $dpi (scale $([Math]::Round($scale, 3))), client offset $offX,$offY in the window rect"
 
         # Geometry, computed from Styles/Tokens.xaml rather than found by
         # scanning pixels (trap 3). SidebarWidth 280 DIP, SidebarThumbWidth 168
@@ -545,20 +634,29 @@ function Invoke-Take([int]$TakeNumber) {
                 $page   = [RuneCap]::RectStats($bmpProbe, $pageX0, $pageY0, $pageX1, $pageY1, 8, 235)
                 $side   = [RuneCap]::RectStats($bmpProbe, $sideX0, $sideY0, $sideX1, $sideY1, 8, 235)
 
-                # The sidebar test only applies when the sidebar is meant to be
-                # open. For the nightmode clip it starts closed on purpose.
-                $sideOk = (-not $sidebarOpen) -or ($side[0] -ge 6)
-
+                # Texture, not brightness. This document's cover is nearly
+                # black, so any near-white test calls a perfectly rendered page
+                # unrendered; and an empty start page is as white as a text page,
+                # so the same test passes when nothing loaded at all. The sidebar
+                # is the strongest signal that a document is genuinely open,
+                # because the start page has no sidebar to populate. Both clips
+                # therefore launch with it open, and nightmode closes it off
+                # camera in its pre-roll.
                 if ($header[0] -lt 8) { $why = "header band has only $($header[0]) distinct luminances (window has not composited)" }
-                elseif ($page[1] -lt 0.55) { $why = "page area is only $([Math]::Round($page[1] * 100))% near-white (document has not rendered)" }
-                elseif (-not $sideOk) { $why = "sidebar is nearly uniform ($($side[0]) luminances), so thumbnails have not arrived" }
+                elseif ($side[0] -lt 12) { $why = "sidebar has only $($side[0]) distinct luminances, so either no document is open or its thumbnails have not rendered. Check the document path actually reached the app." }
+                elseif ($page[0] -lt 24) { $why = "page area is flat ($($page[0]) luminances), so the first page has not painted" }
                 else { $ready = $true; break }
 
                 Wait-Ms 250
             }
-            if (-not $ready) { throw "Rune never reached a ready state: $why" }
+            if (-not $ready -and -not $Probe) {
+                throw "Rune never reached a ready state: $why"
+            }
 
             if ($Probe) {
+                $clean = Join-Path $clipRoot 'probe-clean.png'
+                $bmpProbe.Save($clean, [System.Drawing.Imaging.ImageFormat]::Png)
+
                 $out = Join-Path $clipRoot 'probe.png'
                 $ann = New-Object System.Drawing.Bitmap $bmpProbe
                 $g = [System.Drawing.Graphics]::FromImage($ann)
@@ -586,14 +684,22 @@ function Invoke-Take([int]$TakeNumber) {
                         }
                         $g.DrawString("computed: -FirstItemY $firstY -ItemPitch $pitch  (sideCentreX $sideCentreX)",
                                       $font, $brush, 20, $winH - 40)
+                        $verdict = 'ready'
+                        if (-not $ready) { $verdict = "NOT READY: $why" }
+                        $g.DrawString($verdict, $font, $brush, 20, $winH - 70)
+                        # The rectangles readiness is judged on, so a failing
+                        # probe shows whether the test or the app is wrong.
+                        $g.DrawRectangle($bold, $sideX0, $sideY0, ($sideX1 - $sideX0), ($sideY1 - $sideY0))
+                        $g.DrawString('sidebar test rect', $font, $brush, $sideX0 + 4, $sideY0 + 4)
                     } finally {
                         $thin.Dispose(); $bold.Dispose(); $font.Dispose(); $brush.Dispose()
                     }
                 } finally { $g.Dispose() }
                 $ann.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
                 $ann.Dispose()
-                "probe      : $out"
-                "             pass the item centres you can actually see back as -FirstItemY and -ItemPitch"
+                Write-Host "probe      : $out"
+                Write-Host "             $clean (unannotated: measure geometry from this one, the grid on the other reads as content)"
+                Write-Host "             pass the item centres you can actually see back as -FirstItemY and -ItemPitch"
                 return $null
             }
         } finally {
@@ -611,6 +717,10 @@ function Invoke-Take([int]$TakeNumber) {
         # ListView to insert above it rather than below.
         $toY = $firstY + ($ToItem - 1) * $pitch - [int]($pitch * 0.25)
 
+        # Every cue below is one instantaneous call or a sub-frame burst. The
+        # motion also finishes around 55 per cent of the way through, because the
+        # strip rests on its final frame and that frame has to be the settled
+        # result: pages reordered and re-paginated, or night mode on and holding.
         $cues = @()
         if ($Clip -eq 'reorder') {
             # Selection is built with the keyboard on purpose. ThumbList_KeyDown
@@ -618,16 +728,36 @@ function Invoke-Take([int]$TakeNumber) {
             # own Extended-selection handling for free. That leaves exactly one
             # pointer coordinate that has to be approximately right, instead of
             # two that have to be exact.
-            $cues += @{ At = 0;   Label = 'grab';      Do = { Send-MouseButton $MOUSEEVENTF_LEFTDOWN } }
-            $cues += @{ At = 120; Label = 'threshold'; Do = { Send-Drag $sideCentreX $fromY $sideCentreX ($fromY - 14) 3 8 } }
-            $cues += @{ At = 200; Label = 'drag';      Do = { Send-Drag $sideCentreX ($fromY - 14) $sideCentreX $toY 20 8 } }
-            $cues += @{ At = 620; Label = 'hold';      Do = { } }
-            $cues += @{ At = 780; Label = 'drop';      Do = { Send-MouseButton $MOUSEEVENTF_LEFTUP } }
+            $cues += @{ At = 0;  Label = 'grab'; Kind = 'mousedown' }
+
+            # Cross the drag threshold with a small jiggle before travelling.
+            $jiggle = Get-EasedPath $sideCentreX $fromY $sideCentreX ($fromY - 16) 3
+            $cues += @{ At = 60; Label = 'threshold'; Kind = 'moveburst'; Arg = $jiggle }
+
+            # The travel, split one cue per frame so capture keeps running
+            # through it. 8 cues x 3 points is 24 moves over 400 ms.
+            $path = Get-EasedPath $sideCentreX ($fromY - 16) $sideCentreX $toY 24
+            for ($seg = 0; $seg -lt 8; $seg++) {
+                $cues += @{ At = 110 + $seg * 50; Label = "move$seg"; Kind = 'moveburst'
+                            Arg = $path[($seg * 3)..($seg * 3 + 2)] }
+            }
+
+            # Dwell on the target so the insertion gap is fully open for a few
+            # frames before the drop, then release.
+            $cues += @{ At = 560; Label = 'drop'; Kind = 'mouseup' }
         } else {
-            $cues += @{ At = 120; Label = 'sidebar'; Do = { Send-Key $VK_F9 } }
-            # The invert is a single frame, so the hold after it is the whole
-            # point: a 50 ms flash reads as a glitch, not as a feature.
-            $cues += @{ At = 560; Label = 'invert';  Do = { Send-Chord $VK_CONTROL $VK_I } }
+            # F9 as two cues, so the 90 ms dwell costs the timeline and not the
+            # frame rate.
+            $cues += @{ At = 100; Label = 'f9-down'; Kind = 'keydown'; Arg = $VK_F9 }
+            $cues += @{ At = 190; Label = 'f9-up';   Kind = 'keyup';   Arg = $VK_F9 }
+
+            # Ctrl+I, likewise split. The invert lands in a single frame, so the
+            # hold after it is the whole point: a 50 ms flash reads as a glitch
+            # rather than as a feature.
+            $cues += @{ At = 430; Label = 'ctrl-down'; Kind = 'keydown'; Arg = $VK_CONTROL }
+            $cues += @{ At = 470; Label = 'i-down';    Kind = 'keydown'; Arg = $VK_I }
+            $cues += @{ At = 560; Label = 'i-up';      Kind = 'keyup';   Arg = $VK_I }
+            $cues += @{ At = 600; Label = 'ctrl-up';   Kind = 'keyup';   Arg = $VK_CONTROL }
         }
 
         # Pre-roll for the reorder clip happens before the clock starts, because
@@ -645,6 +775,20 @@ function Invoke-Take([int]$TakeNumber) {
             $sp = Get-ScreenPoint $sideCentreX $fromY
             Send-MouseTo $sp[0] $sp[1]
             Wait-Ms 120
+        } else {
+            # Fit the whole page, then walk to something worth inverting, then
+            # close the sidebar off camera so the clip's own F9 opens it.
+            if ($AdvancePages -gt 0) {
+                Send-Chord $VK_CONTROL $VK_0
+                Wait-Ms 500
+                for ($k = 0; $k -lt $AdvancePages; $k++) {
+                    Send-Key $VK_RIGHT -Extended
+                    Wait-Ms 45
+                }
+                Wait-Ms 1500
+            }
+            Send-Key $VK_F9
+            Wait-Ms 900
         }
 
         # ------------------------------------------------------------ capture
@@ -665,7 +809,7 @@ function Invoke-Take([int]$TakeNumber) {
                 while ($true) {
                     $now = $sw.Elapsed.TotalMilliseconds
                     while ($ci -lt $cues.Count -and $cues[$ci].At -le $now) {
-                        & $cues[$ci].Do
+                        Invoke-Cue $cues[$ci]
                         $ci++
                         $now = $sw.Elapsed.TotalMilliseconds
                     }
@@ -677,7 +821,7 @@ function Invoke-Take([int]$TakeNumber) {
             }
             # Any cue left unfired means the clip is shorter than its
             # choreography, which would drop the drop off the end of the loop.
-            while ($ci -lt $cues.Count) { & $cues[$ci].Do; $ci++ }
+            while ($ci -lt $cues.Count) { Invoke-Cue $cues[$ci]; $ci++ }
 
             # The cadence gate. A stalled tick is a visible jerk in the finished
             # sprite, and the tool should catch it rather than a human squinting
@@ -688,7 +832,7 @@ function Invoke-Take([int]$TakeNumber) {
             $max = ($gaps | Measure-Object -Maximum).Maximum
             $mean = ($gaps | Measure-Object -Average).Average
             $limit = $tick * 1.6
-            "             cadence min $([Math]::Round($min,1)) mean $([Math]::Round($mean,1)) max $([Math]::Round($max,1)) ms (nominal $([Math]::Round($tick,1)), limit $([Math]::Round($limit,1)))"
+            Write-Host "             cadence min $([Math]::Round($min,1)) mean $([Math]::Round($mean,1)) max $([Math]::Round($max,1)) ms (nominal $([Math]::Round($tick,1)), limit $([Math]::Round($limit,1)))"
 
             if ($DryRun) { return $null }
 
@@ -716,7 +860,7 @@ function Invoke-Take([int]$TakeNumber) {
             $meta | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $takeDir 'take.json') -Encoding UTF8
 
             if ($ok) {
-                "             saved $Frames frames to $takeDir"
+                Write-Host "             saved $Frames frames to $takeDir"
             } else {
                 Write-Warning "take $TakeNumber stalled: worst gap $([Math]::Round($max,1)) ms against a $([Math]::Round($limit,1)) ms limit. Frames kept, cadenceOk=false in take.json. Shoot it again with nothing else running."
             }

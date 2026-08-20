@@ -235,6 +235,11 @@ section.soft { background: var(--bg-soft); border-block: 1px solid var(--line); 
 .demo {
   width: 100%;
   max-width: calc(var(--fw) * 1px);    /* never upscale past the native frame */
+  /* A grid 1fr track is minmax(auto, 1fr), and without this the max-width above
+     becomes the track's automatic minimum: the demo rows resolved to 416px and
+     576px while the still rows next to them stayed 441px and 551px, so the prose
+     column visibly narrowed on exactly the two rows that changed. */
+  min-width: 0;
   aspect-ratio: var(--fw) / var(--fh);
   background-image: var(--sheet);
   background-repeat: no-repeat;
@@ -245,17 +250,22 @@ section.soft { background: var(--bg-soft); border-block: 1px solid var(--line); 
   box-shadow: var(--shadow);
   pointer-events: none;
   /* The nearest thing to lazy loading a background image, since loading="lazy"
-     is an <img> attribute. Animations in a skipped subtree do not run, so the
-     loop starts roughly when the row scrolls into view rather than finishing
-     before the visitor gets there. */
+     is an <img> attribute: a skipped subtree is not painted and its animation
+     does not run, so offscreen demos cost nothing.
+     Deliberately no contain-intrinsic-size. aspect-ratio plus a definite width
+     already gives this box a definite height, even while it is skipped, whereas
+     a fixed intrinsic size contradicts the aspect ratio: it measured 324px tall
+     while skipped against 191px once rendered, a 135px jump mid-scroll on a
+     phone, which is the exact jank the property exists to prevent. */
   content-visibility: auto;
-  contain-intrinsic-size: calc(var(--fw) * 1px) calc(var(--fh) * 1px);
-  /* Infinite, because a finite loop is worse than useless here: with no script
-     to start it on scroll, three passes run and finish at page load while the
-     row is still far offscreen, so everyone who does not scroll down within
-     three seconds sees a still and nothing else. content-visibility does not
-     reliably defer it either. So it loops, and the stop control below is what
-     answers WCAG 2.2.2 instead. */
+  /* Infinite, because a finite loop is worse than useless here. With three
+     passes the animation was measured finishing at page load, while the row was
+     still thousands of pixels offscreen, so anyone scrolling at human speed
+     would only ever have seen a still. content-visibility does skip offscreen
+     subtrees, but it cannot be leaned on to start a finite animation at the
+     right moment: one brief render during layout is enough to burn all three
+     passes, and there is no script here to start it on scroll. So it loops, and
+     the stop control below is what answers WCAG 2.2.2 instead. */
   animation: demo-walk calc(var(--frames) / 20 * 1s)
              steps(var(--frames), jump-none) infinite both;
 }

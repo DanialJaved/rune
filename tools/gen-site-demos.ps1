@@ -33,13 +33,26 @@ param(
     # a judgement call that needs eyes on the frames.
     [hashtable]$Take = @{},
 
+    # Which frames of a take to use, per clip, as 'first-last' (1-based,
+    # inclusive). Capture generously and trim here: after a page operation the
+    # thumbnail list clears and re-renders, so a take usually holds a few frames
+    # at the end where the sidebar is empty and the page is half-painted. The
+    # strip rests on its final frame, so that frame has to be a settled one.
+    # Omit a clip to use every frame.
+    [hashtable]$Range = @{},
+
     [string]$FramesRoot,
 
-    # 640 px native against a showcase column that renders about 551 CSS px, so
-    # roughly 1.16x. Sharper than 1x and honestly softer than the 1280 px stills
-    # beside it, which land at about 2.3x.
+    # The showcase columns are not the same width: .row is 1fr 1.25fr, so the
+    # flipped row's image cell is about 441 CSS px and the other about 551. At
+    # 576 native that is 1.31x and 1.05x, so neither is ever upscaled, and both
+    # are honestly softer than the 1280 px stills beside them, which land at
+    # about 2.3x. Width is also the strongest lever on file size, since these
+    # strips are dense text and quality barely moves them: dropping 640 to 576
+    # took the pair from 556 KB to 510 KB, where quality 62 to 44 only reached
+    # 507 KB and looked worse doing it.
     [ValidateRange(320, 1280)]
-    [int]$FrameWidth = 640,
+    [int]$FrameWidth = 576,
 
     # Lower than the stills' 82 on purpose. At 640x360 the application's text is
     # already illegible, so the strip carries the shape of the motion rather
@@ -50,8 +63,15 @@ param(
     # Per-strip ceiling. JPEG is intra-only, so there is no inter-frame saving
     # anywhere in this scheme and cost is roughly linear in frame count. This
     # throws rather than quietly shipping a 900 KB sheet: cut frames first, then
-    # quality, and only then give up on the clip and use a still.
-    [int]$MaxKB = 260,
+    # width, then quality, and only then give up on the clip and use a still.
+    #
+    # The number that actually matters is net page weight, not per-strip size.
+    # The site serves about 634 KB of imagery, and these two demos displace the
+    # stills they replace (02-night-mode.jpg at 156 KB and 08-page-editing.jpg
+    # at 100 KB), so the pair may cost about 550 KB before the page gets heavier
+    # by more than 300 KB. 320 leaves the denser of the two clips room without
+    # letting either run away.
+    [int]$MaxKB = 320,
 
     # Longest side that decodes reliably everywhere, iOS included.
     [int]$MaxSheetPx = 8000,
@@ -124,6 +144,21 @@ function New-Strip($takeDir, [string]$clip) {
         throw "$($takeDir.FullName) holds no PNG frames. A malformed input has to be a hard error, not garbage on the site."
     }
 
+    $trimmed = ''
+    if ($Range.ContainsKey($clip)) {
+        $spec = [string]$Range[$clip]
+        if ($spec -notmatch '^\s*(\d+)\s*-\s*(\d+)\s*$') {
+            throw "Range for '$clip' must look like '1-14', got '$spec'."
+        }
+        $rFirst = [int]$Matches[1]
+        $rLast  = [int]$Matches[2]
+        if ($rFirst -lt 1 -or $rLast -gt $frames.Count -or $rFirst -gt $rLast) {
+            throw "Range '$spec' for '$clip' does not fit a take of $($frames.Count) frames."
+        }
+        $trimmed = " (frames $rFirst-$rLast of $($frames.Count))"
+        $frames = @($frames[($rFirst - 1)..($rLast - 1)])
+    }
+
     # Frame geometry comes from the first frame, so a capture at a different
     # window size still composites correctly and the markup carries the real
     # aspect ratio rather than an assumed 16:9.
@@ -178,6 +213,7 @@ function New-Strip($takeDir, [string]$clip) {
 
     return [ordered]@{
         clip = $clip
+        trimNote = $trimmed
         frames = $frames.Count
         frameWidth = $FrameWidth
         frameHeight = $frameH
@@ -198,8 +234,8 @@ foreach ($clip in $clips) {
     }
     $info = New-Strip $takeDir $clip
     $built += $info
-    "{0,-10} {1} frames from {2} -> {3}x{4}  {5} KB" -f `
-        $info.clip, $info.frames, $info.take, $info.frameWidth, $info.sheetHeight, $info.kb
+    "{0,-10} {1} frames from {2}{3} -> {4}x{5}  {6} KB" -f `
+        $info.clip, $info.frames, $info.take, $info.trimNote, $info.frameWidth, $info.sheetHeight, $info.kb
 }
 
 if ($built.Count -eq 0) {
