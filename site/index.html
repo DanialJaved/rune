@@ -147,6 +147,10 @@
     <div class="section-head">
       <h2>A closer look</h2>
       <p>Every screenshot here is the real application, not a mockup.</p>
+      <p class="motion-toggle">
+        <input type="checkbox" id="stop-motion">
+        <label for="stop-motion">Pause the moving demos</label>
+      </p>
     </div>
 
     <div class="showcase">
@@ -160,8 +164,11 @@
             at midnight.
           </p>
         </div>
-        <img class="shot" src="img/02-night-mode.jpg" loading="lazy"
-             alt="Rune in night mode with the page colours inverted" width="1280" height="720">
+      <!-- BEGIN GENERATED DEMO nightmode: do not edit by hand.
+           Regenerate with tools/gen-site-demos.ps1. Until a take has been
+           recorded this holds the still the demo will replace. -->
+      <div class="demo" aria-hidden="true" style="--sheet:url(img/demo-nightmode.jpg); --frames:16; --fw:576; --fh:324"></div>
+      <!-- END GENERATED DEMO nightmode -->
       </div>
 
       <div class="row flip">
@@ -199,8 +206,11 @@
             insert its pages, or extract a selection to a new file.
           </p>
         </div>
-        <img class="shot" src="img/08-page-editing.jpg" loading="lazy"
-             alt="Page thumbnails selected in the sidebar for reordering" width="1280" height="720">
+      <!-- BEGIN GENERATED DEMO reorder: do not edit by hand.
+           Regenerate with tools/gen-site-demos.ps1. Until a take has been
+           recorded this holds the still the demo will replace. -->
+      <div class="demo" aria-hidden="true" style="--sheet:url(img/demo-reorder.jpg); --frames:14; --fw:576; --fh:324"></div>
+      <!-- END GENERATED DEMO reorder -->
       </div>
 
     </div>
@@ -254,6 +264,68 @@
   </div>
 </section>
 
+<!-- ------------------------------------------------------------ support -->
+
+<section id="support">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Rune is free, and it is staying free</h2>
+      <p>
+        There is no paid tier, no sponsor-only build, and no feature waiting
+        behind a login. If you would like to help anyway, there are three ways.
+      </p>
+    </div>
+
+    <div class="grid">
+      <div class="card action">
+        <div class="icon sponsor" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l8.84 8.84 8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </div>
+        <h3>Sponsor the work</h3>
+        <p>
+          Sponsorship pays for the unglamorous parts: a code-signing
+          certificate so the portable build stops tripping SmartScreen,
+          hardware to test on, and the time to keep going. Monthly or one off,
+          whichever suits.
+        </p>
+        <a class="btn btn-primary" href="https://github.com/sponsors/DanialJaved">
+          Become a sponsor
+        </a>
+      </div>
+
+      <div class="card action">
+        <div class="icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        </div>
+        <h3>Leave a review</h3>
+        <p>
+          Reviews are most of how anyone finds a small app in the Store. A
+          sentence about what you actually use it for is worth more than a
+          rating on its own.
+        </p>
+        <a class="btn btn-secondary" href="https://apps.microsoft.com/detail/9NH37840QDM6">
+          Rate it in the Store
+        </a>
+      </div>
+
+      <div class="card action">
+        <div class="icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/></svg>
+        </div>
+        <h3>Report a bug, send a patch</h3>
+        <p>
+          A precise bug report is worth a great deal, and one that comes with
+          the PDF that caused it is worth more. The source is GPLv3 and pull
+          requests are welcome.
+        </p>
+        <a class="btn btn-secondary" href="https://github.com/DanialJaved/rune/issues">
+          Open an issue
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
 </main>
 
 <footer class="site">
@@ -271,6 +343,7 @@
         <li><a href="https://github.com/DanialJaved/rune">Source on GitHub</a></li>
         <li><a href="https://github.com/DanialJaved/rune/issues">Report a problem</a></li>
         <li><a href="https://github.com/DanialJaved/rune/releases">Releases</a></li>
+        <li><a href="https://github.com/sponsors/DanialJaved">Sponsor</a></li>
       </ul>
     </div>
     <div>
