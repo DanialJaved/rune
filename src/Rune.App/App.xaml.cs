@@ -61,13 +61,18 @@ public partial class App : Application
             window.AppWindow.SetIcon(icon);
         }
 
-        window.Activate();
-
         // Support "Rune.exe <file.pdf> [--page N] [--zoom Z]" — the file path
         // is how Explorer launches the default handler once file association
         // lands (M6); --page/--zoom are for scripted testing.
         string[] commandLine = Environment.GetCommandLineArgs();
-        if (commandLine.Length > 1 && File.Exists(commandLine[1]))
+        bool hasFile = commandLine.Length > 1 && File.Exists(commandLine[1]);
+
+        // A launch that brings a file opens just that file. Must be set before
+        // Activate(), which is what triggers the session restore.
+        window.RestoreSessionOnStartup = !hasFile;
+        window.Activate();
+
+        if (hasFile)
         {
             int? page = null;
             double? zoom = null;

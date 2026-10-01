@@ -219,8 +219,24 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// False when this launch brought its own file (Explorer double-click):
+    /// the user asked to read that file, not to get last time's tabs back
+    /// alongside it. A bare launch (Start menu, taskbar) still restores the
+    /// session. Set by App before the window is activated. Same rule as
+    /// SumatraPDF's RestoreSession.
+    /// </summary>
+    internal bool RestoreSessionOnStartup { get; set; } = true;
+
     private async Task RestoreSessionAsync()
     {
+        if (!RestoreSessionOnStartup)
+        {
+            // The launch file is about to add its own tab, which settles the
+            // start page. Touching it here would show the recents grid for a
+            // frame and start its thumbnail loads on top of the document load.
+            return;
+        }
         if (!_state.Settings.RestoreSession)
         {
             UpdateStartPageVisibility();
@@ -1475,7 +1491,7 @@ public sealed partial class MainWindow : Window
             SelectedItem = _state.Settings.Theme,
             MinWidth = 160,
         };
-        var restoreCheck = new CheckBox { Content = "Reopen last session at startup", IsChecked = _state.Settings.RestoreSession };
+        var restoreCheck = new CheckBox { Content = "Reopen last session when started without a file", IsChecked = _state.Settings.RestoreSession };
         var sidebarCheck = new CheckBox { Content = "Show the sidebar when a document opens", IsChecked = _state.Settings.SidebarOpenByDefault };
         var thumbsCheck = new CheckBox { Content = "Show recent documents as thumbnails on the start page", IsChecked = _state.Settings.ShowRecentThumbnails };
         var vimCheck = new CheckBox { Content = "Keyboard navigation (j/k scroll, gg/G first/last page, n next hit)", IsChecked = _state.Settings.VimKeys };
@@ -2333,6 +2349,7 @@ public sealed partial class MainWindow : Window
         if (!File.Exists(path))
         {
             ShowError($"File not found: {path}");
+            UpdateStartPageVisibility(); // a launch that skipped session restore has nothing else to show
             return;
         }
         OpenOrActivate(path);
